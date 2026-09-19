@@ -24,6 +24,15 @@ mic → VAD + Whisper (local) → ┬→ Jev "change?" (OpenRouter)            �
 
 ## Run
 
+**Double-clickable app:** `./scripts/make_app.sh` → `build/Live Slides.app` (icon, mic-permission text).
+Put settings in `.env` (it's loaded at startup), e.g. `LS_SOURCE=mic:AirPods`, `LS_FULLSCREEN=1`, `LS_DISPLAY=1`.
+First launch: macOS asks for microphone access for "Live Slides" — click Allow (the app keeps retrying and
+starts listening as soon as it's granted; the debug window says "waiting for microphone"). The very first
+launch also compiles Metal shaders (~13 s "loading models").
+With no mic named, the app prefers AirPods, then the MacBook mic, and never a virtual device.
+
+**Launcher:** `./demo.sh [window] airpods|builtin|replay [display|wav]` (full screen by default).
+
 - **Pick the mic by name.** On this Mac the default input is "BlackHole 2ch" (a virtual loopback), so
   `LS_SOURCE=mic` alone would hear silence. Use `mic:AirPods` (or `mic:MacBook Air Microphone`).
   The first live run will trigger macOS's microphone permission prompt for the terminal/app; if the

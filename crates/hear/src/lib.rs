@@ -337,7 +337,19 @@ pub mod audio {
                     .input_devices()
                     .ok()
                     .and_then(|mut it| it.find(|d| d.name().map(|n| n.to_lowercase().contains(h)).unwrap_or(false))),
-                None => host.default_input_device(),
+                // No hint: prefer AirPods, then the built-in mic; never a virtual loopback (BlackHole,
+                // Teams Audio…) that happens to be the system default and would hear silence.
+                None => {
+                    let devs: Vec<_> = host.input_devices().map(|it| it.collect()).unwrap_or_default();
+                    let name = |d: &cpal::Device| d.name().unwrap_or_default().to_lowercase();
+                    let virtual_dev = |n: &str| ["blackhole", "teams", "zoom", "loopback", "soundflower", "aggregate"].iter().any(|v| n.contains(v));
+                    let pos = |want: &str| devs.iter().position(|d| name(d).contains(want));
+                    pos("airpods")
+                        .or_else(|| pos("macbook"))
+                        .or_else(|| devs.iter().position(|d| !virtual_dev(&name(d))))
+                        .map(|i| devs[i].clone())
+                        .or_else(|| host.default_input_device())
+                }
             };
             let _ = dtx.send(dev);
         });
