@@ -1,0 +1,10 @@
+[package]
+name = "spike-whisper"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+whisper-rs = { version = "0.16", features = ["metal"] }
+hound = "3"
+anyhow = "1"
