@@ -160,11 +160,52 @@ pub fn library_files(dir: &Path) -> Result<Vec<(String, String, String)>> {
     Ok(out)
 }
 
+/// Precision gate for a broad library (asset card, 09-19): with 15k generic photos, *every* phrase finds
+/// something at cosine ≈ 0.29 — "quantum chromodynamics" scored as high as "pizza" — so the image score
+/// alone cannot tell a hit from "nothing fits". The photo's own class label decides: the query must be
+/// about the same thing as the label (measured in CLIP text space, where an exact concept scores ≥ 0.95
+/// and a mere neighbour — owl→bird, sunflower→flower — scores ≈ 0.84–0.87).
+pub struct LabelGate {
+    /// Label → its CLIP text vector (same template as the query).
+    pub vectors: HashMap<String, Vec<f32>>,
+    /// Minimum query↔label affinity for a labelled photo.
+    pub min_affinity: f32,
+    /// Minimum image score for a photo with no label at all (COCO rows); `f32::INFINITY` excludes them.
+    pub unlabelled_min: f32,
+}
+
+/// Does the phrase contain every word of the label, as whole words (plural-tolerant)?
+fn names(phrase: &str, label: &str) -> bool {
+    let words: Vec<String> = phrase
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| w.trim_end_matches('s').to_string())
+        .collect();
+    let parts: Vec<&str> = label.split_whitespace().collect();
+    !parts.is_empty() && parts.iter().all(|p| { let p = p.trim_end_matches('s'); words.iter().any(|w| w == p) })
+}
+
 /// Brute-force scorer over the index (design doc §7.3).
 pub struct Searcher {
     pub index: Index,
     /// Optional CLIP prompt template, e.g. "a photo of {}". Chosen during calibration.
     pub template: Option<String>,
+    /// Only set for a broad, labelled library (the asset card).
+    pub gate: Option<LabelGate>,
+}
+
+impl LabelGate {
+    /// Does this entry deserve to be shown for a query vector?
+    fn allows(&self, caption: &str, score: f32, q: &[f32], phrase: &str) -> bool {
+        match self.vectors.get(caption.trim()) {
+            // Modifiers dilute affinity ("a red rose" vs label "rose" = 0.82), so naming the label
+            // outright also qualifies — whole words, so "a sunflower" is not the label "flower".
+            Some(v) => dot(v, q) >= self.min_affinity || names(phrase, caption.trim()),
+            None if caption.trim().is_empty() => score >= self.unlabelled_min,
+            None => false,
+        }
+    }
 }
 
 /// Best image for one phrase, plus the runner-up for logging.
@@ -179,14 +220,38 @@ pub struct PhraseHit {
 
 impl Searcher {
     pub fn new(index: Index) -> Self {
-        Self { index, template: Some("a photo of {}".into()) }
+        Self { index, template: Some("a photo of {}".into()), gate: None }
+    }
+
+    /// Compute (and cache) the label vectors that [`LabelGate`] needs. ~450 labels × ~20 ms once.
+    pub fn with_label_gate(mut self, enc: &dyn TextEncoder, cache: &Path, min_affinity: f32, unlabelled_min: f32) -> Result<Self> {
+        let labels = self.index.vocab(usize::MAX);
+        let mut vectors: HashMap<String, Vec<f32>> = std::fs::read_to_string(cache)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+        if !labels.iter().all(|l| vectors.contains_key(l)) {
+            vectors = labels
+                .iter()
+                .map(|l| Ok((l.clone(), enc.embed_text(&self.query_text(l))?)))
+                .collect::<Result<_>>()?;
+            if let Some(d) = cache.parent() {
+                let _ = std::fs::create_dir_all(d);
+            }
+            let _ = std::fs::write(cache, serde_json::to_string(&vectors)?);
+        }
+        self.gate = Some(LabelGate { vectors, min_affinity, unlabelled_min });
+        Ok(self)
     }
 
     pub fn score_vec(&self, q: &[f32]) -> Vec<f32> {
         self.index
             .entries
             .iter()
-            .map(|e| 0.5 * (dot(&e.img, q) + dot(&e.cap, q)))
+            // Mean of the image and caption vectors when a caption was embedded (the local MobileCLIP
+            // index); the asset card has no caption vectors, so its score is the image alone — averaging
+            // with a zero vector halved every score (09-19).
+            .map(|e| if e.cap.is_empty() { dot(&e.img, q) } else { 0.5 * (dot(&e.img, q) + dot(&e.cap, q)) })
             .collect()
     }
 
@@ -194,6 +259,10 @@ impl Searcher {
         let scores = self.score_vec(q);
         let mut idx: Vec<usize> = (0..scores.len()).collect();
         idx.sort_by(|a, b| scores[*b].partial_cmp(&scores[*a]).unwrap_or(std::cmp::Ordering::Equal));
+        // Walk down the ranking to the best photo the gate allows (no gate → the top hit).
+        if let Some(g) = &self.gate {
+            idx.retain(|i| g.allows(&self.index.entries[*i].caption, scores[*i], q, phrase));
+        }
         let first = *idx.first()?;
         let e = &self.index.entries[first];
         Some(PhraseHit {
@@ -328,6 +397,21 @@ impl ImageCache {
     pub fn mime_of(id_or_path: &str) -> &'static str {
         let l = id_or_path.to_lowercase();
         if l.ends_with(".png") { "image/png" } else if l.ends_with(".webp") { "image/webp" } else { "image/jpeg" }
+    }
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::names;
+
+    #[test]
+    fn label_words_must_appear_as_whole_words() {
+        assert!(names("a red rose", "rose"));
+        assert!(names("roses are lovely", "rose"));
+        assert!(names("a human body scan", "human body"));
+        assert!(!names("a sunflower", "flower"), "sunflower is not the label flower");
+        assert!(!names("an owl", "bird"));
+        assert!(!names("", "rose"));
     }
 }
 

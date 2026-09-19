@@ -26,6 +26,10 @@ pub struct Config {
     pub assets: Option<PathBuf>,
     /// OpenAI CLIP ViT-B/32 text tower, used with `assets`.
     pub clip_text_dir: PathBuf,
+    /// Asset card: how close a photo's class label must be to the query (LABEL_MIN).
+    pub label_min: f32,
+    /// Asset card: image score an unlabelled (COCO) photo needs instead (UNLABELLED_MIN).
+    pub unlabelled_min: f32,
     pub index_path: PathBuf,
     pub api_key: Option<String>,
     pub query_model: Option<String>,
@@ -50,8 +54,9 @@ impl Config {
         let mut stage = StageConfig::default();
         if env("LS_ASSETS").is_some() {
             // CLIP ViT-B/32 image–text cosines sit far lower than MobileCLIP's (handoff §2 AS3).
-            // Provisional until calibrated on the card with `ls-assets`.
-            stage.tau = 0.25;
+            // Measured on the card: labelled hits 0.23–0.32, so τ is only a floor — the label gate does
+            // the real rejecting (a broad library scores ≈ 0.29 for anything, including nonsense).
+            stage.tau = 0.22;
         }
         if let Some(t) = env("TAU").and_then(|v| v.parse().ok()) {
             stage.tau = t;
@@ -72,6 +77,12 @@ impl Config {
             // 423 ms p50 with the audio-context floor (PROGRESS 09-19). Falls back to base.en if absent.
             assets: env("LS_ASSETS").map(PathBuf::from),
             clip_text_dir: p("CLIP_TEXT_DIR", "models/clip-vit-b32"),
+            // 0.92: measured on the card — "a rose"→rose 0.93, while owl→bird 0.87 and junk 0.81–0.84.
+            label_min: env("LABEL_MIN").and_then(|v| v.parse().ok()).unwrap_or(0.92),
+            // Off by default: the card's 5k unlabelled COCO photos score like real matches for anything
+            // ("night hunting" → a random photo at 0.32), and nothing separates them. UNLABELLED_MIN=0.31
+            // re-enables them if recall matters more than precision.
+            unlabelled_min: env("UNLABELLED_MIN").and_then(|v| v.parse().ok()).unwrap_or(f32::INFINITY),
             whisper_model: p("WHISPER_MODEL", if root.join("models/ggml-small.en.bin").exists() { "models/ggml-small.en.bin" } else { "models/ggml-base.en.bin" }),
             vad_model: p("VAD_MODEL", "models/ggml-silero-v5.1.2.bin"),
             clip_dir: p("CLIP_DIR", "models/mobileclip-s2"),
@@ -159,7 +170,13 @@ impl Engine {
         // Prompts and the named-subject shortcut get distinct labels, not 15k captions.
         let captions = index.vocab(200);
         let cache = ImageCache::new(&index, 256 * 1024 * 1024);
-        let searcher = Arc::new(Searcher::new(index));
+        let mut searcher = Searcher::new(index);
+        if cfg.assets.is_some() {
+            // Broad library → a photo only shows when its own label is about the query (see LabelGate).
+            let cache_path = cfg.clip_text_dir.join("label-vectors.json");
+            searcher = searcher.with_label_gate(&*clip, &cache_path, cfg.label_min, cfg.unlabelled_min)?;
+        }
+        let searcher = Arc::new(searcher);
         let http = reqwest::Client::builder().pool_idle_timeout(Duration::from_secs(300)).tcp_keepalive(Duration::from_secs(30)).build()?;
         let query_model = cfg.query_model.clone().unwrap_or_else(|| ls_query::DEFAULT_MODEL.to_string());
         let decider = Decider::new(http.clone(), cfg.api_key.clone(), cfg.jev_model.clone(), query_model.clone(), captions.clone());

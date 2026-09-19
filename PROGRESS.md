@@ -244,3 +244,23 @@
 - Replay of the same 8-min session: clear asked with a non-empty board 8× → cleared 8× (was 50× → 5×).
 - Whisper talk vocabulary: `TALK_TERMS` / `talk-terms.txt` (comma or newline separated) → Whisper initial prompt;
   `ls-hear` honours TALK_TERMS too, for A/B on a recording. No file = no hint (unchanged default).
+
+## 2026-09-19 — asset card integrated (AS1–AS3, AS5 measured)
+- `LS_ASSETS` switches photo search to the card: CLIP ViT-B/32 text tower (`assets::ClipText`, text tower
+  extracted once from `pytorch_model.bin` → 254 MB safetensors) over `embeddings.npy`.
+- Verified Marcus's vectors: re-embedding 3 card images with the vision tower matched his rows at cosine
+  0.967–0.995, so the card really is CLIP ViT-B/32 image features.
+- Measured on the 8 GB M2: text encode 19–21 ms; index load (15k) 1.0 s; brute-force search 11 ms;
+  label-vector cache 11 s once, then 12 ms. Photo path stays well inside the budget.
+- **Scoring bug found:** `score_vec` averaged image and caption vectors; the card has no caption vectors, so
+  every score was halved (0.30 → 0.15). Fixed — scores are now normal CLIP cosines.
+- **Absolute thresholds do not work on a 15k generic library:** every phrase finds something at ≈0.29,
+  including "quantum chromodynamics". Added `LabelGate`: a photo shows only when its own class label is about
+  the query (CLIP text affinity ≥ 0.92, or the label's words appear in the phrase — "a red rose" → rose, while
+  "a sunflower" ≠ "flower"). Unlabelled COCO rows are excluded by default (they score like real matches for
+  anything); `UNLABELLED_MIN=0.31` re-enables them.
+- **Quality verdict (looked at the actual JPEGs):** "this owl" → a cardinal on a backpack; "a sunflower in a
+  field" → cherry blossoms; "a red rose" → a pink-orange rose; only "bald eagle" was right. The labelled subset
+  is generic (tree 1661, person 673, bird 188, flower 35) with no owl/sunflower/earth, and the phrase model
+  generalises ("owl" → "bird"), which then matches a real label. A scripted talk needs either generation
+  (AS11/AS12) or a curated tier (AS6).
