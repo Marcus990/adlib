@@ -128,3 +128,20 @@
   keyword-in-transcript→render p50 71 ms** (local fallbacks; no API key yet).
 - Remaining for the goal's exact configuration: AirPods as the input device, OPENROUTER_API_KEY for real Jev +
   query model, then the demo library/talk.
+
+### Display intent + canvas mode (2026-09-19 afternoon)
+- User idea: Jev asks "is the presenter signalling the audience should SEE something?" (intent noul + kind
+  choice), not "was something picturable mentioned?". Offline heuristic needs a presentational cue
+  ("here's", "take a look", "picture this", …) near a library subject. `DECIDE_MODE=topic` keeps the old behaviour.
+- Canvas mode (default; `LS_MODE=single` for one full-screen image): evolving board of ≤ 4 tiles + ≤ 3
+  annotations (crates/canvas), layouts auto/hero/compare/grid; canvas agent (crates/agent) over OpenRouter
+  tool calling (CANVAS_MODEL, default anthropic/claude-haiku-4.5) with offline cue rules; agent triggered by
+  board changes and by layout cues in *new* words only (38 → 14 calls on the fixture); version-checked ops.
+- Partial-transcript confirmation (stage `confirm_partials`, `CONFIRM=0` to disable): "here's what a bald…"
+  was transcribed mid-word as "what a ball is" → an 8-ball flashed up. New images from in-progress phrases
+  now need two agreeing updates (finals show immediately).
+- ASR tick 750 → 500 ms (ASR_TICK_MS): keyword-in-transcript→render p50 877 → 620 ms with confirmation on.
+- Fixture `fixtures/audio/canvas-talk.{txt,wav,expected.tsv}` (cues, layout cues, and non-intent mentions that
+  must NOT show; eval reports false_positives): 6/6 correct, 0 false positives, compare/highlight/clear/update all fire.
+- The old rehearsal-3min talk has no display cues → under intent mode it (correctly) shows almost nothing;
+  use canvas-talk for intent/canvas regression, rehearsal-3min with DECIDE_MODE=topic.

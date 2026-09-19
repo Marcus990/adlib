@@ -1,6 +1,8 @@
 //! Orchestration: Hear → (Decide ‖ Query→Search) → Stage → RenderSink, with a JSONL timing log
 //! for every stage of every chunk (design doc §4, §6). Used by the Tauri app and by `ls-replay`.
 
+use ls_agent::CanvasAgent;
+use ls_canvas::{Canvas, Scene};
 use ls_contracts::{Chunk, RenderEvent};
 use ls_decide::{Decider, Source};
 use ls_hear::{audio, whisper, ChunkTiming, Chunker, ChunkerConfig, SR};
@@ -27,6 +29,9 @@ pub struct Config {
     pub log_path: PathBuf,
     pub stage: StageConfig,
     pub chunker: ChunkerConfig,
+    /// Canvas mode (evolving board + agent). LS_MODE=single keeps one full-screen image.
+    pub canvas: bool,
+    pub canvas_model: Option<String>,
 }
 
 impl Config {
@@ -40,6 +45,9 @@ impl Config {
         if let Some(t) = env("TAU").and_then(|v| v.parse().ok()) {
             stage.tau = t;
         }
+        if env("CONFIRM").as_deref() == Some("0") {
+            stage.confirm_partials = false;
+        }
         Self {
             whisper_model: p("WHISPER_MODEL", "models/ggml-base.en.bin"),
             vad_model: p("VAD_MODEL", "models/ggml-silero-v5.1.2.bin"),
@@ -50,7 +58,15 @@ impl Config {
             jev_model: env("JEV_MODEL"),
             log_path: root.join("logs").join(format!("run-{stamp}.jsonl")),
             stage,
-            chunker: ChunkerConfig::default(),
+            chunker: {
+                let mut c = ChunkerConfig::default();
+                if let Some(t) = env("ASR_TICK_MS").and_then(|v| v.parse().ok()) {
+                    c.tick_ms = t;
+                }
+                c
+            },
+            canvas: env("LS_MODE").map(|m| m != "single").unwrap_or(true),
+            canvas_model: env("CANVAS_MODEL"),
         }
     }
 }
@@ -63,6 +79,8 @@ pub enum AudioSource {
 pub trait RenderSink: Send + Sync + 'static {
     fn render(&self, ev: &RenderEvent);
     fn status(&self, _v: &Value) {}
+    /// Canvas mode: the whole board after every change.
+    fn scene(&self, _s: &Scene) {}
 }
 
 /// Append-only JSONL log; every line gets `t_ms` (ms since pipeline start).
@@ -98,6 +116,7 @@ pub struct Engine {
     pub cache: ImageCache,
     pub decider: Decider,
     pub query: QueryClient,
+    pub agent: CanvasAgent,
 }
 
 impl Engine {
@@ -110,8 +129,9 @@ impl Engine {
         let http = reqwest::Client::builder().pool_idle_timeout(Duration::from_secs(300)).tcp_keepalive(Duration::from_secs(30)).build()?;
         let query_model = cfg.query_model.clone().unwrap_or_else(|| ls_query::DEFAULT_MODEL.to_string());
         let decider = Decider::new(http.clone(), cfg.api_key.clone(), cfg.jev_model.clone(), query_model.clone(), captions.clone());
-        let query = QueryClient::new(http, cfg.api_key.clone(), Some(query_model), captions);
-        Ok(Self { cfg, clip, searcher, cache, decider, query })
+        let query = QueryClient::new(http.clone(), cfg.api_key.clone(), Some(query_model), captions);
+        let agent = CanvasAgent::new(http, cfg.api_key.clone(), cfg.canvas_model.clone());
+        Ok(Self { cfg, clip, searcher, cache, decider, query, agent })
     }
 
     /// Warm-up (design doc §6 lever 5): CLIP text path, image prefetch, both HTTPS connections.
@@ -133,6 +153,8 @@ enum Msg {
     Status(Value),
     Decision(ls_contracts::ChangeDecision, Source, u64, u64),
     Search(SearchOutcome, ls_contracts::QueryResult, Vec<ls_search::PhraseHit>, u64, u64, u64),
+    /// Canvas agent answer: (scene version it reasoned about, ops, source, chunk id, ms).
+    Agent(u64, Vec<ls_canvas::Op>, ls_agent::Source, u64, u64),
 }
 
 #[derive(Debug, Default, Clone, serde::Serialize)]
@@ -167,6 +189,7 @@ fn outcome_name(o: &Outcome) -> &'static str {
         Outcome::Duplicate => "duplicate",
         Outcome::Stale => "stale",
         Outcome::TimedOut => "timed_out",
+        Outcome::Unconfirmed => "unconfirmed",
     }
 }
 
@@ -256,7 +279,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
     let mut hear_done_at: Option<Instant> = None;
     let mut tick = tokio::time::interval(Duration::from_millis(50));
 
-    let handle_outcome = |chunk_id: u64, o: Outcome, now: u64, summary: &mut Summary, ends: &std::collections::HashMap<u64, u64>| {
+    let handle_outcome = |chunk_id: u64, o: Outcome, now: u64, summary: &mut Summary, ends: &std::collections::HashMap<u64, u64>| -> Option<RenderEvent> {
         *summary.outcomes.entry(outcome_name(&o).into()).or_default() += 1;
         match &o {
             Outcome::Rendered(ev) => {
@@ -270,17 +293,39 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                 log.log(json!({"ev": "render", "chunk_id": chunk_id, "kind": ev.kind, "image_id": ev.image_id,
                     "speech_to_render_ms": lat}));
                 sink.status(&json!({"type": "outcome", "chunk_id": chunk_id, "outcome": "rendered", "image_id": ev.image_id, "latency_ms": lat}));
+                Some(ev.clone())
             }
             other => {
                 log.log(json!({"ev": "join", "chunk_id": chunk_id, "outcome": outcome_name(other)}));
                 if !matches!(other, Outcome::NoChange) {
                     sink.status(&json!({"type": "outcome", "chunk_id": chunk_id, "outcome": outcome_name(other)}));
                 }
+                None
             }
         }
     };
 
+    // ---- canvas mode state ----
+    let mut canvas = Canvas::new();
+    let mut chunk_text: std::collections::HashMap<u64, String> = Default::default();
+    let mut agent_busy = false;
+    let mut agent_next: Option<(String, String, u64)> = None;
+    let mut last_curr = String::new();
+    let caption_of = |id: &str| -> String {
+        engine.searcher.index.entries.iter().find(|e| e.id == id).map(|e| e.caption.clone()).unwrap_or_else(|| id.to_string())
+    };
+    let spawn_agent = |scene: Scene, prev: String, curr: String, chunk_id: u64| {
+        let (e, tx, log) = (engine.clone(), tx.clone(), log.clone());
+        tokio::spawn(async move {
+            let t = log.now_ms();
+            let (ops, src) = e.agent.propose(&scene, &prev, &curr).await;
+            let _ = tx.send(Msg::Agent(scene.version, ops, src, chunk_id, log.now_ms() - t));
+        });
+    };
+
     loop {
+        let mut fresh: Vec<RenderEvent> = vec![];
+        let mut agent_trigger: Option<(String, String, u64)> = None;
         tokio::select! {
             msg = rx.recv() => {
                 let Some(msg) = msg else { break };
@@ -299,6 +344,17 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                             "asr_ms": tm.asr_ms.round(), "emitted_ms": wall, "asr_lag_ms": wall.saturating_sub(audio_t0 + c.t_end_ms)}));
                         sink.status(&json!({"type": "chunk", "text": c.text, "final": c.is_final}));
                         stage.on_chunk(&c);
+                        chunk_text.insert(c.id, c.text.clone());
+                        if chunk_text.len() > 256 {
+                            let min = *chunk_text.keys().min().unwrap();
+                            chunk_text.remove(&min);
+                        }
+                        // Only words not seen in the previous update of this phrase can carry a new cue.
+                        let new_words = c.text.strip_prefix(last_curr.trim_end_matches(|ch: char| !ch.is_alphanumeric())).unwrap_or(&c.text).to_string();
+                        last_curr = if c.is_final { String::new() } else { c.text.clone() };
+                        if cfg.canvas && !canvas.scene().elements.is_empty() && ls_canvas::has_layout_cue(&new_words) {
+                            agent_trigger = Some((prev_final.clone(), c.text.clone(), c.id));
+                        }
                         let displayed = stage.displayed();
                         let prev = prev_final.clone();
                         if c.is_final {
@@ -330,6 +386,22 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                             });
                         }
                     }
+                    Msg::Agent(version, ops, src, chunk_id, ms) => {
+                        agent_busy = false;
+                        let applied = canvas.apply(version, &ops, chunk_id);
+                        log.log(json!({"ev": "agent", "chunk_id": chunk_id, "source": format!("{src:?}"), "ms": ms,
+                            "ops": ops, "applied": applied.is_some(), "stale": version != canvas.scene().version && applied.is_none()}));
+                        sink.status(&json!({"type": "agent", "chunk_id": chunk_id, "source": format!("{src:?}"), "ms": ms,
+                            "ops": ops.len(), "applied": applied.as_ref().map(|s| s.reason.clone())}));
+                        if let Some(scene) = applied {
+                            log.log(json!({"ev": "scene", "version": scene.version, "reason": scene.reason, "n": scene.elements.len(), "layout": scene.layout}));
+                            sink.scene(&scene);
+                        }
+                        if let Some((p, c, id)) = agent_next.take() {
+                            agent_busy = true;
+                            spawn_agent(canvas.scene().clone(), p, c, id);
+                        }
+                    }
                     Msg::Decision(d, src, t_start, t_end) => {
                         *summary.decide_sources.entry(format!("{src:?}")).or_default() += 1;
                         log.log(json!({"ev": "decide", "chunk_id": d.chunk_id, "action": d.action, "p": d.p,
@@ -338,7 +410,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                             "source": format!("{src:?}"), "ms": t_end - t_start}));
                         let now = log.now_ms();
                         if let Some(o) = stage.on_decision(d.clone(), now) {
-                            handle_outcome(d.chunk_id, o, now, &mut summary, &chunk_end_wall);
+                            fresh.extend(handle_outcome(d.chunk_id, o, now, &mut summary, &chunk_end_wall));
                         }
                     }
                     Msg::Search(s, q, hits, t_start, t_query, t_end) => {
@@ -355,7 +427,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                         let now = log.now_ms();
                         let id = s.chunk_id;
                         if let Some(o) = stage.on_search(s, now) {
-                            handle_outcome(id, o, now, &mut summary, &chunk_end_wall);
+                            fresh.extend(handle_outcome(id, o, now, &mut summary, &chunk_end_wall));
                         }
                     }
                 }
@@ -363,13 +435,37 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
             _ = tick.tick() => {
                 let now = log.now_ms();
                 for (id, o) in stage.tick(now) {
-                    handle_outcome(id, o, now, &mut summary, &chunk_end_wall);
+                    fresh.extend(handle_outcome(id, o, now, &mut summary, &chunk_end_wall));
                 }
                 // After the audio ends, drain in-flight work and any pending visual (≤ hold), then stop.
                 if let Some(t) = hear_done_at {
                     if t.elapsed() > Duration::from_millis(cfg.stage.hold_render_ms + 1500) {
                         break;
                     }
+                }
+            }
+        }
+        // ---- canvas mode: fast path onto the board, then (maybe) the agent ----
+        if cfg.canvas {
+            for ev in fresh {
+                let scene = match (ev.kind, ev.image_id.as_deref()) {
+                    ("clear", _) | (_, None) => canvas.clear(ev.chunk_id),
+                    ("update", Some(id)) => canvas.update(id, &caption_of(id), ev.url.as_deref().unwrap_or_default(), ev.chunk_id),
+                    (_, Some(id)) => canvas.render(id, &caption_of(id), ev.url.as_deref().unwrap_or_default(), ev.chunk_id),
+                };
+                log.log(json!({"ev": "scene", "version": scene.version, "reason": scene.reason, "n": scene.elements.len(), "layout": scene.layout}));
+                sink.scene(&scene);
+                if !scene.elements.is_empty() {
+                    let text = chunk_text.get(&ev.chunk_id).cloned().unwrap_or_default();
+                    agent_trigger = Some((prev_final.clone(), text, ev.chunk_id));
+                }
+            }
+            if let Some(t) = agent_trigger {
+                if agent_busy {
+                    agent_next = Some(t); // latest wins; runs when the in-flight call returns
+                } else {
+                    agent_busy = true;
+                    spawn_agent(canvas.scene().clone(), t.0, t.1, t.2);
                 }
             }
         }

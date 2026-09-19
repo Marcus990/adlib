@@ -33,7 +33,7 @@ pub struct ChunkerConfig {
 
 impl Default for ChunkerConfig {
     fn default() -> Self {
-        Self { tick_ms: 750, min_silence_ms: 600, max_chunk_ms: 8_000, min_speech_ms: 400 }
+        Self { tick_ms: 500, min_silence_ms: 600, max_chunk_ms: 8_000, min_speech_ms: 400 }
     }
 }
 

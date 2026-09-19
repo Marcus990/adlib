@@ -38,6 +38,9 @@ impl RenderSink for TauriSink {
     fn render(&self, ev: &ls_contracts::RenderEvent) {
         let _ = self.app.emit("render", ev);
     }
+    fn scene(&self, s: &ls_canvas::Scene) {
+        let _ = self.app.emit("scene", s);
+    }
     fn status(&self, v: &Value) {
         match v["type"].as_str() {
             Some("mic") => {
@@ -108,10 +111,11 @@ fn main() -> anyhow::Result<()> {
     let root = root().canonicalize()?;
     let cfg = Config::from_env(&root);
     let remote = cfg.api_key.is_some();
+    let mode = if cfg.canvas { "canvas" } else { "single" };
     let log = Logger::create(&cfg.log_path)?;
     eprintln!("log: {}  remote: {}", cfg.log_path.display(), remote);
     let (src, src_label) = source();
-    let state = AppState(Arc::new(Mutex::new(json!({"phase": "loading", "source": src_label, "remote": remote}))));
+    let state = AppState(Arc::new(Mutex::new(json!({"phase": "loading", "source": src_label, "remote": remote, "mode": mode}))));
     let engine = Arc::new(tauri::async_runtime::block_on(Engine::load(cfg))?);
     let cache = engine.cache.clone();
 

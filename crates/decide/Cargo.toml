@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 ls-contracts = { path = "../contracts" }
+ls-query = { path = "../query" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

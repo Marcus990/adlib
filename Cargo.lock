@@ -2721,6 +2721,7 @@ name = "live-slides"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ls-canvas",
  "ls-contracts",
  "ls-pipeline",
  "serde_json",
@@ -2782,6 +2783,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ls-contracts",
+ "ls-query",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -2806,6 +2808,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "dotenvy",
+ "ls-agent",
+ "ls-canvas",
  "ls-contracts",
  "ls-decide",
  "ls-hear",

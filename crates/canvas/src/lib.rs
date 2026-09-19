@@ -310,6 +310,20 @@ pub fn layout_rects(layout: Layout, n: usize, focus: usize) -> Vec<Rect> {
     }
 }
 
+/// True if the speech contains words that suggest re-arranging or annotating the board — used to
+/// decide when an in-progress phrase is worth an agent call.
+pub fn has_layout_cue(text: &str) -> bool {
+    let t = text.to_lowercase();
+    [
+        "compare", "versus", " vs ", "side by side", "next to each other", "both of these", "focus on", "zoom in",
+        "this one", "closer look", "all of these", "all together", "altogether", "notice", "see how", "look at the",
+        "pay attention", "connects to", "leads to", "compared to", "just like", "moving on", "let's move on",
+        "next topic", "new section", "set that aside",
+    ]
+    .iter()
+    .any(|c| t.contains(c))
+}
+
 /// Offline agent (no API key): cue rules over the newest speech → ops. Transparent and cheap.
 pub fn rule_ops(curr: &str, scene: &Scene) -> Vec<Op> {
     let t = curr.to_lowercase().replace('’', "'");
