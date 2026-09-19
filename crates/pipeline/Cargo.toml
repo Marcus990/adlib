@@ -10,6 +10,8 @@ ls-search = { path = "../search" }
 ls-query = { path = "../query" }
 ls-decide = { path = "../decide" }
 ls-stage = { path = "../stage" }
+ls-canvas = { path = "../canvas" }
+ls-agent = { path = "../agent" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
 serde = { version = "1", features = ["derive"] }

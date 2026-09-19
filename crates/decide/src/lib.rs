@@ -282,27 +282,8 @@ pub fn parse_jev_intent(body: &str, tau_intent: f32) -> anyhow::Result<(Action, 
     Ok((parse_action(&choice)?, p_intent * p_kind, detail))
 }
 
-/// Presentational cues: phrases a presenter uses when pointing the audience at something to look at.
-pub const CUES: &[&str] = &[
-    "here's", "here is", "here are", "take a look", "look at", "have a look", "picture this", "imagine",
-    "as you can see", "you can see", "let me show you", "i'll show you", "check out", "this is what",
-    "this is our", "this is the", "that's what", "what it looks like", "looks like this", "show you",
-];
+pub use ls_query::{after_last_cue, CUES};
 const REFINE_CUES: &[&str] = &["actually", "make that", "instead", "the other one", "a different", "in red", "in blue"];
-
-/// Words from `text` after its last presentational cue (≤ `window` words), or None if no cue.
-pub fn after_last_cue(text: &str, window: usize) -> Option<Vec<String>> {
-    let lower = text.to_lowercase().replace('’', "'");
-    let pos = CUES.iter().filter_map(|c| lower.rfind(c).map(|i| i + c.len())).max()?;
-    Some(
-        lower[pos..]
-            .split(|c: char| !(c.is_alphanumeric() || c == '\''))
-            .filter(|w| !w.is_empty())
-            .take(window)
-            .map(String::from)
-            .collect(),
-    )
-}
 
 fn subject_of(caption: &str) -> String {
     caption.split('(').next().unwrap_or(caption).trim().to_lowercase()

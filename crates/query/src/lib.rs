@@ -15,7 +15,8 @@ fn base() -> String {
 const SYSTEM_PROMPT: &str = "You turn a live presenter's speech into image search phrases for a local photo library. \
 Return JSON only: {\"phrases\": [...]} with 1 to 3 short, concrete, visual noun phrases (2-5 words each), most important first. \
 Focus on the NEWEST speech. Drop filler words. Resolve references using what is on screen \
-(\"make it red\" with a car on screen -> \"red car\"). If the talk is abstract, name the most picturable concrete thing mentioned. \
+(\"make it red\" with a car on screen -> \"red car\"). If the presenter points at something (\"here's…\", \"take a look at…\", \"picture this…\"), the thing they point at comes first. \
+If the talk is abstract, name the most picturable concrete thing mentioned. \
 Prefer words used in the library list when they fit.";
 
 #[derive(Clone)]
@@ -128,6 +129,36 @@ pub fn parse_chat_phrases(body: &str) -> anyhow::Result<Vec<String>> {
     Ok(p.phrases.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).take(3).collect())
 }
 
+/// Presentational cues: phrases a presenter uses when pointing the audience at something to look at.
+/// Shared with ls-decide's display-intent heuristic.
+pub const CUES: &[&str] = &[
+    "here's", "here is", "here are", "take a look", "look at", "have a look", "picture this", "imagine",
+    "as you can see", "you can see", "let me show you", "i'll show you", "check out", "this is what",
+    "this is our", "this is the", "that's what", "what it looks like", "looks like this", "show you",
+];
+
+/// Refinement phrases: they don't signal display intent on their own, but the object after them is
+/// what to search for ("…actually, make that the white rose").
+pub const REFINE_OBJECT_CUES: &[&str] = &["make that", "make it", "switch to", "change it to", "instead of that", "the other one"];
+
+/// Words from `text` after its last presentational cue (≤ `window` words), or None if no cue.
+pub fn after_last_cue(text: &str, window: usize) -> Option<Vec<String>> {
+    after_last(text, window, CUES)
+}
+
+fn after_last(text: &str, window: usize, cues: &[&str]) -> Option<Vec<String>> {
+    let lower = text.to_lowercase().replace('’', "'");
+    let pos = cues.iter().filter_map(|c| lower.rfind(c).map(|i| i + c.len())).max()?;
+    Some(
+        lower[pos..]
+            .split(|c: char| !(c.is_alphanumeric() || c == '\''))
+            .filter(|w| !w.is_empty())
+            .take(window)
+            .map(String::from)
+            .collect(),
+    )
+}
+
 const STOP: &[&str] = &[
     "a", "an", "the", "and", "or", "but", "so", "um", "uh", "like", "you", "know", "i", "we", "our", "us", "my", "me", "it",
     "its", "it's", "is", "are", "was", "were", "be", "been", "being", "this", "that", "these", "those", "there", "here",
@@ -138,12 +169,35 @@ const STOP: &[&str] = &[
     "think", "see", "look", "show", "make", "say", "said", "thing", "things", "stuff", "today", "they", "them", "their",
     "he", "she", "his", "her", "him", "not", "no", "yes", "if", "because", "every", "single", "whole", "up", "out",
     "more", "most", "much", "many", "lot", "lots", "kind", "sort", "bit", "little", "new", "good", "great", "big",
-    "sits", "sit", "right", "next", "i'm", "we're", "you're", "that's", "what's", "here's", "there's", "don't",
+    "sits", "sit", "right", "next", "looks", "seems", "feels", "sounds", "appears", "actually", "instead", "that", "i'm", "we're", "you're", "that's", "what's", "here's", "there's", "don't",
 ];
 
 /// Local noun-phrase fallback: runs of content words, newest first, preferring runs that contain
 /// a library vocabulary word. Crude but instant and offline.
 pub fn fallback_phrases(text: &str, vocab: &[String]) -> Vec<String> {
+    // "here's what a bald eagle looks like…" → the object after the cue is what to search for.
+    let mut out = vec![];
+    let all: Vec<&str> = CUES.iter().chain(REFINE_OBJECT_CUES).copied().collect();
+    if let Some(after) = after_last(text, 8, &all) {
+        let obj: Vec<&String> = after
+            .iter()
+            .skip_while(|w| STOP.contains(&w.as_str()) || w.len() <= 2)
+            .take_while(|w| !STOP.contains(&w.as_str()) && w.len() > 2)
+            .take(4)
+            .collect();
+        if !obj.is_empty() {
+            out.push(obj.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" "));
+        }
+    }
+    for p in content_runs(text, vocab) {
+        if !out.contains(&p) && out.len() < 3 {
+            out.push(p);
+        }
+    }
+    out
+}
+
+fn content_runs(text: &str, vocab: &[String]) -> Vec<String> {
     let words: Vec<String> = text
         .split(|c: char| !(c.is_alphanumeric() || c == '\'' || c == '-'))
         .filter(|w| !w.is_empty())
@@ -200,6 +254,10 @@ mod tests {
     fn fallback_extracts_content_runs_newest_first() {
         let p = fallback_phrases("So, um, today I want to tell you about our new office in Tokyo, and the river at night", &[]);
         assert_eq!(p, vec!["night", "river", "tokyo"], "newest content runs first");
+        let p = fallback_phrases("First, here's what a bald eagle looks like. It can spot prey two miles away.", &[]);
+        assert_eq!(p[0], "bald eagle", "object after the cue first: {p:?}");
+        let p = fallback_phrases("And here is a red rose. Actually, make that the white rose instead.", &[]);
+        assert_eq!(p[0], "white rose", "refinement object first: {p:?}");
     }
 
     #[test]

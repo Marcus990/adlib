@@ -24,6 +24,9 @@ pub struct StageConfig {
     pub hold_update_ms: u64,
     /// Drop a chunk if one branch arrives and the other is still missing this long after.
     pub join_timeout_ms: u64,
+    /// A new image from an in-progress (non-final) phrase must be matched by two consecutive
+    /// updates before it shows — partial transcripts misfire ("what a bald…" heard as "what a ball is").
+    pub confirm_partials: bool,
 }
 
 impl Default for StageConfig {
@@ -36,6 +39,7 @@ impl Default for StageConfig {
             hold_render_ms: 4000,
             hold_update_ms: 1500,
             join_timeout_ms: 1000,
+            confirm_partials: true,
         }
     }
 }
@@ -51,6 +55,8 @@ pub enum Outcome {
     Duplicate,
     Stale,
     TimedOut,
+    /// First sighting from a partial transcript; waits for the next update to agree.
+    Unconfirmed,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -77,6 +83,9 @@ pub struct Stage {
     current_since_ms: u64,
     pending: Option<Visual>,
     last_applied_seq: Option<u64>,
+    finals: std::collections::HashSet<u64>,
+    /// (image id, action) proposed by the previous partial update, awaiting confirmation.
+    candidate: Option<String>,
 }
 
 impl Stage {
@@ -89,6 +98,8 @@ impl Stage {
             current_since_ms: 0,
             pending: None,
             last_applied_seq: None,
+            finals: Default::default(),
+            candidate: None,
         }
     }
 
@@ -98,6 +109,9 @@ impl Stage {
 
     /// Remember chunk text so the visual it triggers can carry `trigger_text`.
     pub fn on_chunk(&mut self, c: &Chunk) {
+        if c.is_final {
+            self.finals.insert(c.id);
+        }
         self.texts.retain(|(id, _)| *id != c.id);
         self.texts.push_back((c.id, c.text.clone()));
         while self.texts.len() > 64 {
@@ -203,8 +217,14 @@ impl Stage {
                 };
                 let dup = |v: &Visual| v.image_id.as_deref() == Some(m.image_id.as_str());
                 if dup(&self.current) || self.pending.as_ref().map(dup).unwrap_or(false) {
+                    self.candidate = None;
                     return Outcome::Duplicate;
                 }
+                if self.cfg.confirm_partials && !self.finals.contains(&d.chunk_id) && self.candidate.as_deref() != Some(m.image_id.as_str()) {
+                    self.candidate = Some(m.image_id.clone());
+                    return Outcome::Unconfirmed;
+                }
+                self.candidate = None;
                 Visual { kind, image_id: Some(m.image_id), caption: Some(m.caption), trigger_text, chunk_id: d.chunk_id }
             }
         };
@@ -258,7 +278,7 @@ mod tests {
 
     #[test]
     fn first_render_is_immediate_either_order() {
-        let mut s = Stage::new(StageConfig::default());
+        let mut s = Stage::new(StageConfig { confirm_partials: false, ..StageConfig::default() });
         assert_eq!(s.on_search(found(1, "eagle", 0.6), 100), None);
         let ev = rendered(s.on_decision(dec(1, 1, Action::NewRender, 0.9), 150));
         assert_eq!(ev.kind, "render");
@@ -269,7 +289,7 @@ mod tests {
 
     #[test]
     fn no_change_and_low_probability_do_nothing() {
-        let mut s = Stage::new(StageConfig::default());
+        let mut s = Stage::new(StageConfig { confirm_partials: false, ..StageConfig::default() });
         s.on_search(found(1, "eagle", 0.6), 0);
         assert_eq!(s.on_decision(dec(1, 1, Action::NoChange, 0.99), 0), Some(Outcome::NoChange));
         s.on_search(found(2, "eagle", 0.6), 0);
@@ -278,7 +298,7 @@ mod tests {
 
     #[test]
     fn below_tau_is_library_gap() {
-        let mut s = Stage::new(StageConfig::default());
+        let mut s = Stage::new(StageConfig { confirm_partials: false, ..StageConfig::default() });
         s.on_decision(dec(1, 1, Action::NewRender, 0.9), 0);
         assert_eq!(s.on_search(found(1, "eagle", 0.4), 0), Some(Outcome::LibraryGap));
         s.on_decision(dec(2, 2, Action::NewRender, 0.9), 0);
@@ -287,7 +307,7 @@ mod tests {
 
     #[test]
     fn hold_puts_change_in_pending_then_tick_promotes() {
-        let mut s = Stage::new(StageConfig::default());
+        let mut s = Stage::new(StageConfig { confirm_partials: false, ..StageConfig::default() });
         s.on_search(found(1, "eagle", 0.6), 0);
         rendered(s.on_decision(dec(1, 1, Action::NewRender, 0.9), 0));
         s.on_search(found(2, "owl", 0.6), 1000);
@@ -300,7 +320,7 @@ mod tests {
 
     #[test]
     fn newer_pending_replaces_older_and_keep_does_not_cancel() {
-        let mut s = Stage::new(StageConfig::default());
+        let mut s = Stage::new(StageConfig { confirm_partials: false, ..StageConfig::default() });
         s.on_search(found(1, "eagle", 0.6), 0);
         s.on_decision(dec(1, 1, Action::NewRender, 0.9), 0);
         s.on_search(found(2, "owl", 0.6), 500);
@@ -315,7 +335,7 @@ mod tests {
 
     #[test]
     fn update_may_replace_after_1_5s() {
-        let mut s = Stage::new(StageConfig::default());
+        let mut s = Stage::new(StageConfig { confirm_partials: false, ..StageConfig::default() });
         s.on_search(found(1, "car", 0.6), 0);
         s.on_decision(dec(1, 1, Action::NewRender, 0.9), 0);
         s.on_search(found(2, "red-car", 0.6), 1600);
@@ -325,7 +345,7 @@ mod tests {
 
     #[test]
     fn duplicates_and_stale_sequences_are_dropped() {
-        let mut s = Stage::new(StageConfig::default());
+        let mut s = Stage::new(StageConfig { confirm_partials: false, ..StageConfig::default() });
         s.on_search(found(5, "eagle", 0.6), 0);
         s.on_decision(dec(5, 10, Action::NewRender, 0.9), 0);
         s.on_search(found(6, "eagle", 0.6), 5000);
@@ -336,7 +356,7 @@ mod tests {
 
     #[test]
     fn missing_branch_times_out() {
-        let mut s = Stage::new(StageConfig::default());
+        let mut s = Stage::new(StageConfig { confirm_partials: false, ..StageConfig::default() });
         s.on_decision(dec(1, 1, Action::NewRender, 0.9), 0);
         assert!(s.tick(1000).is_empty());
         assert_eq!(s.tick(1001), vec![(1, Outcome::TimedOut)]);
@@ -346,7 +366,7 @@ mod tests {
 
     #[test]
     fn clear_needs_higher_probability_and_an_image_on_screen() {
-        let mut s = Stage::new(StageConfig::default());
+        let mut s = Stage::new(StageConfig { confirm_partials: false, ..StageConfig::default() });
         s.on_search(SearchOutcome { chunk_id: 1, best: None }, 0);
         assert_eq!(s.on_decision(dec(1, 1, Action::Clear, 0.9), 0), Some(Outcome::Duplicate));
         s.on_search(found(2, "eagle", 0.6), 0);
@@ -360,8 +380,23 @@ mod tests {
     }
 
     #[test]
-    fn trigger_text_comes_from_chunk() {
+    fn partials_need_two_agreeing_updates_finals_do_not() {
         let mut s = Stage::new(StageConfig::default());
+        s.on_search(found(1, "8ball", 0.6), 0);
+        assert_eq!(s.on_decision(dec(1, 1, Action::NewRender, 0.9), 0), Some(Outcome::Unconfirmed));
+        s.on_search(found(2, "eagle", 0.6), 800);
+        assert_eq!(s.on_decision(dec(2, 2, Action::NewRender, 0.9), 800), Some(Outcome::Unconfirmed), "disagreeing update resets");
+        s.on_search(found(3, "eagle", 0.6), 1600);
+        assert_eq!(rendered(s.on_decision(dec(3, 3, Action::NewRender, 0.9), 1600)).image_id.as_deref(), Some("eagle"));
+        // A final chunk shows immediately.
+        s.on_chunk(&Chunk { id: 9, text: "take a look at this owl".into(), t_start_ms: 0, t_end_ms: 1, is_final: true });
+        s.on_search(found(9, "owl", 0.6), 9000);
+        assert_eq!(rendered(s.on_decision(dec(9, 9, Action::NewRender, 0.9), 9000)).image_id.as_deref(), Some("owl"));
+    }
+
+    #[test]
+    fn trigger_text_comes_from_chunk() {
+        let mut s = Stage::new(StageConfig { confirm_partials: false, ..StageConfig::default() });
         s.on_chunk(&Chunk { id: 1, text: "our eagle mascot".into(), t_start_ms: 0, t_end_ms: 1, is_final: false });
         s.on_search(found(1, "eagle", 0.6), 0);
         s.on_decision(dec(1, 1, Action::NewRender, 0.9), 0);

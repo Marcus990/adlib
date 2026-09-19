@@ -11,7 +11,10 @@ keyword being emitted by ASR, to the render; add up to one ASR tick ≈ 0.75 s f
 import json, sys, statistics as st
 
 log = [json.loads(l) for l in open(sys.argv[1])]
-expected = [l.rstrip("\n").split("\t") for l in open(sys.argv[2]) if l.strip() and not l.startswith("#")]
+rows = [l.rstrip("\n").split("\t") for l in open(sys.argv[2]) if l.strip() and not l.startswith("#")]
+# "keyword<TAB>!image" rows are negatives: mentioned without display intent, must NOT be shown.
+forbidden = {img[1:] for _, img in rows if img.startswith("!")}
+expected = [(kw, img) for kw, img in rows if not img.startswith("!")]
 
 chunks = [e for e in log if e.get("ev") == "chunk"]
 renders = [e for e in log if e.get("ev") == "render"]
@@ -46,7 +49,8 @@ lats = [r[5] for r in rows if r[4] and r[5] is not None]
 
 for t, kw, want, got, ok, lat in rows:
     print(f"{t/1000:7.1f}s  {'OK ' if ok else 'BAD'}  after '{kw}' want {want} got {got}  keyword→render {lat} ms")
-print(f"\nrenders={len(rows)} correct={correct} wrong={wrong} missed={missed}")
+false_pos = [r[3] for r in rows if r[3] in forbidden]
+print(f"\nrenders={len(rows)} correct={correct} wrong={wrong} missed={missed} false_positives={false_pos}")
 if gaps:
     print(f"min gap between changes: {min(gaps)} ms")
 if lats:

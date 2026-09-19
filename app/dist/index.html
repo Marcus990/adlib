@@ -48,11 +48,42 @@
               box-shadow: 0 1vh 3vh rgba(0,0,0,0.5); opacity: 0; transform: translateY(1.5vh);
               transition: opacity 400ms ease, transform 400ms ease; }
   #grid.on img { opacity: 1; transform: none; }
+
+  /* ---------- Canvas mode (CANVAS.md): an evolving board of up to 4 tiles + annotations ---------- */
+  #board { position: absolute; inset: 0; }
+  .tile { position: absolute; overflow: hidden; border-radius: 1.4vh; box-shadow: 0 2.2vh 6vh rgba(0,0,0,0.65);
+          opacity: 0; transform: scale(0.94);
+          transition: left 520ms cubic-bezier(.2,.8,.2,1), top 520ms cubic-bezier(.2,.8,.2,1), width 520ms cubic-bezier(.2,.8,.2,1),
+                      height 520ms cubic-bezier(.2,.8,.2,1), opacity 380ms ease, transform 520ms cubic-bezier(.2,.8,.2,1), filter 400ms ease; }
+  .tile.on { opacity: 1; transform: none; }
+  .tile.full { border-radius: 0; box-shadow: none; }
+  .tile.dim { filter: brightness(0.62) saturate(0.85); }
+  .tile img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .tile .bg { filter: blur(var(--backdrop-blur)) brightness(var(--backdrop-dim)) saturate(var(--backdrop-sat)); transform: scale(1.25); display: none; }
+  .tile.fit .bg { display: block; }
+  .tile.fit .fg { object-fit: contain; inset: 4vh 4vw; width: calc(100% - 8vw); height: calc(100% - 8vh); filter: drop-shadow(0 3vh 7vh rgba(0,0,0,0.85)); }
+  .tile.full.on .fg { animation: drift var(--drift-ms) ease-out forwards; transform-origin: 50% 45%; }
+  .tile .ring { position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0; transition: opacity 300ms; }
+  .tile.hl .ring { opacity: 1; box-shadow: inset 0 0 0 0.55vh rgba(255,210,90,0.95), 0 0 5vh rgba(255,210,90,0.45); animation: pulse 1.8s ease-in-out 2; }
+  .tile.fr .ring { opacity: 1; box-shadow: inset 0 0 0 0.35vh rgba(255,255,255,0.9); }
+  @keyframes pulse { 0%, 100% { box-shadow: inset 0 0 0 0.55vh rgba(255,210,90,0.95), 0 0 3vh rgba(255,210,90,0.3); }
+                     50% { box-shadow: inset 0 0 0 0.8vh rgba(255,224,140,1), 0 0 7vh rgba(255,210,90,0.7); } }
+  .chip { position: absolute; left: 1.6vh; bottom: 1.6vh; padding: 0.7vh 1.4vh; border-radius: 99px; font: 600 2.1vh/1.2 -apple-system, "SF Pro Display", sans-serif;
+          color: #111; background: rgba(255,214,110,0.95); box-shadow: 0 0.8vh 2vh rgba(0,0,0,0.4); opacity: 0; transform: translateY(1vh); transition: opacity 300ms, transform 300ms; }
+  .chip.on { opacity: 1; transform: none; }
+  #ann { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 3; }
+  #ann path { fill: none; stroke: rgba(255,214,110,0.95); stroke-width: 0.5vh; stroke-linecap: round; filter: drop-shadow(0 0.4vh 1vh rgba(0,0,0,0.6));
+              stroke-dasharray: 2000; stroke-dashoffset: 2000; animation: draw 700ms ease-out forwards; }
+  #ann text { fill: #fff; font: 600 2.2vh -apple-system, sans-serif; paint-order: stroke; stroke: rgba(0,0,0,0.7); stroke-width: 0.5vh; }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
 </style>
 </head>
 <body>
 <div class="slot" id="a"><img class="bg"><div class="vig"></div><img class="fg"></div>
 <div class="slot" id="b"><img class="bg"><div class="vig"></div><img class="fg"></div>
+<div id="board"></div>
+<svg id="ann"><defs><marker id="head" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+  <path d="M0,0 L10,5 L0,10 z" style="fill: rgba(255,214,110,0.95); stroke: none; animation: none; stroke-dasharray: none"/></marker></defs><g id="annG"></g></svg>
 <div id="idle"></div>
 <div id="grid"></div>
 <div id="blank"></div>
@@ -89,6 +120,7 @@
   }
 
   function applyState(s) {
+    if (s.mode) mode = s.mode;
     const idle = $('idle');
     idle.classList.toggle('err', s.phase === 'error');
     if (shown.length) idle.classList.add('gone');
@@ -125,9 +157,72 @@
     afterPaint(() => fe('painted', ev.chunk_id, performance.now() - received, ev.kind));
   }
 
+
+  // ---------- Canvas mode ----------
+  let mode = 'single';
+  const tiles = new Map(); // element id → {div, url}
+  function pct(v) { return (v * 100).toFixed(3) + '%'; }
+  function setRect(div, r) { Object.assign(div.style, { left: pct(r.x), top: pct(r.y), width: pct(r.w), height: pct(r.h) }); }
+  async function renderScene(sc) {
+    const t0 = performance.now();
+    const n = sc.elements.length;
+    const keep = new Set(sc.elements.map(e => e.id));
+    for (const [id, t] of tiles) if (!keep.has(id)) {           // removed → fade out
+      t.div.classList.remove('on'); setTimeout(() => t.div.remove(), 450); tiles.delete(id);
+    }
+    const board = $('board');
+    for (const e of sc.elements) {
+      let t = tiles.get(e.id);
+      if (!t) {
+        const div = document.createElement('div'); div.className = 'tile';
+        div.innerHTML = '<img class="bg"><img class="fg"><div class="ring"></div><div class="chip"></div>';
+        setRect(div, e.rect); board.appendChild(div);
+        t = { div, url: '' }; tiles.set(e.id, t);
+      }
+      const fg = t.div.querySelector('.fg'), bg = t.div.querySelector('.bg');
+      if (t.url !== e.url) {
+        const pre = new Image(); pre.src = e.url;
+        try { await pre.decode(); } catch (_) {}
+        fg.src = e.url; bg.src = e.url; t.url = e.url;
+        if (shown[shown.length - 1] !== e.url && !shown.includes(e.url)) shown.push(e.url);
+        if (e.focus && t.div.classList.contains('on')) { t.div.animate([{ filter: 'brightness(1.6)' }, { filter: 'none' }], { duration: 350 }); }
+      }
+      const full = n === 1;
+      t.div.classList.toggle('full', full);
+      const ia = (fg.naturalWidth || 16) / (fg.naturalHeight || 9), ta = (e.rect.w * innerWidth) / (e.rect.h * innerHeight);
+      t.div.classList.toggle('fit', full && Math.abs(ia / ta - 1) > 0.15);
+      t.div.classList.toggle('dim', sc.layout === 'hero' && !e.focus && n > 1);
+      t.div.style.zIndex = e.focus ? 2 : 1;
+      setRect(t.div, e.rect);
+      requestAnimationFrame(() => t.div.classList.add('on'));
+    }
+    // annotations: highlight/frame on tiles (+ label chip), arrows as SVG paths between tile centres
+    for (const [, t] of tiles) { t.div.classList.remove('hl', 'fr'); t.div.querySelector('.chip').classList.remove('on'); }
+    const g = $('annG'); g.innerHTML = '';
+    const byId = Object.fromEntries(sc.elements.map(e => [e.id, e]));
+    for (const a of sc.annotations) {
+      if (a.kind === 'arrow' && a.targets.length >= 2 && byId[a.targets[0]] && byId[a.targets[1]]) {
+        const A = byId[a.targets[0]].rect, B = byId[a.targets[1]].rect;
+        const ax = (A.x + A.w / 2) * innerWidth, ay = (A.y + A.h / 2) * innerHeight, bx = (B.x + B.w / 2) * innerWidth, by = (B.y + B.h / 2) * innerHeight;
+        const mx = (ax + bx) / 2, my = Math.min(ay, by) - innerHeight * 0.08;
+        const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        p.setAttribute('d', `M${ax},${ay} Q${mx},${my} ${bx},${by}`); p.setAttribute('marker-end', 'url(#head)'); g.appendChild(p);
+        if (a.label) { const tx = document.createElementNS('http://www.w3.org/2000/svg', 'text'); tx.setAttribute('x', mx); tx.setAttribute('y', my); tx.setAttribute('text-anchor', 'middle'); tx.textContent = a.label; g.appendChild(tx); }
+      } else {
+        for (const id of a.targets) {
+          const t = tiles.get(id); if (!t) continue;
+          t.div.classList.add(a.kind === 'frame' ? 'fr' : 'hl');
+          if (a.label) { const c = t.div.querySelector('.chip'); c.textContent = a.label; c.classList.add('on'); }
+        }
+      }
+    }
+    if (n) $('idle').classList.add('gone');
+    afterPaint(() => fe('scene_painted', sc.chunk_id, performance.now() - t0, `v${sc.version} ${sc.reason}`));
+  }
+  listen('scene', e => { if (mode === 'canvas') renderScene(e.payload); });
   listen('state', e => applyState(e.payload));
   listen('talk_end', () => { toggleGrid(true); fe('grid', null, shown.length, 'talk_end'); });
-  listen('render', e => { const t = performance.now(); fe('received', e.payload.chunk_id, 0, e.payload.kind); show(e.payload, t); });
+  listen('render', e => { const t = performance.now(); fe('received', e.payload.chunk_id, 0, e.payload.kind); if (mode !== 'canvas') show(e.payload, t); });
   invoke('app_state').then(applyState).catch(() => {});
   fe('loaded', null, null, location.href);
 
