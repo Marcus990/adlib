@@ -4,49 +4,91 @@
 <meta charset="utf-8">
 <title>Live Slides</title>
 <style>
-  :root { --bg: #0b0d12; --backdrop-blur: 40px; --backdrop-dim: 0.45; }
+  /* One theme (design doc §2): background, backdrop treatment and motion, all as variables. */
+  :root {
+    --bg: #07080c;
+    --backdrop-blur: 70px;
+    --backdrop-dim: 0.32;
+    --backdrop-sat: 1.25;
+    --vignette: radial-gradient(ellipse at center, rgba(0,0,0,0) 45%, rgba(0,0,0,0.55) 100%);
+    --drift-scale: 1.035;   /* slow zoom over a held image */
+    --drift-ms: 9000ms;
+    --enter-scale: 1.015;   /* new image settles into place while it fades in */
+  }
   html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; cursor: none; }
-  .slot { position: absolute; inset: 0; opacity: 0; transition-property: opacity; transition-timing-function: ease; }
+  .slot { position: absolute; inset: 0; opacity: 0; overflow: hidden; transition-property: opacity; transition-timing-function: cubic-bezier(.4, 0, .2, 1); }
   .slot.on { opacity: 1; }
   .slot img { position: absolute; inset: 0; width: 100%; height: 100%; }
-  .slot .bg { object-fit: cover; filter: blur(var(--backdrop-blur)) brightness(var(--backdrop-dim)); transform: scale(1.1); }
-  .slot .fg { object-fit: cover; }
-  .slot.fit .fg { object-fit: contain; }
-  .slot:not(.fit) .bg { display: none; }
+  .slot .bg { object-fit: cover; filter: blur(var(--backdrop-blur)) brightness(var(--backdrop-dim)) saturate(var(--backdrop-sat)); transform: scale(1.25); }
+  .slot .vig { position: absolute; inset: 0; background: var(--vignette); pointer-events: none; }
+  .slot .fg { object-fit: cover; transform-origin: 50% 45%; }
+  .slot.fit .fg { object-fit: contain; filter: drop-shadow(0 2.5vh 5vh rgba(0,0,0,0.55)); }
+  .slot.fit .fg { inset: 5vh 5vw; width: 90vw; height: 90vh; }
+  .slot:not(.fit) .bg, .slot:not(.fit) .vig { display: none; }
+  .slot.on .fg { animation: drift var(--drift-ms) ease-out forwards; }
+  @keyframes drift { from { transform: scale(var(--enter-scale)); } 15% { transform: scale(1); } to { transform: scale(var(--drift-scale)); } }
+
+  /* Before the first image: a quiet "listening" dot, gone once anything renders. */
+  #idle { position: absolute; left: 50%; bottom: 7vh; width: 10px; height: 10px; margin-left: -5px; border-radius: 50%;
+          background: rgba(255,255,255,0.35); animation: breathe 2.4s ease-in-out infinite; transition: opacity 600ms; }
+  #idle.gone { opacity: 0; animation: none; }
+  #idle.err { background: rgba(255,90,90,0.8); animation: none; }
+  @keyframes breathe { 0%, 100% { transform: scale(0.8); opacity: 0.35; } 50% { transform: scale(1.15); opacity: 0.8; } }
+
+  /* Presenter safety valve: `b` blanks to the background colour. */
+  #blank { position: absolute; inset: 0; background: var(--bg); opacity: 0; pointer-events: none; transition: opacity 250ms; z-index: 5; }
+  #blank.on { opacity: 1; }
+
   /* Stretch goal: the "deck" that built itself — every image shown, in order. */
-  #grid { position: absolute; inset: 0; display: grid; gap: 1.2vw; padding: 3vw; box-sizing: border-box;
-          background: var(--bg); opacity: 0; pointer-events: none; transition: opacity 400ms ease;
-          grid-template-columns: repeat(auto-fill, minmax(18vw, 1fr)); align-content: center; }
+  #grid { position: absolute; inset: 0; display: grid; gap: 1.4vw; padding: 5vw; box-sizing: border-box; z-index: 4;
+          background: var(--bg); opacity: 0; pointer-events: none; transition: opacity 500ms ease;
+          grid-template-columns: repeat(auto-fill, minmax(17vw, 1fr)); align-content: center; }
   #grid.on { opacity: 1; }
-  #grid img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 0.6vw; }
+  #grid img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 0.7vw;
+              box-shadow: 0 1vh 3vh rgba(0,0,0,0.5); opacity: 0; transform: translateY(1.5vh);
+              transition: opacity 400ms ease, transform 400ms ease; }
+  #grid.on img { opacity: 1; transform: none; }
 </style>
 </head>
 <body>
-<div class="slot" id="a"><img class="bg"><img class="fg"></div>
-<div class="slot" id="b"><img class="bg"><img class="fg"></div>
+<div class="slot" id="a"><img class="bg"><div class="vig"></div><img class="fg"></div>
+<div class="slot" id="b"><img class="bg"><div class="vig"></div><img class="fg"></div>
+<div id="idle"></div>
 <div id="grid"></div>
+<div id="blank"></div>
 <script>
   // Presentation only: every decision is made in Rust. See design doc §2.
   const { listen } = window.__TAURI__.event;
   const { invoke } = window.__TAURI__.core;
-  const slots = [document.getElementById('a'), document.getElementById('b')];
-  let front = 0;
+  const $ = id => document.getElementById(id);
+  const slots = [$('a'), $('b')];
+  let front = 0, token = 0;
+  const shown = []; // image URLs in the order they appeared
+
   const fe = (step, chunkId, ms, detail) => invoke('fe', { step, chunkId, ms, detail }).catch(() => {});
   window.addEventListener('error', e => fe('js_error', null, null, String(e.message)));
   // rAF stalls when the window is hidden/display asleep; fall back to a timer so "painted" still reports.
   const afterPaint = cb => { let done = false; const f = () => { if (!done) { done = true; cb(); } };
     requestAnimationFrame(() => requestAnimationFrame(f)); setTimeout(f, 100); };
-  let token = 0;
-  const shown = []; // image URLs in the order they appeared
-  function toggleGrid(on) {
-    const g = document.getElementById('grid');
-    if (on) { g.innerHTML = ''; shown.forEach(u => { const i = document.createElement('img'); i.src = u; g.appendChild(i); }); }
-    g.classList.toggle('on', on);
-  }
 
   function place(slot, rect) {
     Object.assign(slot.style, { left: rect.x * 100 + '%', top: rect.y * 100 + '%',
       width: rect.w * 100 + '%', height: rect.h * 100 + '%', inset: 'auto' });
+  }
+
+  function toggleGrid(on) {
+    const g = $('grid');
+    if (on) {
+      g.innerHTML = '';
+      shown.forEach((u, i) => { const im = document.createElement('img'); im.src = u; im.style.transitionDelay = (i * 60) + 'ms'; g.appendChild(im); });
+    }
+    g.classList.toggle('on', on);
+  }
+
+  function applyState(s) {
+    const idle = $('idle');
+    idle.classList.toggle('err', s.phase === 'error');
+    if (shown.length) idle.classList.add('gone');
   }
 
   async function show(ev, received) {
@@ -66,26 +108,32 @@
     if (my !== token) return; // a newer event arrived while decoding
     fe('decoded', ev.chunk_id, performance.now() - t0, ev.url);
     if (shown[shown.length - 1] !== ev.url) shown.push(ev.url);
-    // Photos close to the screen's shape fill it; anything else is fitted over a blurred copy.
+    $('idle').classList.add('gone');
+    // Photos close to the screen's shape fill it; anything else is framed over its own blurred copy.
     const imgAspect = fg.naturalWidth / fg.naturalHeight, scrAspect = innerWidth / innerHeight;
     next.classList.toggle('fit', Math.abs(imgAspect / scrAspect - 1) > 0.15);
     place(next, ev.rect);
     next.style.transitionDuration = cur.style.transitionDuration = fadeMs + 'ms';
+    // Restart the drift animation on the incoming image.
+    fg.style.animation = 'none'; void fg.offsetWidth; fg.style.animation = '';
     next.classList.add('on');
     cur.classList.remove('on');
     front = 1 - front;
     afterPaint(() => fe('painted', ev.chunk_id, performance.now() - received, ev.kind));
   }
 
+  listen('state', e => applyState(e.payload));
   listen('talk_end', () => { toggleGrid(true); fe('grid', null, shown.length, 'talk_end'); });
   listen('render', e => { const t = performance.now(); fe('received', e.payload.chunk_id, 0, e.payload.kind); show(e.payload, t); });
+  invoke('app_state').then(applyState).catch(() => {});
   fe('loaded', null, null, location.href);
+
   document.addEventListener('keydown', async e => {
-    if (e.key === 'g') toggleGrid(!document.getElementById('grid').classList.contains('on'));
-    if (e.key === 'f') {
-      const w = window.__TAURI__.window.getCurrentWindow();
-      await w.setFullscreen(!(await w.isFullscreen()));
-    }
+    const w = window.__TAURI__.window.getCurrentWindow();
+    if (e.key === 'b') { $('blank').classList.toggle('on'); fe('blank', null, null, String($('blank').classList.contains('on'))); }
+    else if (e.key === 'g') toggleGrid(!$('grid').classList.contains('on'));
+    else if (e.key === 'f') await w.setFullscreen(!(await w.isFullscreen()));
+    else if (e.key === 'Escape') await w.setFullscreen(false);
   });
 </script>
 </body>

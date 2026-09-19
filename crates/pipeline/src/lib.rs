@@ -130,6 +130,7 @@ enum Msg {
     AudioStart(u64),
     HearDone,
     HearError(String),
+    Status(Value),
     Decision(ls_contracts::ChangeDecision, Source, u64, u64),
     Search(SearchOutcome, ls_contracts::QueryResult, Vec<ls_search::PhraseHit>, u64, u64, u64),
 }
@@ -212,6 +213,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                     AudioSource::Mic { device } => {
                         let (_stream, arx, name) = audio::capture(device.as_deref())?;
                         log.log(json!({"ev": "mic", "device": name}));
+                        let _ = tx.send(Msg::Status(json!({"type": "mic", "device": name})));
                         let _ = tx.send(Msg::AudioStart(log.now_ms()));
                         while !stop.load(Ordering::Relaxed) {
                             if let Ok(block) = arx.recv_timeout(Duration::from_millis(100)) {
@@ -271,6 +273,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                     Msg::AudioStart(t) => audio_t0 = t,
                     Msg::HearDone => hear_done_at = Some(Instant::now()),
                     Msg::HearError(e) => sink.status(&json!({"type": "error", "error": e})),
+                    Msg::Status(v) => sink.status(&v),
                     Msg::Chunk(c, tm, wall) => {
                         summary.chunks += 1;
                         chunk_end_wall.insert(c.id, audio_t0 + c.t_end_ms);

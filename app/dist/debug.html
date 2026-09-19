@@ -4,33 +4,112 @@
 <meta charset="utf-8">
 <title>Live Slides — debug</title>
 <style>
-  body { margin: 0; font: 13px/1.45 ui-monospace, Menlo, monospace; background: #111; color: #ddd; }
-  header { padding: 8px 12px; background: #1b1e25; position: sticky; top: 0; }
-  #curr { color: #fff; font-size: 15px; min-height: 2.9em; }
-  #log { padding: 6px 12px; }
-  .row { border-bottom: 1px solid #222; padding: 3px 0; white-space: pre-wrap; }
-  .render { color: #7fd; } .decide { color: #fc6; } .search { color: #9cf; } .final { color: #aaa; }
+  :root { --bg: #0e1015; --panel: #171a21; --line: #242833; --dim: #7d8594; --text: #d9dde5;
+          --ok: #5fd4a8; --warn: #f0b95b; --bad: #ef6b6b; --blue: #7fb4f5; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 12.5px/1.45 ui-monospace, Menlo, monospace; background: var(--bg); color: var(--text); }
+  header { position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--line); z-index: 1; }
+  .strip { display: flex; gap: 14px; align-items: center; padding: 8px 12px; flex-wrap: wrap; }
+  .pill { padding: 2px 8px; border-radius: 99px; background: #222733; white-space: nowrap; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; background: var(--dim); }
+  .dot.loading { background: var(--warn); } .dot.listening { background: var(--ok); } .dot.error { background: var(--bad); } .dot.ended { background: var(--blue); }
+  .stat b { color: #fff; font-weight: 600; }
+  .now { display: flex; gap: 10px; padding: 0 12px 10px; align-items: center; }
+  #thumb { width: 96px; height: 60px; border-radius: 6px; object-fit: cover; background: #222733; flex: none; }
+  #thumbcap { color: var(--dim); }
+  #curr { padding: 8px 12px 10px; color: #fff; font-size: 14px; min-height: 3.2em; border-top: 1px solid var(--line); }
+  #err { display: none; padding: 8px 12px; background: #3a1d20; color: #ffb3b3; border-top: 1px solid var(--line); }
+  #tools { padding: 6px 12px; border-top: 1px solid var(--line); color: var(--dim); }
+  #tools label { cursor: pointer; user-select: none; }
+  #log { padding: 4px 12px 12px; }
+  .row { border-bottom: 1px solid #1b1f28; padding: 3px 0; white-space: pre-wrap; }
+  .render { color: var(--ok); } .pending { color: var(--warn); } .gap { color: #c9a0f5; } .final { color: var(--dim); }
+  .decide { color: var(--warn); opacity: .85; } .search { color: var(--blue); opacity: .85; } .errrow { color: var(--bad); }
+  .t { color: #555c69; margin-right: 6px; }
 </style>
 </head>
 <body>
-<header><div id="state">loading models…</div><div id="curr"></div></header>
+<header>
+  <div class="strip">
+    <span class="pill"><span class="dot loading" id="dot"></span><span id="phase">loading models…</span></span>
+    <span class="pill" id="source">—</span>
+    <span class="pill" id="remote">—</span>
+    <span class="stat">changes <b id="nchg">0</b></span>
+    <span class="stat">last <b id="last">—</b></span>
+    <span class="stat">p50 <b id="p50">—</b></span>
+    <span class="stat">kept <b id="nkeep">0</b></span>
+  </div>
+  <div class="now"><img id="thumb" alt=""><span id="thumbcap">nothing on screen yet</span></div>
+  <div id="err"></div>
+  <div id="curr"></div>
+  <div id="tools"><label><input type="checkbox" id="verbose"> show every decision &amp; search (verbose)</label></div>
+</header>
 <div id="log"></div>
 <script>
+  // Operator view. Latency = speech (end of the audio that triggered it) → render event.
   const { listen } = window.__TAURI__.event;
-  const log = document.getElementById('log');
-  function add(cls, text) {
-    const d = document.createElement('div'); d.className = 'row ' + cls; d.textContent = text;
-    log.prepend(d); while (log.children.length > 200) log.lastChild.remove();
+  const { invoke } = window.__TAURI__.core;
+  const $ = id => document.getElementById(id);
+  const t0 = performance.now();
+  const lats = [];
+  let nchg = 0, nkeep = 0;
+  const SRC = { Jev: 'Jev', LlmFallback: 'LLM fallback', Heuristic: 'local rule' };
+
+  const stamp = () => ((performance.now() - t0) / 1000).toFixed(1).padStart(6) + 's';
+  function add(cls, text, verboseOnly) {
+    if (verboseOnly && !$('verbose').checked) return;
+    const d = document.createElement('div'); d.className = 'row ' + cls;
+    const t = document.createElement('span'); t.className = 't'; t.textContent = stamp();
+    d.appendChild(t); d.appendChild(document.createTextNode(text));
+    $('log').prepend(d); while ($('log').children.length > 300) $('log').lastChild.remove();
   }
+
+  function applyState(s) {
+    const phase = s.phase || 'loading';
+    $('dot').className = 'dot ' + phase;
+    $('phase').textContent = { loading: 'loading models…', listening: 'listening', ended: 'talk ended', error: 'error' }[phase] || phase;
+    if (s.source) $('source').textContent = s.source;
+    $('remote').textContent = s.remote ? 'hosted models: on' : 'hosted models: off (local fallbacks)';
+    $('err').style.display = s.error ? 'block' : 'none';
+    $('err').textContent = s.error ? 'ERROR: ' + s.error : '';
+  }
+
+  function median(v) { const s = [...v].sort((a, b) => a - b); return s.length ? s[Math.floor((s.length - 1) / 2)] : null; }
+
+  listen('state', e => applyState(e.payload));
+  invoke('app_state').then(applyState).catch(() => {});
+
   listen('status', e => {
     const s = e.payload;
-    if (s.type === 'ready') document.getElementById('state').textContent = 'listening';
-    else if (s.type === 'chunk') { document.getElementById('curr').textContent = s.text; if (s.final) add('final', '▪ ' + s.text); }
-    else if (s.type === 'decide') add('decide', `#${s.chunk_id} jev ${s.action} p=${s.p.toFixed(2)} (${s.source}, ${s.ms} ms)`);
-    else if (s.type === 'search') add('search', `#${s.chunk_id} ${JSON.stringify(s.phrases)} → ${s.best ?? '—'} ${s.score?.toFixed(3) ?? ''} (q ${s.query_ms} ms${s.fallback ? ' fallback' : ''}, s ${s.search_ms} ms)`);
-    else if (s.type === 'outcome') add(s.outcome === 'rendered' ? 'render' : '', `#${s.chunk_id} → ${s.outcome}${s.image_id ? ' ' + s.image_id : ''}${s.latency_ms != null ? ' (' + s.latency_ms + ' ms)' : ''}`);
-    else if (s.type === 'error') { document.getElementById('state').textContent = 'ERROR: ' + s.error; add('decide', 'ERROR ' + s.error); }
-    else if (s.type === 'summary') add('render', 'SUMMARY ' + JSON.stringify(s));
+    switch (s.type) {
+      case 'chunk':
+        $('curr').textContent = s.text;
+        if (s.final) add('final', '▪ ' + s.text);
+        break;
+      case 'decide':
+        add('decide', `#${s.chunk_id} ${SRC[s.source] || s.source}: ${s.action} p=${s.p.toFixed(2)} (${s.ms} ms)`, true);
+        break;
+      case 'search':
+        add('search', `#${s.chunk_id} ${JSON.stringify(s.phrases)} → ${s.best ?? '—'} ${s.score?.toFixed(3) ?? ''} (query ${s.query_ms} ms${s.fallback ? ', local' : ''}, search ${s.search_ms} ms)`, true);
+        break;
+      case 'outcome':
+        if (s.outcome === 'rendered') {
+          nchg++; $('nchg').textContent = nchg;
+          if (s.latency_ms != null) { lats.push(s.latency_ms); $('last').textContent = s.latency_ms + ' ms'; $('p50').textContent = median(lats) + ' ms'; }
+          if (s.image_id) { $('thumb').src = 'img://localhost/' + s.image_id; $('thumbcap').textContent = s.image_id; }
+          else { $('thumb').removeAttribute('src'); $('thumbcap').textContent = '(cleared)'; }
+          add('render', `#${s.chunk_id} ▶ ${s.image_id ?? 'clear'}${s.latency_ms != null ? '  (' + s.latency_ms + ' ms)' : ''}`);
+        } else if (s.outcome === 'pending') add('pending', `#${s.chunk_id} ⏸ held (minimum on-screen time)`);
+        else if (s.outcome === 'library_gap') add('gap', `#${s.chunk_id} ∅ change wanted, no image good enough`);
+        else { nkeep++; $('nkeep').textContent = nkeep; add('', `#${s.chunk_id} ${s.outcome}`, true); }
+        break;
+      case 'error':
+        add('errrow', 'ERROR ' + s.error);
+        break;
+      case 'summary':
+        add('render', `SUMMARY changes=${s.summary.renders} p50=${s.p50} ms p95=${s.p95} ms`);
+        break;
+    }
   });
 </script>
 </body>
