@@ -174,3 +174,10 @@
 
   → default small.en + audio-ctx floor 768 + ASR tick 600 ms. Full pipeline, real models: noisy talk 6/6,
   0 false positives, keyword→render p50 1384 ms; clean talk 6/6 (+ golf, now expected in supplement mode).
+
+## 2026-09-19 — live diagrams + charts
+- See CANVAS.md "Live diagrams and charts". New fixture: fixtures/audio/graphics-talk.wav (+ .txt).
+- Also: τ 0.477 → 0.52 (junk phrases matched at 0.43–0.49, real matches 0.54–0.61); partial-confirmation
+  candidates expire after 2.5 s (two weak matches 11 s apart had "confirmed" an Earth photo).
+- Probe harness for agent prompts: `cargo test -p ls-agent dump_tools -- --ignored --nocapture` + a JSON of
+  board/speech cases → call OpenRouter directly (faster than a 90 s replay per prompt change).

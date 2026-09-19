@@ -76,6 +76,13 @@
               stroke-dasharray: 2000; stroke-dashoffset: 2000; animation: draw 700ms ease-out forwards; }
   #ann text { fill: #fff; font: 600 2.2vh -apple-system, sans-serif; paint-order: stroke; stroke: rgba(0,0,0,0.7); stroke-width: 0.5vh; }
   @keyframes draw { to { stroke-dashoffset: 0; } }
+
+  /* Diagram / chart tiles (graphics.js): vector on a deep slate card. */
+  .tile.gfx { background: radial-gradient(130% 120% at 12% 0%, #1b2436 0%, #0d121c 55%, #07090e 100%);
+              box-shadow: 0 2.2vh 6vh rgba(0,0,0,0.65), inset 0 0 0 1px rgba(255,255,255,0.07); }
+  .tile.gfx.full { box-shadow: none; }
+  .tile.gfx svg.g { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .g text { font-family: -apple-system, "SF Pro Display", "Helvetica Neue", sans-serif; }
 </style>
 </head>
 <body>
@@ -87,7 +94,18 @@
 <div id="idle"></div>
 <div id="grid"></div>
 <div id="blank"></div>
+<script src="graphics.js"></script>
 <script>
+  // Browser preview (no Tauri): `python3 -m http.server -d app/dist` → push scenes with window.__scene(sc).
+  if (!window.__TAURI__) {
+    const handlers = {};
+    window.__TAURI__ = {
+      event: { listen: (name, cb) => { handlers[name] = cb; return Promise.resolve(); } },
+      core: { invoke: cmd => Promise.resolve(cmd === 'app_state' ? { mode: 'canvas', phase: 'listening' } : null) },
+      window: { getCurrentWindow: () => ({ setFullscreen: async () => {}, isFullscreen: async () => false }) },
+    };
+    window.__scene = sc => handlers.scene && handlers.scene({ payload: sc });
+  }
   // Presentation only: every decision is made in Rust. See design doc §2.
   const { listen } = window.__TAURI__.event;
   const { invoke } = window.__TAURI__.core;
@@ -160,10 +178,12 @@
 
   // ---------- Canvas mode ----------
   let mode = 'single';
-  const tiles = new Map(); // element id → {div, url}
+  const tiles = new Map(); // element id → {div, url, seen, sig}
+  let lastScene = null;
   function pct(v) { return (v * 100).toFixed(3) + '%'; }
   function setRect(div, r) { Object.assign(div.style, { left: pct(r.x), top: pct(r.y), width: pct(r.w), height: pct(r.h) }); }
   async function renderScene(sc) {
+    lastScene = sc;
     const t0 = performance.now();
     const n = sc.elements.length;
     const keep = new Set(sc.elements.map(e => e.id));
@@ -173,11 +193,25 @@
     const board = $('board');
     for (const e of sc.elements) {
       let t = tiles.get(e.id);
+      const gfx = e.kind === 'diagram' || e.kind === 'chart';
       if (!t) {
-        const div = document.createElement('div'); div.className = 'tile';
-        div.innerHTML = '<img class="bg"><img class="fg"><div class="ring"></div><div class="chip"></div>';
+        const div = document.createElement('div'); div.className = gfx ? 'tile gfx' : 'tile';
+        div.innerHTML = gfx ? '<svg class="g"></svg><div class="ring"></div><div class="chip"></div>'
+                            : '<img class="bg"><img class="fg"><div class="ring"></div><div class="chip"></div>';
         setRect(div, e.rect); board.appendChild(div);
-        t = { div, url: '' }; tiles.set(e.id, t);
+        t = { div, url: '', seen: new Set(), sig: '' }; tiles.set(e.id, t);
+      }
+      if (gfx) {
+        // Drawn for the tile's final size; the SVG scales smoothly while the tile animates there.
+        const W = e.rect.w * innerWidth, H = e.rect.h * innerHeight;
+        const sig = JSON.stringify([e.diagram || e.chart, Math.round(W), Math.round(H)]);
+        if (sig !== t.sig) { t.sig = sig; try { Gfx.render(t.div.querySelector('svg.g'), e, W, H, t.seen, n === 1); } catch (err) { fe('js_error', sc.chunk_id, null, 'gfx ' + err); } }
+        t.div.classList.toggle('full', n === 1);
+        t.div.classList.toggle('dim', sc.layout === 'hero' && !e.focus && n > 1);
+        t.div.style.zIndex = e.focus ? 2 : 1;
+        setRect(t.div, e.rect);
+        requestAnimationFrame(() => t.div.classList.add('on'));
+        continue;
       }
       const fg = t.div.querySelector('.fg'), bg = t.div.querySelector('.bg');
       if (t.url !== e.url) {
@@ -220,6 +254,8 @@
     afterPaint(() => fe('scene_painted', sc.chunk_id, performance.now() - t0, `v${sc.version} ${sc.reason}`));
   }
   listen('scene', e => { if (mode === 'canvas') renderScene(e.payload); });
+  let resizeT = 0;
+  addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => lastScene && renderScene(lastScene), 150); });
   listen('state', e => applyState(e.payload));
   listen('talk_end', () => { toggleGrid(true); fe('grid', null, shown.length, 'talk_end'); });
   listen('render', e => { const t = performance.now(); fe('received', e.payload.chunk_id, 0, e.payload.kind); if (mode !== 'canvas') show(e.payload, t); });

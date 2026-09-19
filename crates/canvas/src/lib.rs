@@ -1,4 +1,5 @@
-//! Canvas mode (CANVAS.md): an evolving board of ≤ 4 library images plus ≤ 3 annotations.
+//! Canvas mode (CANVAS.md): an evolving board of ≤ 4 elements — library images, live diagrams
+//! (flow / cycle / hub / timeline) and charts built from spoken numbers — plus ≤ 3 annotations.
 //! Pure and deterministic. The fast path (stage renders) and the agent (tool calls) both mutate the
 //! board through [`Canvas`]; every mutation bumps `version` so stale agent answers can be dropped.
 
@@ -6,6 +7,8 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_ELEMENTS: usize = 4;
 pub const MAX_ANNOTATIONS: usize = 3;
+pub const MAX_NODES: usize = 8;
+pub const MAX_POINTS: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Rect {
@@ -15,15 +18,121 @@ pub struct Rect {
     pub h: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ElementKind {
+    #[default]
+    Image,
+    Diagram,
+    Chart,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Element {
     pub id: String,
+    #[serde(default)]
+    pub kind: ElementKind,
+    /// Library image id (empty for diagrams and charts).
     pub image_id: String,
+    /// Image caption, or the graphic's title.
     pub caption: String,
     pub url: String,
     pub rect: Rect,
     pub z: u32,
     pub focus: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagram: Option<Diagram>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart: Option<Chart>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagramLayout {
+    /// Steps / cause → effect, left to right (layered if it branches).
+    Flow,
+    /// Steps that repeat (last → first).
+    Cycle,
+    /// A central idea and its parts.
+    Hub,
+    /// Dated events along an axis.
+    Timeline,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Node {
+    pub id: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// Secondary text: a year on a timeline, a short detail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Edge {
+    pub from: String,
+    pub to: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Diagram {
+    pub layout: DiagramLayout,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub nodes: Vec<Node>,
+    pub edges: Vec<Edge>,
+    /// Edges were implied by order (flow/cycle/timeline chain, hub spokes); extending continues them.
+    #[serde(default)]
+    pub auto_edges: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChartKind {
+    Bar,
+    Line,
+    Pie,
+    /// One big number (or "from → to" with the change when there are two points).
+    Stat,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Point {
+    pub label: String,
+    pub value: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Chart {
+    pub kind: ChartKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    pub points: Vec<Point>,
+}
+
+/// A node as the agent describes it (ids are assigned by the canvas).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeSpec {
+    pub label: String,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// An edge as the agent describes it: endpoints by node label (or node id).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EdgeSpec {
+    pub from: String,
+    pub to: String,
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +183,116 @@ pub enum Op {
     Annotate { kind: AnnotationKind, targets: Vec<String>, label: Option<String> },
     ClearAnnotations,
     ClearBoard,
+    DrawDiagram { layout: DiagramLayout, title: Option<String>, nodes: Vec<NodeSpec>, edges: Vec<EdgeSpec> },
+    ExtendDiagram { id: String, nodes: Vec<NodeSpec>, edges: Vec<EdgeSpec> },
+    DrawChart { kind: ChartKind, title: Option<String>, unit: Option<String>, points: Vec<Point> },
+    UpdateChart { id: String, kind: Option<ChartKind>, title: Option<String>, points: Vec<Point> },
+}
+
+impl Op {
+    /// Content-adding ops don't depend on the board's arrangement, so they still apply when the fast
+    /// path changed the board while the agent was thinking (a 2 s chart must not be thrown away).
+    pub fn is_additive(&self) -> bool {
+        matches!(self, Op::DrawDiagram { .. } | Op::ExtendDiagram { .. } | Op::DrawChart { .. } | Op::UpdateChart { .. })
+    }
+}
+
+fn short(s: &str, n: usize) -> String {
+    s.trim().chars().take(n).collect()
+}
+
+fn same(a: &str, b: &str) -> bool {
+    a.trim().eq_ignore_ascii_case(b.trim())
+}
+
+fn clean_nodes(specs: &[NodeSpec], existing: &[Node]) -> Vec<(String, Option<String>, Option<String>)> {
+    let mut out: Vec<(String, Option<String>, Option<String>)> = vec![];
+    for n in specs {
+        let label = short(&n.label, 32);
+        if label.is_empty() || existing.iter().any(|e| same(&e.label, &label)) || out.iter().any(|o| same(&o.0, &label)) {
+            continue;
+        }
+        let icon = n.icon.as_deref().map(|i| short(i, 4)).filter(|i| !i.is_empty());
+        let note = n.note.as_deref().map(|t| short(t, 24)).filter(|t| !t.is_empty());
+        out.push((label, icon, note));
+    }
+    out
+}
+
+fn resolve(nodes: &[Node], key: &str) -> Option<String> {
+    nodes.iter().find(|n| n.id == key.trim() || same(&n.label, key)).map(|n| n.id.clone())
+}
+
+/// A "stat" is one number or a before → after; three or more values read better as bars.
+fn promote(kind: ChartKind, n: usize) -> ChartKind {
+    if kind == ChartKind::Stat && n >= 3 { ChartKind::Bar } else { kind }
+}
+
+fn clean_points(points: &[Point]) -> Vec<Point> {
+    let mut out: Vec<Point> = vec![];
+    for p in points {
+        let label = short(&p.label, 24);
+        if !p.value.is_finite() || out.iter().any(|o| same(&o.label, &label)) {
+            continue;
+        }
+        out.push(Point { label, value: p.value });
+    }
+    out.truncate(MAX_POINTS);
+    out
+}
+
+impl Diagram {
+    fn add_nodes(&mut self, specs: &[NodeSpec]) -> Vec<String> {
+        let mut added = vec![];
+        for (label, icon, note) in clean_nodes(specs, &self.nodes) {
+            if self.nodes.len() >= MAX_NODES {
+                break;
+            }
+            let id = format!("n{}", self.nodes.len() + 1);
+            self.nodes.push(Node { id: id.clone(), label, icon, note });
+            added.push(id);
+        }
+        added
+    }
+
+    fn add_edges(&mut self, specs: &[EdgeSpec]) -> usize {
+        let mut n = 0;
+        for e in specs {
+            let (Some(from), Some(to)) = (resolve(&self.nodes, &e.from), resolve(&self.nodes, &e.to)) else { continue };
+            if from == to || self.edges.iter().any(|x| x.from == from && x.to == to) {
+                continue;
+            }
+            self.edges.push(Edge { from, to, label: e.label.as_deref().map(|l| short(l, 24)).filter(|l| !l.is_empty()) });
+            n += 1;
+        }
+        n
+    }
+
+    /// Chain / spokes implied by the layout, for nodes `from_idx..`.
+    fn auto_link(&mut self, from_idx: usize) {
+        let ids: Vec<String> = self.nodes.iter().map(|n| n.id.clone()).collect();
+        match self.layout {
+            DiagramLayout::Hub => {
+                for id in ids.iter().skip(from_idx.max(1)) {
+                    self.edges.push(Edge { from: ids[0].clone(), to: id.clone(), label: None });
+                }
+            }
+            _ => {
+                // Drop the closing edge of a cycle before extending the chain, then re-close it.
+                if self.layout == DiagramLayout::Cycle {
+                    if let (Some(first), Some(last)) = (ids.first(), ids.get(from_idx.saturating_sub(1))) {
+                        self.edges.retain(|e| !(&e.from == last && &e.to == first));
+                    }
+                }
+                for i in from_idx.max(1)..ids.len() {
+                    self.edges.push(Edge { from: ids[i - 1].clone(), to: ids[i].clone(), label: None });
+                }
+                if self.layout == DiagramLayout::Cycle && ids.len() >= 3 {
+                    self.edges.push(Edge { from: ids[ids.len() - 1].clone(), to: ids[0].clone(), label: None });
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -113,31 +332,48 @@ impl Canvas {
             let id = e.id.clone();
             return self.focus_inner(&id, format!("fast:refocus {image_id}"), chunk_id);
         }
+        self.push_element(ElementKind::Image, image_id, caption, url, None, None);
+        self.bump(format!("fast:render {image_id}"), chunk_id)
+    }
+
+    /// Add an element, focus it, auto layout; evict the oldest past the cap. Returns its id.
+    fn push_element(&mut self, kind: ElementKind, image_id: &str, caption: &str, url: &str, diagram: Option<Diagram>, chart: Option<Chart>) -> String {
         let id = self.new_id("e");
         let z = self.scene.elements.iter().map(|e| e.z).max().unwrap_or(0) + 1;
         for e in self.scene.elements.iter_mut() {
             e.focus = false;
         }
         self.scene.elements.push(Element {
-            id,
+            id: id.clone(),
+            kind,
             image_id: image_id.into(),
             caption: caption.into(),
             url: url.into(),
             rect: Rect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 },
             z,
             focus: true,
+            diagram,
+            chart,
         });
         while self.scene.elements.len() > MAX_ELEMENTS {
             let old = self.scene.elements.remove(0);
             self.scene.annotations.retain(|a| !a.targets.contains(&old.id));
         }
         self.scene.layout = Layout::Auto;
-        self.bump(format!("fast:render {image_id}"), chunk_id)
+        id
+    }
+
+    fn focus_only(&mut self, id: &str) {
+        for e in self.scene.elements.iter_mut() {
+            e.focus = e.id == id;
+        }
     }
 
     /// Refinement: replace the focused image in place (keeps its position and id).
     pub fn update(&mut self, image_id: &str, caption: &str, url: &str, chunk_id: u64) -> Scene {
-        match self.scene.elements.iter_mut().find(|e| e.focus) {
+        let images = || self.scene.elements.iter().filter(|e| e.kind == ElementKind::Image);
+        let target = images().find(|e| e.focus).or_else(|| images().last()).map(|e| e.id.clone());
+        match self.scene.elements.iter_mut().find(|e| Some(&e.id) == target.as_ref()) {
             Some(e) => {
                 e.image_id = image_id.into();
                 e.caption = caption.into();
@@ -159,12 +395,14 @@ impl Canvas {
 
     /// Apply validated ops iff the scene is still at `expected_version` (else the agent reasoned
     /// about a stale board). Returns the new scene if anything changed.
+    /// Content-adding ops (diagrams, charts) apply even when stale; see [`Op::is_additive`].
     pub fn apply(&mut self, expected_version: u64, ops: &[Op], chunk_id: u64) -> Option<Scene> {
-        if self.scene.version != expected_version || ops.is_empty() {
-            return None;
-        }
+        let stale = self.scene.version != expected_version;
         let mut applied = vec![];
         for op in ops {
+            if stale && !op.is_additive() {
+                continue;
+            }
             if self.apply_one(op) {
                 applied.push(op_name(op));
             }
@@ -228,6 +466,103 @@ impl Canvas {
                 self.scene.layout = Layout::Auto;
                 true
             }
+            Op::DrawDiagram { layout, title, nodes, edges } => {
+                let mut d = Diagram { layout: *layout, title: title.as_deref().map(|t| short(t, 48)).filter(|t| !t.is_empty()), nodes: vec![], edges: vec![], auto_edges: false };
+                d.add_nodes(nodes);
+                if d.nodes.len() < 2 {
+                    return false;
+                }
+                if d.add_edges(edges) == 0 {
+                    d.auto_edges = true;
+                    d.auto_link(0);
+                }
+                // Models often redraw a diagram instead of extending it: if one on the board shares
+                // most of these nodes, replace it in place (keeps its tile and the animation calm).
+                let labels: Vec<&str> = d.nodes.iter().map(|n| n.label.as_str()).collect();
+                let twin = self.scene.elements.iter().position(|e| {
+                    e.diagram.as_ref().is_some_and(|o| {
+                        let shared = o.nodes.iter().filter(|n| labels.iter().any(|l| same(l, &n.label))).count();
+                        shared * 2 >= o.nodes.len().max(2)
+                    })
+                });
+                let caption = d.title.clone().unwrap_or_else(|| labels.join(" → "));
+                match twin {
+                    Some(i) => {
+                        let id = self.scene.elements[i].id.clone();
+                        self.scene.elements[i].diagram = Some(d);
+                        self.scene.elements[i].caption = caption;
+                        self.focus_only(&id);
+                    }
+                    None => {
+                        self.push_element(ElementKind::Diagram, "", &caption, "", Some(d), None);
+                    }
+                }
+                true
+            }
+            Op::ExtendDiagram { id, nodes, edges } => {
+                let Some(e) = self.scene.elements.iter_mut().find(|e| &e.id == id && e.diagram.is_some()) else { return false };
+                let d = e.diagram.as_mut().unwrap();
+                let before = d.nodes.len();
+                let added = d.add_nodes(nodes);
+                let linked = d.add_edges(edges);
+                if !added.is_empty() && linked == 0 && d.auto_edges {
+                    d.auto_link(before);
+                }
+                let changed = !added.is_empty() || linked > 0;
+                if changed {
+                    let id = id.clone();
+                    self.focus_only(&id);
+                }
+                changed
+            }
+            Op::DrawChart { kind, title, unit, points } => {
+                let points = clean_points(points);
+                if points.is_empty() {
+                    return false;
+                }
+                let title = title.as_deref().map(|t| short(t, 48)).filter(|t| !t.is_empty());
+                let unit = unit.as_deref().map(|u| short(u, 16)).filter(|u| !u.is_empty());
+                let kind = promote(*kind, points.len());
+                // Same title as a chart on the board → a corrected redraw: replace its data in place.
+                if let Some(t) = &title {
+                    if let Some(e) = self.scene.elements.iter_mut().find(|e| e.chart.as_ref().is_some_and(|c| c.title.as_deref().is_some_and(|x| same(x, t)))) {
+                        let new = Chart { kind, title: title.clone(), unit: unit.or_else(|| e.chart.as_ref().unwrap().unit.clone()), points };
+                        let changed = e.chart.as_ref() != Some(&new);
+                        e.chart = Some(new);
+                        let id = e.id.clone();
+                        self.focus_only(&id);
+                        return changed;
+                    }
+                }
+                let caption = title.clone().unwrap_or_else(|| "chart".into());
+                self.push_element(ElementKind::Chart, "", &caption, "", None, Some(Chart { kind, title, unit, points }));
+                true
+            }
+            Op::UpdateChart { id, kind, title, points } => {
+                let Some(e) = self.scene.elements.iter_mut().find(|e| &e.id == id && e.chart.is_some()) else { return false };
+                if let Some(t) = title.as_deref().map(|t| short(t, 48)).filter(|t| !t.is_empty()) {
+                    e.caption = t.clone();
+                    e.chart.as_mut().unwrap().title = Some(t);
+                }
+                let c = e.chart.as_mut().unwrap();
+                let before = c.clone();
+                if let Some(k) = kind {
+                    c.kind = *k;
+                }
+                // The full data set, not a patch: speech arrives in fragments ("60% are stoned…" →
+                // "…students, 30% teachers, 10% parents"), and the newest, most complete call wins.
+                let points = clean_points(points);
+                if !points.is_empty() {
+                    c.points = points;
+                }
+                c.kind = promote(c.kind, c.points.len());
+                let changed = *c != before || title.is_some();
+                if changed {
+                    let id = id.clone();
+                    self.focus_only(&id);
+                }
+                changed
+            }
             _ => false,
         }
     }
@@ -262,7 +597,40 @@ fn op_name(op: &Op) -> String {
         Op::Annotate { kind, .. } => format!("annotate({kind:?})").to_lowercase(),
         Op::ClearAnnotations => "clear_annotations".into(),
         Op::ClearBoard => "clear_board".into(),
+        Op::DrawDiagram { layout, nodes, .. } => format!("draw_diagram({layout:?}, {} nodes)", nodes.len()).to_lowercase(),
+        Op::ExtendDiagram { id, nodes, .. } => format!("extend_diagram({id}, +{})", nodes.len()),
+        Op::DrawChart { kind, points, .. } => format!("draw_chart({kind:?}, {} points)", points.len()).to_lowercase(),
+        Op::UpdateChart { id, points, .. } => format!("update_chart({id}, {} points)", points.len()),
     }
+}
+
+/// The presenter explicitly closes a section — the only time the agent may clear the board.
+pub fn has_section_cue(text: &str) -> bool {
+    let t = text.to_lowercase().replace('’', "'");
+    [
+        "move on", "moving on", "next topic", "new section", "set that aside", "start fresh", "switch gears",
+        "switching gears", "next up", "clean slate", "clear the screen", "change of topic", "different topic",
+    ]
+    .iter()
+    .any(|c| t.contains(c))
+}
+
+/// True if the speech carries numbers or structure (steps, cause → effect, cycles, change over time)
+/// that a diagram or chart could show — used to decide when to ask the agent.
+pub fn has_graphic_cue(text: &str) -> bool {
+    let t = text.to_lowercase();
+    if t.chars().any(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    [
+        "percent", "hundred", "thousand", "million", "billion", "half of", "a third", "a quarter", "doubled", "tripled",
+        "twice as", "grew", "growth", "increased", "decreased", "dropped", "went up", "went down", "first,", "first we",
+        "first you", "first the", "then we", "then you", "then the", "then it", "after that", "next,", "finally", "step",
+        "stages", "phase", "process", "pipeline", "workflow", "cycle", "loop", "leads to", "results in", "feeds into",
+        "which means", "because of", "timeline", "over the years", "made up of", "consists of", "breaks down", "parts:",
+    ]
+    .iter()
+    .any(|c| t.contains(c))
 }
 
 const G: f32 = 0.02; // gutter between tiles (fraction of screen)
@@ -458,6 +826,89 @@ mod tests {
         add(&mut c, "eagle");
         let s = c.clear(9);
         assert!(s.elements.is_empty() && s.annotations.is_empty());
+    }
+
+    fn ns(labels: &[&str]) -> Vec<NodeSpec> {
+        labels.iter().map(|l| NodeSpec { label: l.to_string(), icon: None, note: None }).collect()
+    }
+    fn pts(v: &[(&str, f64)]) -> Vec<Point> {
+        v.iter().map(|(l, x)| Point { label: l.to_string(), value: *x }).collect()
+    }
+
+    #[test]
+    fn diagrams_draw_chain_and_extend() {
+        let mut c = Canvas::new();
+        let v = c.scene().version;
+        let s = c.apply(v, &[Op::DrawDiagram { layout: DiagramLayout::Flow, title: Some("How it works".into()), nodes: ns(&["Speak", "Transcribe", "speak"]), edges: vec![] }], 1).unwrap();
+        let e = &s.elements[0];
+        assert_eq!(e.kind, ElementKind::Diagram);
+        let d = e.diagram.as_ref().unwrap();
+        assert_eq!(d.nodes.len(), 2, "duplicate label dropped");
+        assert_eq!(d.edges, vec![Edge { from: "n1".into(), to: "n2".into(), label: None }], "chain implied by order");
+        let id = e.id.clone();
+        let s = c.apply(s.version, &[Op::ExtendDiagram { id: id.clone(), nodes: ns(&["Decide", "Show"]), edges: vec![] }], 2).unwrap();
+        let d = s.elements[0].diagram.as_ref().unwrap();
+        assert_eq!(d.nodes.len(), 4);
+        assert_eq!(d.edges.len(), 3);
+        assert_eq!(d.edges[2].to, "n4");
+        // a redraw with mostly the same nodes replaces in place instead of adding a tile
+        let s = c.apply(s.version, &[Op::DrawDiagram { layout: DiagramLayout::Flow, title: None, nodes: ns(&["Speak", "Transcribe", "Decide", "Show", "Repeat"]), edges: vec![] }], 3).unwrap();
+        assert_eq!(s.elements.len(), 1);
+        assert_eq!(s.elements[0].id, id);
+        assert_eq!(s.elements[0].diagram.as_ref().unwrap().nodes.len(), 5);
+    }
+
+    #[test]
+    fn cycle_closes_and_explicit_edges_resolve_by_label() {
+        let mut c = Canvas::new();
+        let s = c.apply(0, &[Op::DrawDiagram { layout: DiagramLayout::Cycle, title: None, nodes: ns(&["Listen", "Decide", "Show"]), edges: vec![] }], 1).unwrap();
+        let d = s.elements[0].diagram.as_ref().unwrap();
+        assert!(d.edges.iter().any(|e| e.from == "n3" && e.to == "n1"), "cycle closes");
+        let id = s.elements[0].id.clone();
+        let s = c.apply(s.version, &[Op::ExtendDiagram { id, nodes: ns(&["Learn"]), edges: vec![] }], 2).unwrap();
+        let d = s.elements[0].diagram.as_ref().unwrap();
+        assert!(d.edges.iter().any(|e| e.from == "n4" && e.to == "n1") && !d.edges.iter().any(|e| e.from == "n3" && e.to == "n1"), "{:?}", d.edges);
+        let s = c.apply(s.version, &[Op::DrawDiagram { layout: DiagramLayout::Flow, title: None, nodes: ns(&["Rain", "Flood", "Drought"]),
+            edges: vec![EdgeSpec { from: "rain".into(), to: "Flood".into(), label: Some("too much".into()) }, EdgeSpec { from: "x".into(), to: "Flood".into(), label: None }] }], 3).unwrap();
+        let d = s.elements[1].diagram.as_ref().unwrap();
+        assert_eq!(d.edges.len(), 1);
+        assert!(!d.auto_edges);
+        assert!(c.apply(s.version, &[Op::DrawDiagram { layout: DiagramLayout::Hub, title: None, nodes: ns(&["alone"]), edges: vec![] }], 4).is_none(), "one node is not a diagram");
+    }
+
+    #[test]
+    fn charts_draw_merge_and_survive_a_stale_board() {
+        let mut c = Canvas::new();
+        let s = c.apply(0, &[Op::DrawChart { kind: ChartKind::Bar, title: Some("Users".into()), unit: None, points: pts(&[("2024", 2000.0), ("2025", f64::NAN)]) }], 1).unwrap();
+        assert_eq!(s.elements[0].chart.as_ref().unwrap().points.len(), 1, "non-finite dropped");
+        let id = s.elements[0].id.clone();
+        // the fast path adds an image meanwhile → the agent's scene is stale, but a chart still lands
+        let stale = s.version;
+        add(&mut c, "eagle");
+        let s = c.apply(stale, &[Op::UpdateChart { id: id.clone(), kind: None, title: None, points: pts(&[("2024", 2500.0), ("2025", 15000.0)]) }, Op::Arrange { layout: Layout::Grid }], 2).unwrap();
+        let ch = s.elements.iter().find(|e| e.id == id).unwrap().chart.as_ref().unwrap();
+        assert_eq!(ch.points, pts(&[("2024", 2500.0), ("2025", 15000.0)]), "update replaces the data set");
+        assert!(c.apply(s.version, &[Op::UpdateChart { id: id.clone(), kind: None, title: None, points: vec![] }], 2).is_none(), "empty update ignored");
+        assert_eq!(s.layout, Layout::Auto, "non-additive op skipped on a stale board");
+        // same title → a corrected redraw replaces that chart's data instead of adding a second chart
+        let s = c.apply(s.version, &[Op::DrawChart { kind: ChartKind::Line, title: Some("users".into()), unit: None, points: pts(&[("2024", 2000.0), ("2025", 15000.0), ("2026", 40000.0)]) }], 3).unwrap();
+        assert_eq!(s.elements.len(), 2);
+        let ch = s.elements.iter().find(|e| e.id == id).unwrap().chart.as_ref().unwrap();
+        assert_eq!((ch.kind, ch.points.len()), (ChartKind::Line, 3));
+        // a stat that grows to 3 values becomes bars
+        let s = c.apply(s.version, &[Op::DrawChart { kind: ChartKind::Stat, title: None, unit: None, points: pts(&[("a", 1.0), ("b", 2.0), ("c", 3.0)]) }], 5).unwrap();
+        assert_eq!(s.elements.last().unwrap().chart.as_ref().unwrap().kind, ChartKind::Bar);
+        // image refinement still targets the image, not the focused chart
+        let s = c.update("owl", "owl", "u", 4);
+        assert!(s.elements.iter().any(|e| e.image_id == "owl") && !s.elements.iter().any(|e| e.image_id == "eagle"));
+    }
+
+    #[test]
+    fn graphic_cues() {
+        assert!(has_graphic_cue("we grew to 15,000 users"));
+        assert!(has_graphic_cue("about sixty percent are students"));
+        assert!(has_graphic_cue("First, we record. Then the speech is transcribed."));
+        assert!(!has_graphic_cue("penguins are incredible swimmers"));
     }
 
     #[test]

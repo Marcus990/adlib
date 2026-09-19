@@ -50,6 +50,6 @@ With no mic named, the app prefers AirPods, then the MacBook mic, and never a vi
   frontend_ack (decode + receive→paint ms).
 
 ## Tuning knobs
-- `TAU` (image score threshold, default 0.477 — recalibrate per library with `ls-calibrate` (labels TSV: phrase<TAB>image_id or -)).
+- `TAU` (image score threshold, default 0.52 — recalibrate per library with `ls-calibrate` (labels TSV: phrase<TAB>image_id or -)).
 - Stage holds/probabilities: `crates/stage` `StageConfig` (4 s render hold, 1.5 s update, p ≥ 0.6/0.7).
 - Chunking: `crates/hear` `ChunkerConfig` (0.75 s tick, 0.6 s pause, 8 s max).
