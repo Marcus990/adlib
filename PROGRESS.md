@@ -45,3 +45,35 @@
 - Builds: `CARGO_BUILD_JOBS=2`.
 - Image embedding: batch size 1, run offline once, never at talk time. Try MobileCLIP S1 and F16 on Metal
   before anything larger; fall back to CPU with batch 1.
+
+## 2026-09-19 — session 1, continued (autonomous, /goal set)
+
+### Git
+- `a` (github.com/Marcus990/a) is an empty repo — nothing to install. Using plain git; commits per unit.
+
+### Decisions
+- **OpenRouter for both hosted calls** (user: "openrouter for jev"). One `OPENROUTER_API_KEY`.
+  - Jev: `POST https://openrouter.ai/api/alpha/decisions`, `{model:"typesafe/jev-latest", state, questions}`;
+    response `answers.action.{choice, probabilities, confidence}` (same as TypeSafe native).
+  - Query model: `POST /api/v1/chat/completions`, `google/gemini-2.5-flash-lite`, JSON object output,
+    `provider.sort=latency`, 700 ms timeout → local noun-phrase fallback.
+- Every Chunk event (each `curr` update and each final) gets a fresh id (= decision seq), because each
+  fans out to its own Jev + query calls and the stage joins by id. Contract unchanged.
+- Stage `SearchOutcome` (chunk_id + Option<Match>) is internal to the join, not a contract change.
+- img URLs are `img://localhost/<id>` (macOS WKWebView custom-scheme form).
+- Offline mode (no key): decider = transparent vocabulary heuristic, query = noun-phrase fallback.
+
+### Measured
+- MobileCLIP dev-library calibration (43 built-in macOS account pictures, `scripts/make_dev_library.sh`):
+  template "a photo of {}" → 12/12 correct top-1 (vs 7/12 without). Correct 0.479–0.620, best
+  non-match 0.470 → τ = 0.475 (margin only 0.009: RECALIBRATE on the demo library).
+- Indexing 43 images: 74 s, CPU, batch 1, peak < 2.6 GB.
+- First headless e2e replay (fixtures/audio/dev-talk.wav, 48 s, `say`-synthesized):
+  6 renders, all correct; chunk-end→render p50 274 ms (offline, no network); ASR p50 210 ms;
+  search 68 ms (3 phrases). Command: `./target/release/ls-replay fixtures/audio/dev-talk.wav`.
+
+### How to run
+- Index: `./target/release/ls-index models/mobileclip-s2 <library-dir> <library-dir>/index.json`
+- Headless: `./target/release/ls-replay <talk.wav>` or `ls-replay --mic [AirPods] --seconds 180`
+- App: `LS_SOURCE=mic:AirPods LS_FULLSCREEN=1 ./target/release/live-slides` (or `LS_SOURCE=wav:<path>`)
+- Logs: `logs/run-<epoch>.jsonl` (chunk/decide/search/join/render/frontend_ack with timings)

@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Live Slides — debug</title>
+<style>
+  body { margin: 0; font: 13px/1.45 ui-monospace, Menlo, monospace; background: #111; color: #ddd; }
+  header { padding: 8px 12px; background: #1b1e25; position: sticky; top: 0; }
+  #curr { color: #fff; font-size: 15px; min-height: 2.9em; }
+  #log { padding: 6px 12px; }
+  .row { border-bottom: 1px solid #222; padding: 3px 0; white-space: pre-wrap; }
+  .render { color: #7fd; } .decide { color: #fc6; } .search { color: #9cf; } .final { color: #aaa; }
+</style>
+</head>
+<body>
+<header><div id="state">loading models…</div><div id="curr"></div></header>
+<div id="log"></div>
+<script>
+  const { listen } = window.__TAURI__.event;
+  const log = document.getElementById('log');
+  function add(cls, text) {
+    const d = document.createElement('div'); d.className = 'row ' + cls; d.textContent = text;
+    log.prepend(d); while (log.children.length > 200) log.lastChild.remove();
+  }
+  listen('status', e => {
+    const s = e.payload;
+    if (s.type === 'ready') document.getElementById('state').textContent = 'listening';
+    else if (s.type === 'chunk') { document.getElementById('curr').textContent = s.text; if (s.final) add('final', '▪ ' + s.text); }
+    else if (s.type === 'decide') add('decide', `#${s.chunk_id} jev ${s.action} p=${s.p.toFixed(2)} (${s.source}, ${s.ms} ms)`);
+    else if (s.type === 'search') add('search', `#${s.chunk_id} ${JSON.stringify(s.phrases)} → ${s.best ?? '—'} ${s.score?.toFixed(3) ?? ''} (q ${s.query_ms} ms${s.fallback ? ' fallback' : ''}, s ${s.search_ms} ms)`);
+    else if (s.type === 'outcome') add(s.outcome === 'rendered' ? 'render' : '', `#${s.chunk_id} → ${s.outcome}${s.image_id ? ' ' + s.image_id : ''}${s.latency_ms != null ? ' (' + s.latency_ms + ' ms)' : ''}`);
+    else if (s.type === 'summary') add('render', 'SUMMARY ' + JSON.stringify(s));
+  });
+</script>
+</body>
+</html>

@@ -250,8 +250,14 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                 summary.shown.push(ev.image_id.clone().unwrap_or_else(|| "(clear)".into()));
                 log.log(json!({"ev": "render", "chunk_id": chunk_id, "kind": ev.kind, "image_id": ev.image_id,
                     "speech_to_render_ms": lat}));
+                sink.status(&json!({"type": "outcome", "chunk_id": chunk_id, "outcome": "rendered", "image_id": ev.image_id, "latency_ms": lat}));
             }
-            other => log.log(json!({"ev": "join", "chunk_id": chunk_id, "outcome": outcome_name(other)})),
+            other => {
+                log.log(json!({"ev": "join", "chunk_id": chunk_id, "outcome": outcome_name(other)}));
+                if !matches!(other, Outcome::NoChange) {
+                    sink.status(&json!({"type": "outcome", "chunk_id": chunk_id, "outcome": outcome_name(other)}));
+                }
+            }
         }
     };
 
@@ -304,6 +310,8 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                         *summary.decide_sources.entry(format!("{src:?}")).or_default() += 1;
                         log.log(json!({"ev": "decide", "chunk_id": d.chunk_id, "action": d.action, "p": d.p,
                             "source": format!("{src:?}"), "start_ms": t_start, "ms": t_end - t_start}));
+                        sink.status(&json!({"type": "decide", "chunk_id": d.chunk_id, "action": d.action, "p": d.p,
+                            "source": format!("{src:?}"), "ms": t_end - t_start}));
                         let now = log.now_ms();
                         if let Some(o) = stage.on_decision(d.clone(), now) {
                             handle_outcome(d.chunk_id, o, now, &mut summary, &chunk_end_wall);
@@ -317,6 +325,9 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                             "query_ms": t_query - t_start, "search_ms": t_end - t_query,
                             "best": s.best.as_ref().map(|m| json!({"id": m.image_id, "score": m.score, "phrase": m.phrase})),
                             "hits": hits.iter().map(|h| json!({"phrase": h.phrase, "id": h.id, "score": h.score})).collect::<Vec<_>>()}));
+                        sink.status(&json!({"type": "search", "chunk_id": s.chunk_id, "phrases": q.phrases, "fallback": q.from_fallback,
+                            "best": s.best.as_ref().map(|m| m.image_id.clone()), "score": s.best.as_ref().map(|m| m.score),
+                            "query_ms": t_query - t_start, "search_ms": t_end - t_query}));
                         let now = log.now_ms();
                         let id = s.chunk_id;
                         if let Some(o) = stage.on_search(s, now) {
