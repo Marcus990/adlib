@@ -7,7 +7,7 @@ use ls_contracts::{Chunk, RenderEvent};
 use ls_decide::{Decider, Source};
 use ls_hear::{audio, whisper, ChunkTiming, Chunker, ChunkerConfig, SR};
 use ls_query::QueryClient;
-use ls_search::{Clip, ImageCache, Index, Searcher};
+use ls_search::{assets, Clip, ImageCache, Index, Searcher, TextEncoder};
 use ls_stage::{Outcome, SearchOutcome, Stage, StageConfig};
 use serde_json::{json, Value};
 use std::io::Write;
@@ -22,6 +22,10 @@ pub struct Config {
     pub whisper_model: PathBuf,
     pub vad_model: PathBuf,
     pub clip_dir: PathBuf,
+    /// Asset card root (LS_ASSETS): `manifest.json`, `embeddings.npy`, `images/`, `icons/`.
+    pub assets: Option<PathBuf>,
+    /// OpenAI CLIP ViT-B/32 text tower, used with `assets`.
+    pub clip_text_dir: PathBuf,
     pub index_path: PathBuf,
     pub api_key: Option<String>,
     pub query_model: Option<String>,
@@ -44,6 +48,11 @@ impl Config {
         let p = |k: &str, d: &str| env(k).map(PathBuf::from).unwrap_or_else(|| root.join(d));
         let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
         let mut stage = StageConfig::default();
+        if env("LS_ASSETS").is_some() {
+            // CLIP ViT-B/32 image–text cosines sit far lower than MobileCLIP's (handoff §2 AS3).
+            // Provisional until calibrated on the card with `ls-assets`.
+            stage.tau = 0.25;
+        }
         if let Some(t) = env("TAU").and_then(|v| v.parse().ok()) {
             stage.tau = t;
         }
@@ -61,6 +70,8 @@ impl Config {
         Self {
             // small.en: 16% WER / 10 of 10 keywords on the noisy fixture vs base.en 46% / 4 of 10, at
             // 423 ms p50 with the audio-context floor (PROGRESS 09-19). Falls back to base.en if absent.
+            assets: env("LS_ASSETS").map(PathBuf::from),
+            clip_text_dir: p("CLIP_TEXT_DIR", "models/clip-vit-b32"),
             whisper_model: p("WHISPER_MODEL", if root.join("models/ggml-small.en.bin").exists() { "models/ggml-small.en.bin" } else { "models/ggml-base.en.bin" }),
             vad_model: p("VAD_MODEL", "models/ggml-silero-v5.1.2.bin"),
             clip_dir: p("CLIP_DIR", "models/mobileclip-s2"),
@@ -129,7 +140,7 @@ impl Logger {
 /// Loaded models and clients; build once, reuse across runs.
 pub struct Engine {
     pub cfg: Config,
-    pub clip: Arc<Clip>,
+    pub clip: Arc<dyn TextEncoder>,
     pub searcher: Arc<Searcher>,
     pub cache: ImageCache,
     pub decider: Decider,
@@ -139,9 +150,14 @@ pub struct Engine {
 
 impl Engine {
     pub async fn load(cfg: Config) -> anyhow::Result<Self> {
-        let clip = Arc::new(Clip::load(&cfg.clip_dir)?);
-        let index = Index::load(&cfg.index_path)?;
-        let captions = index.captions();
+        // LS_ASSETS → Marcus's card (CLIP ViT-B/32 text tower over precomputed image embeddings);
+        // otherwise the locally built MobileCLIP index. The two spaces must never be mixed.
+        let (clip, index): (Arc<dyn TextEncoder>, Index) = match &cfg.assets {
+            Some(dir) => (Arc::new(assets::ClipText::load(&cfg.clip_text_dir)?), assets::load_index(dir)?),
+            None => (Arc::new(Clip::load(&cfg.clip_dir)?), Index::load(&cfg.index_path)?),
+        };
+        // Prompts and the named-subject shortcut get distinct labels, not 15k captions.
+        let captions = index.vocab(200);
         let cache = ImageCache::new(&index, 256 * 1024 * 1024);
         let searcher = Arc::new(Searcher::new(index));
         let http = reqwest::Client::builder().pool_idle_timeout(Duration::from_secs(300)).tcp_keepalive(Duration::from_secs(30)).build()?;
@@ -156,7 +172,8 @@ impl Engine {
     pub async fn warm_up(&self, log: &Logger) {
         let t = Instant::now();
         let _ = self.clip.embed_text("warm up");
-        let n = self.cache.prefetch_all();
+        // Prefetch only a small curated library; the asset card holds ~15k photos (LRU on demand).
+        let n = if self.searcher.index.entries.len() <= 256 { self.cache.prefetch_all() } else { 0 };
         tokio::join!(self.decider.warm_up(), self.query.warm_up());
         log.log(json!({"ev": "warm_up", "ms": t.elapsed().as_millis() as u64, "prefetched": n,
             "remote": self.decider.has_remote()}));
@@ -380,7 +397,12 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
     let mut last_sent = String::new(); // newest speech last sent to the agent (don't resend an identical final)
     let mut last_clear: Option<Instant> = None;
     let caption_of = |id: &str| -> String {
-        engine.searcher.index.entries.iter().find(|e| e.id == id).map(|e| e.caption.clone()).unwrap_or_else(|| id.to_string())
+        // Card photos from COCO have no label at all; "photo" keeps board summaries readable.
+        match engine.searcher.index.entries.iter().find(|e| e.id == id) {
+            Some(e) if !e.caption.trim().is_empty() => e.caption.clone(),
+            Some(_) => "photo".into(),
+            None => id.to_string(),
+        }
     };
     let spawn_agent = |scene: Scene, prev: String, curr: String, chunk_id: u64| {
         let (e, tx, log) = (engine.clone(), tx.clone(), log.clone());
@@ -479,7 +501,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                                 };
                                 let tq = log.now_ms();
                                 let (e2, phrases, on_screen) = (e.clone(), q.phrases.clone(), d.image_id.clone());
-                                let res = tokio::task::spawn_blocking(move || e2.searcher.best_match_avoiding(&e2.clip, c.id, &phrases, on_screen.as_deref())).await;
+                                let res = tokio::task::spawn_blocking(move || e2.searcher.best_match_avoiding(&*e2.clip, c.id, &phrases, on_screen.as_deref())).await;
                                 let (best, hits) = match res {
                                     Ok(Ok(v)) => v,
                                     _ => (None, vec![]),

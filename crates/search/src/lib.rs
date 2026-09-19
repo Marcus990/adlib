@@ -14,8 +14,17 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokenizers::Tokenizer;
 
+pub mod assets;
+
 pub const MODEL_NAME: &str = "mobileclip-v1-s2";
 pub const DIM: usize = 512;
+
+/// The query-side text tower. The index and the encoder must come from the same model: MobileCLIP for a
+/// locally built index, OpenAI CLIP ViT-B/32 for the asset card (see [`assets`]).
+pub trait TextEncoder: Send + Sync {
+    fn embed_text(&self, s: &str) -> Result<Vec<f32>>;
+    fn model_name(&self) -> &'static str;
+}
 
 pub struct Clip {
     model: mobileclip::MobileClipModel,
@@ -38,6 +47,10 @@ impl Clip {
     }
 
     pub fn embed_text(&self, s: &str) -> Result<Vec<f32>> {
+        <Self as TextEncoder>::embed_text(self, s)
+    }
+
+    fn embed_text_inner(&self, s: &str) -> Result<Vec<f32>> {
         let mut ids = self.tok.encode(s, true).map_err(E::msg)?.get_ids().to_vec();
         ids.truncate(77); // CLIP context length
         let input = Tensor::new(vec![ids], &self.dev)?;
@@ -57,7 +70,16 @@ impl Clip {
     }
 }
 
-fn l2(v: &Tensor) -> Result<Tensor> {
+impl TextEncoder for Clip {
+    fn embed_text(&self, s: &str) -> Result<Vec<f32>> {
+        self.embed_text_inner(s)
+    }
+    fn model_name(&self) -> &'static str {
+        MODEL_NAME
+    }
+}
+
+pub(crate) fn l2(v: &Tensor) -> Result<Tensor> {
     Ok(v.broadcast_div(&v.sqr()?.sum_keepdim(D::Minus1)?.sqrt()?)?)
 }
 
@@ -82,11 +104,31 @@ impl Index {
     pub fn load(path: &Path) -> Result<Self> {
         let s = std::fs::read_to_string(path).with_context(|| format!("reading index {}", path.display()))?;
         let idx: Index = serde_json::from_str(&s)?;
-        anyhow::ensure!(idx.model == MODEL_NAME, "index built with {}, expected {MODEL_NAME}; re-index", idx.model);
+        anyhow::ensure!(
+            idx.model == MODEL_NAME || idx.model == assets::ASSETS_MODEL,
+            "index built with {}, expected {MODEL_NAME} or {}; re-index",
+            idx.model,
+            assets::ASSETS_MODEL
+        );
         Ok(idx)
     }
     pub fn captions(&self) -> Vec<String> {
         self.entries.iter().map(|e| e.caption.clone()).collect()
+    }
+
+    /// Distinct captions, most common first, capped — the asset card has 15k entries but only a few
+    /// hundred distinct labels, and this list goes into prompts and the named-subject shortcut.
+    pub fn vocab(&self, limit: usize) -> Vec<String> {
+        let mut count: HashMap<&str, usize> = HashMap::new();
+        for e in &self.entries {
+            let c = e.caption.trim();
+            if !c.is_empty() {
+                *count.entry(c).or_default() += 1;
+            }
+        }
+        let mut v: Vec<(&str, usize)> = count.into_iter().collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        v.into_iter().take(limit).map(|(c, _)| c.to_string()).collect()
     }
     pub fn path_of(&self, id: &str) -> Option<PathBuf> {
         self.entries.iter().find(|e| e.id == id).map(|e| Path::new(&self.root).join(&e.file))
@@ -172,13 +214,13 @@ impl Searcher {
 
     /// First phrase's best image, unless another phrase's best scores ≥ 0.05 higher (§7.3).
     /// τ is applied later by the stage, so a weak best is still returned (and logged).
-    pub fn best_match(&self, clip: &Clip, chunk_id: u64, phrases: &[String]) -> Result<(Option<Match>, Vec<PhraseHit>)> {
+    pub fn best_match(&self, clip: &dyn TextEncoder, chunk_id: u64, phrases: &[String]) -> Result<(Option<Match>, Vec<PhraseHit>)> {
         self.best_match_avoiding(clip, chunk_id, phrases, None)
     }
 
     /// Like `best_match`, but a secondary phrase may not win by pointing at `on_screen` (the query
     /// model tends to repeat the on-screen subject; live test: ["panther", "white rose"] → white rose).
-    pub fn best_match_avoiding(&self, clip: &Clip, chunk_id: u64, phrases: &[String], on_screen: Option<&str>) -> Result<(Option<Match>, Vec<PhraseHit>)> {
+    pub fn best_match_avoiding(&self, clip: &dyn TextEncoder, chunk_id: u64, phrases: &[String], on_screen: Option<&str>) -> Result<(Option<Match>, Vec<PhraseHit>)> {
         let mut hits = vec![];
         for p in phrases.iter().take(3) {
             let q = clip.embed_text(&self.query_text(p))?;
