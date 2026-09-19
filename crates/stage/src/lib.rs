@@ -32,7 +32,7 @@ impl Default for StageConfig {
             p_render: 0.6,
             p_update: 0.6,
             p_clear: 0.7,
-            tau: 0.2,
+            tau: 0.475,
             hold_render_ms: 4000,
             hold_update_ms: 1500,
             join_timeout_ms: 1000,
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn first_render_is_immediate_either_order() {
         let mut s = Stage::new(StageConfig::default());
-        assert_eq!(s.on_search(found(1, "eagle", 0.3), 100), None);
+        assert_eq!(s.on_search(found(1, "eagle", 0.6), 100), None);
         let ev = rendered(s.on_decision(dec(1, 1, Action::NewRender, 0.9), 150));
         assert_eq!(ev.kind, "render");
         assert_eq!(ev.image_id.as_deref(), Some("eagle"));
@@ -270,9 +270,9 @@ mod tests {
     #[test]
     fn no_change_and_low_probability_do_nothing() {
         let mut s = Stage::new(StageConfig::default());
-        s.on_search(found(1, "eagle", 0.3), 0);
+        s.on_search(found(1, "eagle", 0.6), 0);
         assert_eq!(s.on_decision(dec(1, 1, Action::NoChange, 0.99), 0), Some(Outcome::NoChange));
-        s.on_search(found(2, "eagle", 0.3), 0);
+        s.on_search(found(2, "eagle", 0.6), 0);
         assert_eq!(s.on_decision(dec(2, 2, Action::NewRender, 0.5), 0), Some(Outcome::BelowProbability));
     }
 
@@ -280,7 +280,7 @@ mod tests {
     fn below_tau_is_library_gap() {
         let mut s = Stage::new(StageConfig::default());
         s.on_decision(dec(1, 1, Action::NewRender, 0.9), 0);
-        assert_eq!(s.on_search(found(1, "eagle", 0.1), 0), Some(Outcome::LibraryGap));
+        assert_eq!(s.on_search(found(1, "eagle", 0.4), 0), Some(Outcome::LibraryGap));
         s.on_decision(dec(2, 2, Action::NewRender, 0.9), 0);
         assert_eq!(s.on_search(SearchOutcome { chunk_id: 2, best: None }, 0), Some(Outcome::LibraryGap));
     }
@@ -288,9 +288,9 @@ mod tests {
     #[test]
     fn hold_puts_change_in_pending_then_tick_promotes() {
         let mut s = Stage::new(StageConfig::default());
-        s.on_search(found(1, "eagle", 0.3), 0);
+        s.on_search(found(1, "eagle", 0.6), 0);
         rendered(s.on_decision(dec(1, 1, Action::NewRender, 0.9), 0));
-        s.on_search(found(2, "owl", 0.3), 1000);
+        s.on_search(found(2, "owl", 0.6), 1000);
         assert_eq!(s.on_decision(dec(2, 2, Action::NewRender, 0.9), 1000), Some(Outcome::Pending));
         assert_eq!(s.displayed().image_id.as_deref(), Some("owl"), "displayed shows the pending visual");
         assert!(s.tick(3999).is_empty());
@@ -301,13 +301,13 @@ mod tests {
     #[test]
     fn newer_pending_replaces_older_and_keep_does_not_cancel() {
         let mut s = Stage::new(StageConfig::default());
-        s.on_search(found(1, "eagle", 0.3), 0);
+        s.on_search(found(1, "eagle", 0.6), 0);
         s.on_decision(dec(1, 1, Action::NewRender, 0.9), 0);
-        s.on_search(found(2, "owl", 0.3), 500);
+        s.on_search(found(2, "owl", 0.6), 500);
         s.on_decision(dec(2, 2, Action::NewRender, 0.9), 500);
-        s.on_search(found(3, "parrot", 0.3), 800);
+        s.on_search(found(3, "parrot", 0.6), 800);
         s.on_decision(dec(3, 3, Action::NewRender, 0.9), 800);
-        s.on_search(found(4, "zebra", 0.3), 900);
+        s.on_search(found(4, "zebra", 0.6), 900);
         assert_eq!(s.on_decision(dec(4, 4, Action::NoChange, 0.9), 900), Some(Outcome::NoChange));
         let out = s.tick(4000);
         assert!(matches!(&out[0].1, Outcome::Rendered(ev) if ev.image_id.as_deref() == Some("parrot")));
@@ -316,9 +316,9 @@ mod tests {
     #[test]
     fn update_may_replace_after_1_5s() {
         let mut s = Stage::new(StageConfig::default());
-        s.on_search(found(1, "car", 0.3), 0);
+        s.on_search(found(1, "car", 0.6), 0);
         s.on_decision(dec(1, 1, Action::NewRender, 0.9), 0);
-        s.on_search(found(2, "red-car", 0.3), 1600);
+        s.on_search(found(2, "red-car", 0.6), 1600);
         let ev = rendered(s.on_decision(dec(2, 2, Action::Update, 0.8), 1600));
         assert_eq!(ev.kind, "update");
     }
@@ -326,11 +326,11 @@ mod tests {
     #[test]
     fn duplicates_and_stale_sequences_are_dropped() {
         let mut s = Stage::new(StageConfig::default());
-        s.on_search(found(5, "eagle", 0.3), 0);
+        s.on_search(found(5, "eagle", 0.6), 0);
         s.on_decision(dec(5, 10, Action::NewRender, 0.9), 0);
-        s.on_search(found(6, "eagle", 0.3), 5000);
+        s.on_search(found(6, "eagle", 0.6), 5000);
         assert_eq!(s.on_decision(dec(6, 11, Action::NewRender, 0.9), 5000), Some(Outcome::Duplicate));
-        s.on_search(found(4, "owl", 0.3), 5000);
+        s.on_search(found(4, "owl", 0.6), 5000);
         assert_eq!(s.on_decision(dec(4, 9, Action::NewRender, 0.9), 5000), Some(Outcome::Stale));
     }
 
@@ -341,7 +341,7 @@ mod tests {
         assert!(s.tick(1000).is_empty());
         assert_eq!(s.tick(1001), vec![(1, Outcome::TimedOut)]);
         // A late partner now starts a fresh half and cannot render alone.
-        assert_eq!(s.on_search(found(1, "eagle", 0.3), 1100), None);
+        assert_eq!(s.on_search(found(1, "eagle", 0.6), 1100), None);
     }
 
     #[test]
@@ -349,7 +349,7 @@ mod tests {
         let mut s = Stage::new(StageConfig::default());
         s.on_search(SearchOutcome { chunk_id: 1, best: None }, 0);
         assert_eq!(s.on_decision(dec(1, 1, Action::Clear, 0.9), 0), Some(Outcome::Duplicate));
-        s.on_search(found(2, "eagle", 0.3), 0);
+        s.on_search(found(2, "eagle", 0.6), 0);
         s.on_decision(dec(2, 2, Action::NewRender, 0.9), 0);
         s.on_search(SearchOutcome { chunk_id: 3, best: None }, 5000);
         assert_eq!(s.on_decision(dec(3, 3, Action::Clear, 0.65), 5000), Some(Outcome::BelowProbability));
@@ -363,7 +363,7 @@ mod tests {
     fn trigger_text_comes_from_chunk() {
         let mut s = Stage::new(StageConfig::default());
         s.on_chunk(&Chunk { id: 1, text: "our eagle mascot".into(), t_start_ms: 0, t_end_ms: 1, is_final: false });
-        s.on_search(found(1, "eagle", 0.3), 0);
+        s.on_search(found(1, "eagle", 0.6), 0);
         s.on_decision(dec(1, 1, Action::NewRender, 0.9), 0);
         assert_eq!(s.displayed().trigger_text, "our eagle mascot");
     }

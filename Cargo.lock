@@ -1550,6 +1550,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ls-search"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "candle-core",
+ "candle-nn",
+ "candle-transformers",
+ "image",
+ "ls-contracts",
+ "serde",
+ "serde_json",
+ "tokenizers",
+]
+
+[[package]]
 name = "ls-stage"
 version = "0.1.0"
 dependencies = [
