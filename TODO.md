@@ -1,37 +1,63 @@
 # TODO
 
-## Setup
-- [x] Repo, workspace, contracts crate; `cargo test -p ls-contracts` (3 tests)
-- [x] `a` tool — github.com/Marcus990/a is an EMPTY repo (no commits) → plain git
-- [x] `.env.example` (OPENROUTER_API_KEY, QUERY_MODEL, JEV_MODEL)
-- [ ] User: put OPENROUTER_API_KEY in `.env` (one key covers Jev + query model)
+Owner: **me** = coding agent can do it now · **you** = needs the human · blocked items say what they wait on.
+Done items live in PROGRESS.md / git history.
 
-## Phase 0 spikes
-- [x] S3 whisper-rs + Silero VAD → base.en (224–457 ms per 1–8 s window)
-- [x] S4 Candle MobileCLIP → v1 S2 on CPU, 1 image at a time (~1.5 s/img index; 21 ms/text query)
-- [~] S1 Jev: request/response shape verified from docs (OpenRouter /api/alpha/decisions); live timing blocked on key
-- [~] S2 Query model: client + fallback built; live timing/quality blocked on key
+## A. Display-intent redesign (user idea, 2026-09-19) — P0
+Jev should answer "is the presenter signalling that the audience should SEE something?", not "was something
+picturable mentioned?". "I like watermelons" → no change; "here's what a watermelon looks like" → show.
+- [ ] A1 (me, S) `crates/decide`: ask Jev two questions in one call — `intent` (noul: presentational signal to
+      show a picture/graphic/chart now?) and `kind` (choice: new_render / update / clear). Action =
+      `kind` if P(intent) ≥ τ_intent (start 0.6), else `no_change`; `p` = P(intent)·P(kind). ChangeDecision
+      contract unchanged. Keep the old topic-shift prompt behind `DECIDE_MODE=topic` for A/B.
+- [ ] A2 (me, S) Offline heuristic: require a presentational cue ("here's", "take a look", "look at", "picture this",
+      "this is what", "as you can see", "imagine", "let me show you", "check out") near a library subject in the
+      newest words; a bare mention is `no_change`.
+- [ ] A3 (me, XS) Query-model prompt: when a cue is present, phrase the object after the cue ("here's what a
+      watermelon looks like" → "watermelon").
+- [ ] A4 (me, XS) Mock OpenRouter: same intent behaviour, so the hosted-path replay tests it.
+- [ ] A5 (me, S) Fixtures + eval: new rehearsal talk with cue phrases AND non-intent mentions; `expected.tsv`
+      gains negative rows (`watermelon<TAB>-`) and `eval_run.py` reports false positives, not just hits.
+- [ ] A6 (me, XS) Talk-writing guide in README: the presenter must *say* the cue ("here's…", "take a look…");
+      one cue per image; list of cues that work.
+- [ ] A7 (both, blocked: api key) Tune τ_intent and Jev wording on real Jev answers; watch for under-triggering.
+- [ ] A8 (me, XS) Forward-compat: `kind` gains `chart` later (retrieval of chart images) without contract change.
 
-## Tracks
-- [x] A Hear: chunker (curr ~0.8 s, finals on pauses, 8 s cap), whisper + VAD, WAV replay, cpal mic, ls-hear bin, 6 tests
-- [x] B Search: indexer (ls-index), scoring §7.3, template "a photo of {}", τ=0.475 (dev lib), LRU cache, ls-search bin, 3 tests
-- [x] C Decide: Jev via OpenRouter, LLM fallback, offline heuristic, 5 tests
-- [x] D Query: OpenRouter chat JSON, 700 ms timeout, noun-phrase fallback, 5 tests
-- [x] E Stage: join + state machine, 10 tests
-- [x] E Show: Tauri app (img:// protocol, crossfades, blurred backdrop, debug window, frontend step timing)
+## B. Pipeline — reliability & latency
+- [ ] B1 (me, S, P0) Mic-drop watchdog: if no audio blocks for 2 s mid-talk (AirPods disconnect / route switch),
+      re-open capture (same device → built-in mic), show it in the debug window. Today the loop just waits.
+- [ ] B2 (me, XS, P1) Whisper initial prompt with library captions + talk terms (names, products).
+- [ ] B3 (me, S, P1) ASR tick 750 → 500 ms if CPU/Metal headroom allows (measure first).
+- [ ] B4 (me, M, P2) Local-first search: show local-phrase match immediately, upgrade if remote phrases beat it
+      within the join window (takes the ~435 ms query model off the critical path).
+- [ ] B5 (me, XS, P1) `caffeinate` in demo.sh / .app so the Mac can't sleep mid-talk.
+- [ ] B6 (both, blocked: api key) Real-model measurement: `./scripts/morning_check.sh AirPods`; bake-off
+      Gemini 2.5 vs 3.x Flash-Lite on latency + phrase quality; lock the model.
 
-## Integration
-- [x] Headless e2e WAV replay (ls-replay): 6/6 correct renders on dev talk, chunk-end→render p50 274 ms (offline)
-- [x] Tauri app: WAV replay → screen (3-min rehearsal 15/15, all frames received/decoded/painted)
-- [ ] BLOCKED (user): live mic — CoreAudio unavailable unattended; mic permission prompt; default input is BlackHole
-- [ ] BLOCKED (user): OPENROUTER_API_KEY → rerun rehearsal, record Jev/query latency + quality
-- [ ] Demo library + demo talk (humans), recalibrate τ, rehearsals ×3
+## C. Data
+- [ ] C1 (me, XS, P0) Index portability: store paths relative to index.json (today `root` is absolute → moving
+      the SD card / Mac breaks it).
+- [ ] C2 (me, S, P1) Caption aliases + exact-term boost: optional `aliases` column in captions.tsv
+      ("Tokyo office, HQ Japan"); verbatim alias hits raise the score — MobileCLIP doesn't know company terms.
+- [ ] C3 (me, S, P1) Gap report: `scripts/gaps.py <log>` lists every "change wanted, no image good enough" with
+      what was said → tells you which images to add.
+- [ ] C4 (you, blocked: library) Build the demo library (50–150 images, ≥1920 px, 16:9 preferred, deliberate
+      variants for refinements) → `prepare_library.sh` → edit captions → `ls-index`.
+- [ ] C5 (both) Calibration set for your library (30+ phrase→image, 10+ phrase→none) → `ls-calibrate` → set TAU.
+- [ ] C6 (you) Write the 3-minute talk with display cues (see A6) + its expected.tsv.
 
-## Known issues / follow-ups
-- [x] ASR 2.2 s spikes = whisper temperature fallback → disabled; max now 412 ms
-- [x] Batching phrases rejected (no padding mask in Candle OpenCLIP → cos 0.963); sequential kept
-- [ ] Heuristic decider over-triggers on repeated subject variants (sunflower → flower)
-- [x] Mic device lookup can hang → 5 s timeout + clear error in debug window
-- [ ] Stretch (P2): end-of-talk grid of shown images
-- [ ] With real Jev: watch for over-triggering on variants of the same subject (sunflower → flower)
-- [ ] Clean build from scratch before the demo (`cargo clean` then `CARGO_BUILD_JOBS=2 cargo build --release`, ~20 min)
+## D. App & demo-day UX
+- [ ] D1 (you, P0) Approve macOS mic permission for "Live Slides" (first launch of build/Live Slides.app).
+- [ ] D2 (you, P0) Connect AirPods; test on the real projector with `LS_DISPLAY` (untested on a 2nd display).
+- [ ] D3 (me, XS, P1) Debug window: show Jev intent probability + a thumbnail of the *held* (pending) image.
+- [ ] D4 (me, XS, P2) Optional auto-grid on a spoken closing cue ("thank you", "to wrap up") in live mode.
+- [ ] D5 (me, S, P1) DEMO.md run-sheet: DND on, volume/mic check, `morning_check`, launch, fallback video, what
+      to do if the image is wrong (`b` blank) or the mic drops.
+
+## E. Tests & regression
+- [ ] E1 (me, S, P1) `scripts/regress.sh`: one command — mock OpenRouter + headless replay of every fixture +
+      eval with pass/fail thresholds (renders correct, zero false positives, p50 latency).
+- [ ] E2 (me, S, P2) Pipeline crate integration test with fake ASR/decider/query (today only the pure crates
+      have tests).
+- [ ] E3 (you → me) Record 3 real rehearsals on AirPods (WAV) → add as regression fixtures with expected.tsv.
+- [ ] E4 (both) Three clean live rehearsals end to end = demo gate (design doc §8).
