@@ -469,7 +469,10 @@ impl Canvas {
             Op::DrawDiagram { layout, title, nodes, edges } => {
                 let mut d = Diagram { layout: *layout, title: title.as_deref().map(|t| short(t, 48)).filter(|t| !t.is_empty()), nodes: vec![], edges: vec![], auto_edges: false };
                 d.add_nodes(nodes);
-                if d.nodes.len() < 2 {
+                // A process or history told step by step starts with its first step ("first we record audio",
+                // 09-19: rejected, and the step was lost); cycles and hubs need at least two to mean anything.
+                let min = if matches!(layout, DiagramLayout::Flow | DiagramLayout::Timeline) { 1 } else { 2 };
+                if d.nodes.len() < min {
                     return false;
                 }
                 if d.add_edges(edges) == 0 {
@@ -1008,6 +1011,17 @@ mod tests {
         let s = c.apply(s.version, &[Op::DrawDiagram { layout: DiagramLayout::Cycle, title: Some("How it works".into()), nodes: ns(&["Listen", "Decide", "Show"]), edges: vec![] }], 5).unwrap();
         assert_eq!(s.elements.len(), n, "reworked in place");
         assert_eq!(s.elements.iter().find(|e| e.focus).unwrap().diagram.as_ref().unwrap().nodes.len(), 3);
+    }
+
+    #[test]
+    fn a_flow_can_start_with_its_first_step() {
+        let mut c = Canvas::new();
+        let s = c.apply(0, &[Op::DrawDiagram { layout: DiagramLayout::Flow, title: Some("Our pipeline".into()), nodes: ns(&["Record audio"]), edges: vec![] }], 1).unwrap();
+        let id = s.elements[0].id.clone();
+        let s = c.apply(s.version, &[Op::ExtendDiagram { id, nodes: ns(&["Transcribe"]), edges: vec![] }], 2).unwrap();
+        let d = s.elements[0].diagram.as_ref().unwrap();
+        assert_eq!((d.nodes.len(), d.edges.len()), (2, 1), "the chain continues from the first step");
+        assert!(c.apply(s.version, &[Op::DrawDiagram { layout: DiagramLayout::Cycle, title: None, nodes: ns(&["Alone"]), edges: vec![] }], 3).is_none());
     }
 
     #[test]

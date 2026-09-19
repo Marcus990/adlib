@@ -371,6 +371,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
     let mut recent: std::collections::VecDeque<String> = Default::default();
     // A number / structure word was heard; ask the agent once the sentence is complete.
     let mut graphic_pending = false;
+    let mut last_sent = String::new(); // newest speech last sent to the agent (don't resend an identical final)
     let mut last_clear: Option<Instant> = None;
     let caption_of = |id: &str| -> String {
         engine.searcher.index.entries.iter().find(|e| e.id == id).map(|e| e.caption.clone()).unwrap_or_else(|| id.to_string())
@@ -420,9 +421,20 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                         if cfg.canvas && ls_canvas::has_graphic_cue(&new_words) {
                             graphic_pending = true;
                         }
-                        // Sentence complete (final chunk, or Whisper closed the sentence) → graphics call.
-                        if cfg.canvas && graphic_pending && (c.is_final || c.text.trim_end().ends_with(['.', '?', '!'])) {
+                        // Early graphics call: a number/structure word was heard and Whisper closed the sentence
+                        // mid-phrase. This is only a head start — the finished phrase is always sent too (below),
+                        // so a premature "And then we." can no longer use the trigger up (09-19).
+                        if cfg.canvas && graphic_pending && !c.is_final && c.text.trim_end().ends_with(['.', '?', '!']) {
                             graphic_pending = false;
+                            last_sent = c.text.clone();
+                            agent_trigger = Some((context.clone(), c.text.clone(), c.id));
+                        }
+                        // Every finished phrase goes to the agent: fixed trigger words missed natural phrasing
+                        // ("in parallel we also run…", "and then once…", "remove the eagle", 09-19). The word lists
+                        // above are just mid-sentence shortcuts; the agent's guards still apply.
+                        if cfg.canvas && c.is_final && c.text.split_whitespace().count() >= 3 && c.text != last_sent {
+                            graphic_pending = false;
+                            last_sent = c.text.clone();
                             agent_trigger = Some((context, c.text.clone(), c.id));
                         }
                         if c.is_final {

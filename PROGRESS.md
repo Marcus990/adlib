@@ -220,3 +220,15 @@
   14:40 AirPods word→photo 1685 → 337 ms; 15:05 AirPods 3310 → 1508 ms (and keeps the sunflower the baseline
   missed; both roses side by side); graphics-talk final board identical (users bars, 60/30/10 pie, cycle);
   graphics latency unchanged (Haiku, ~1.5–2.5 s after the sentence).
+
+## 2026-09-19 — agent sees every finished sentence (fixes from the advanced-script live run)
+- Live run problems: "remove the eagle" / "remove the white rose" never reached the agent ("remove" was a
+  permission word, not a trigger); the pipeline description mostly missed the trigger words ("in parallel…",
+  "and then once…", "under one second"); a premature partial "And then we." used up the graphics trigger; a
+  1-step diagram ("first we record audio") was rejected.
+- Fixes: every finished phrase (≥ 3 words) goes to the agent (word lists are now mid-sentence shortcuts only);
+  the early partial trigger no longer consumes the finished sentence; flow/timeline diagrams may start with 1 step.
+- Replay of the same 9.6-min recording: focus works, both removes work, the pipeline diagram grows step by step
+  (Record audio → Transcription → "JET model" → Image retrieval → "Tori Rust-R"; labels = ASR mishearings).
+  Agent calls 58 → 126. Test talks unchanged: canvas-talk 6/6, 0 FP, no extra graphics; graphics-talk same board.
+- New: TRIGGERS.md — presenter guide + every hardcoded list with code locations.

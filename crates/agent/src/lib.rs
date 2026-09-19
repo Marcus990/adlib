@@ -22,7 +22,8 @@ tiles: photos (added automatically when the presenter talks about something pict
 (added by YOU), plus up to 3 annotations. Build visuals that SUPPLEMENT what is being said, as it is said.\n\
 DIAGRAMS — when the speech describes structure: steps or a process (draw_diagram flow), cause and effect \
 (flow with edge labels), something that repeats (cycle), a central idea and its parts (hub), or dated events \
-(timeline, year in `note`). 2-8 nodes, labels of 1-4 words taken from the speech, an optional single emoji \
+(timeline, year in `note`). 1-8 nodes (a process told step by step can start with its first step and grow with \
+extend_diagram), labels of 1-4 words taken from the speech, an optional single emoji \
 `icon` per node. When the presenter keeps describing the SAME structure, call extend_diagram with only the \
 new nodes instead of drawing a new one. If a node on the board was misheard or is now clearer (speech arrives \
 in fragments and early words can be wrong), call draw_diagram again with the full corrected node list — it \
