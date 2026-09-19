@@ -197,6 +197,22 @@ fn outcome_name(o: &Outcome) -> &'static str {
     }
 }
 
+/// Compact scene line for the run log (eval + debugging): tile kinds and graphic contents.
+fn scene_log(scene: &Scene) -> Value {
+    let tiles: Vec<Value> = scene
+        .elements
+        .iter()
+        .map(|e| match (&e.diagram, &e.chart) {
+            (Some(d), _) => json!({"id": e.id, "kind": "diagram", "layout": d.layout, "title": d.title,
+                "nodes": d.nodes.iter().map(|n| n.label.clone()).collect::<Vec<_>>(), "edges": d.edges.len()}),
+            (_, Some(c)) => json!({"id": e.id, "kind": "chart", "chart": c.kind, "title": c.title, "unit": c.unit,
+                "points": c.points.iter().map(|p| json!([p.label, p.value])).collect::<Vec<_>>()}),
+            _ => json!({"id": e.id, "kind": "image", "image_id": e.image_id}),
+        })
+        .collect();
+    json!({"ev": "scene", "version": scene.version, "reason": scene.reason, "n": scene.elements.len(), "layout": scene.layout, "tiles": tiles})
+}
+
 /// Run one talk until the audio ends (WAV) or `stop` is set (mic).
 pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderSink>, log: Logger, stop: Arc<AtomicBool>) -> anyhow::Result<Summary> {
     let cfg = engine.cfg.clone();
@@ -343,6 +359,10 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
     let mut agent_busy = false;
     let mut agent_next: Option<(String, String, u64)> = None;
     let mut last_curr = String::new();
+    // The agent sees the last few finished phrases (a process or a set of numbers spans sentences).
+    let mut recent: std::collections::VecDeque<String> = Default::default();
+    // A number / structure word was heard; ask the agent once the sentence is complete.
+    let mut graphic_pending = false;
     let caption_of = |id: &str| -> String {
         engine.searcher.index.entries.iter().find(|e| e.id == id).map(|e| e.caption.clone()).unwrap_or_else(|| id.to_string())
     };
@@ -384,8 +404,23 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                         // Only words not seen in the previous update of this phrase can carry a new cue.
                         let new_words = c.text.strip_prefix(last_curr.trim_end_matches(|ch: char| !ch.is_alphanumeric())).unwrap_or(&c.text).to_string();
                         last_curr = if c.is_final { String::new() } else { c.text.clone() };
+                        let context = recent.iter().cloned().collect::<Vec<_>>().join(" ");
                         if cfg.canvas && !canvas.scene().elements.is_empty() && ls_canvas::has_layout_cue(&new_words) {
-                            agent_trigger = Some((prev_final.clone(), c.text.clone(), c.id));
+                            agent_trigger = Some((context.clone(), c.text.clone(), c.id));
+                        }
+                        if cfg.canvas && ls_canvas::has_graphic_cue(&new_words) {
+                            graphic_pending = true;
+                        }
+                        // Sentence complete (final chunk, or Whisper closed the sentence) → graphics call.
+                        if cfg.canvas && graphic_pending && (c.is_final || c.text.trim_end().ends_with(['.', '?', '!'])) {
+                            graphic_pending = false;
+                            agent_trigger = Some((context, c.text.clone(), c.id));
+                        }
+                        if c.is_final {
+                            recent.push_back(c.text.clone());
+                            while recent.len() > 5 {
+                                recent.pop_front();
+                            }
                         }
                         let displayed = stage.displayed();
                         let prev = prev_final.clone();
@@ -426,9 +461,10 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                         sink.status(&json!({"type": "agent", "chunk_id": chunk_id, "source": format!("{src:?}"), "ms": ms,
                             "ops": ops.len(), "applied": applied.as_ref().map(|s| s.reason.clone())}));
                         if let Some(scene) = applied {
-                            let focused = scene.elements.iter().find(|e| e.focus).or(scene.elements.last());
+                            let images = || scene.elements.iter().filter(|e| e.kind == ls_canvas::ElementKind::Image);
+                            let focused = images().find(|e| e.focus).or_else(|| images().last());
                             stage.sync_current(focused.map(|e| (e.image_id.clone(), e.caption.clone())));
-                            log.log(json!({"ev": "scene", "version": scene.version, "reason": scene.reason, "n": scene.elements.len(), "layout": scene.layout}));
+                            log.log(scene_log(&scene));
                             sink.scene(&scene);
                         }
                         if let Some((p, c, id)) = agent_next.take() {
@@ -487,11 +523,11 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                     ("update", Some(id)) => canvas.update(id, &caption_of(id), ev.url.as_deref().unwrap_or_default(), ev.chunk_id),
                     (_, Some(id)) => canvas.render(id, &caption_of(id), ev.url.as_deref().unwrap_or_default(), ev.chunk_id),
                 };
-                log.log(json!({"ev": "scene", "version": scene.version, "reason": scene.reason, "n": scene.elements.len(), "layout": scene.layout}));
+                log.log(scene_log(&scene));
                 sink.scene(&scene);
                 if !scene.elements.is_empty() {
                     let text = chunk_text.get(&ev.chunk_id).cloned().unwrap_or_default();
-                    agent_trigger = Some((prev_final.clone(), text, ev.chunk_id));
+                    agent_trigger = Some((recent.iter().cloned().collect::<Vec<_>>().join(" "), text, ev.chunk_id));
                 }
             }
             if let Some(t) = agent_trigger {

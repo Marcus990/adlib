@@ -39,3 +39,25 @@ Offline rules (no key): "compare/versus/side by side" → compare; "focus on/thi
 
 ## Contracts
 `RenderEvent` stays (logs, eval, replay). New `Scene` is emitted alongside to the web view.
+
+## Live diagrams and charts (2026-09-19, user choice: "live diagrams" + "charts from speech")
+- Tiles are `kind: image | diagram | chart` (`Element.diagram` / `Element.chart`). Images still come from the
+  fast path; diagrams and charts only from the agent.
+- Agent tools (10 total): `draw_diagram(layout: flow|cycle|hub|timeline, title?, nodes[{label, icon?, note?}],
+  edges?[{from, to, label?}])`, `extend_diagram(id, nodes, edges?)`, `draw_chart(kind: bar|line|pie|stat, title?,
+  unit?, points[{label, value}])`, `update_chart(id, kind?, title?, points)` (full data set, replaces).
+- Canvas rules: omitted edges = chain (flow/timeline), chain + closing edge (cycle), spokes (hub); a redraw
+  sharing ≥ half the nodes of a diagram on the board replaces it in place; same chart title → replace data;
+  a stat with ≥ 3 values becomes bars; ≤ 8 nodes / points; additive ops apply even if the board changed
+  while the agent was thinking (layout ops still need the version to match).
+- Triggers: `has_graphic_cue` (digits, number words, "first/then/finally", "process", "cycle", "grew"…) in new
+  words → agent call when the sentence completes (final chunk or Whisper closes it with . ? !). The agent sees
+  the last 5 finished phrases + the newest speech + the board (incl. node labels / chart points).
+- Code-level guards (prompt rules weren't reliable): chart values must be numbers actually spoken (digits or
+  words, `spoken_numbers`) or already on the board — drops invented remainders; `clear_board` only when the
+  newest words close a section (`has_section_cue`).
+- Renderer: `app/dist/graphics.js`, SVG per tile, sized to the tile's final px; only new nodes / edges / bars /
+  points animate (per-tile `seen` set). Browser preview without Tauri: serve `app/dist`, call `__scene(scene)`.
+- Real-model replay (fixtures/audio/graphics-talk.wav, Haiku 4.5): users 2K → 15K → 40K as bars, pie
+  60/30/10, a 4-step flow that became a cycle on "it all runs in a loop"; graphics land 1.1–2.7 s after the
+  sentence. canvas-talk unchanged: 6/6, 0 false positives, p50 1.1 s.

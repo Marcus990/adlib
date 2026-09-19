@@ -35,7 +35,7 @@ impl Default for StageConfig {
             p_render: 0.45, // live test: "here's our red rose" scored 0.49–0.66 (intent × kind; intent already ≥ 0.6)
             p_update: 0.4, // real Jev: "make that the white rose" → update at P≈0.4–0.5 (intent × kind)
             p_clear: 0.7,
-            tau: 0.477,
+            tau: 0.52, // 09-19 logs: real matches 0.54–0.61, junk phrases ("six", "last year") 0.43–0.49
             hold_render_ms: 4000,
             hold_update_ms: 1500,
             join_timeout_ms: 1000,
@@ -75,6 +75,8 @@ struct Half {
     first_seen_ms: u64,
 }
 
+pub const CANDIDATE_TTL_MS: u64 = 2500;
+
 pub struct Stage {
     cfg: StageConfig,
     halves: BTreeMap<u64, Half>,
@@ -84,8 +86,10 @@ pub struct Stage {
     pending: Option<Visual>,
     last_applied_seq: Option<u64>,
     finals: std::collections::HashSet<u64>,
-    /// (image id, action) proposed by the previous partial update, awaiting confirmation.
-    candidate: Option<String>,
+    /// Image proposed by a partial update (and when), awaiting a second agreeing update within
+    /// CANDIDATE_TTL_MS. Without the expiry, two weak matches 11 s apart "confirmed" each other
+    /// (09-19: "last year" → earth, then "about six" → earth).
+    candidate: Option<(String, u64)>,
 }
 
 impl Stage {
@@ -234,8 +238,9 @@ impl Stage {
                     self.candidate = None;
                     return Outcome::Duplicate;
                 }
-                if self.cfg.confirm_partials && !self.finals.contains(&d.chunk_id) && self.candidate.as_deref() != Some(m.image_id.as_str()) {
-                    self.candidate = Some(m.image_id.clone());
+                let confirmed = matches!(&self.candidate, Some((id, t)) if id == &m.image_id && now_ms.saturating_sub(*t) <= CANDIDATE_TTL_MS);
+                if self.cfg.confirm_partials && !self.finals.contains(&d.chunk_id) && !confirmed {
+                    self.candidate = Some((m.image_id.clone(), now_ms));
                     return Outcome::Unconfirmed;
                 }
                 self.candidate = None;

@@ -21,7 +21,7 @@ picturable mentioned?". "I like watermelons" → no change; "here's what a water
 - [ ] A6 (me, XS) Talk-writing guide in README: the presenter must *say* the cue ("here's…", "take a look…");
       one cue per image; list of cues that work.
 - [ ] A7 (both, blocked: api key) Tune τ_intent and Jev wording on real Jev answers; watch for under-triggering.
-- [ ] A8 (me, XS) Forward-compat: `kind` gains `chart` later (retrieval of chart images) without contract change.
+- [x] A8 Charts: done differently — live charts drawn from spoken numbers (CANVAS.md, 09-19).
 
 ## B. Pipeline — reliability & latency
 - [ ] B1 (me, S, P0) Mic-drop watchdog: if no audio blocks for 2 s mid-talk (AirPods disconnect / route switch),
@@ -53,6 +53,11 @@ picturable mentioned?". "I like watermelons" → no change; "here's what a water
 - [ ] D4 (me, XS, P2) Optional auto-grid on a spoken closing cue ("thank you", "to wrap up") in live mode.
 - [ ] D5 (me, S, P1) DEMO.md run-sheet: DND on, volume/mic check, `morning_check`, launch, fallback video, what
       to do if the image is wrong (`b` blank) or the mic drops.
+
+## F. Diagrams & charts (09-19)
+- [ ] F1 (me, S) Mock OpenRouter: emit draw_chart / draw_diagram tool calls so offline replays exercise graphics.
+- [ ] F2 (me, S) eval: score graphics (expected chart values / diagram node count per fixture).
+- [ ] F3 (you) Say numbers and steps in the demo talk on purpose — they are what triggers graphics.
 
 ## E. Tests & regression
 - [ ] E1 (me, S, P1) `scripts/regress.sh`: one command — mock OpenRouter + headless replay of every fixture +
