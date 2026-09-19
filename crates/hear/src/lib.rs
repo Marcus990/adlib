@@ -217,6 +217,9 @@ pub fn collapse_repeats(s: &str) -> String {
     keep.join(" ")
 }
 
+/// Default Whisper audio-context floor in frames (50/s); see WhisperAsr::transcribe.
+pub const AUDIO_CTX_FLOOR: i32 = 768;
+
 pub mod whisper {
     //! Real ASR + VAD backed by whisper.cpp (whisper-rs). base.en chosen by spike S3.
     use super::{Asr, Vad};
@@ -287,6 +290,14 @@ pub mod whisper {
             } else {
                 pcm
             };
+            // Encode less than the padded 30 s window (the encoder dominates cost on 1–8 s windows):
+            // audio_ctx = max(floor, real frames + margin). Too small a context hurts accuracy in
+            // noise, so there is a floor. WHISPER_AUDIO_CTX=<floor frames, 50/s>, 0 = full 1500.
+            let floor: i32 = std::env::var("WHISPER_AUDIO_CTX").ok().and_then(|v| v.parse().ok()).unwrap_or(super::AUDIO_CTX_FLOOR);
+            if floor > 0 {
+                let frames = (pcm.len() as f32 / super::SR as f32 * 50.0).ceil() as i32;
+                p.set_audio_ctx((((frames + 64).max(floor) + 63) / 64 * 64).min(1500));
+            }
             self.state.full(p, pcm)?;
             let mut out = String::new();
             for seg in self.state.as_iter() {

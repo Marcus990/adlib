@@ -49,7 +49,9 @@ impl Config {
             stage.confirm_partials = false;
         }
         Self {
-            whisper_model: p("WHISPER_MODEL", "models/ggml-base.en.bin"),
+            // small.en: 16% WER / 10 of 10 keywords on the noisy fixture vs base.en 46% / 4 of 10, at
+            // 423 ms p50 with the audio-context floor (PROGRESS 09-19). Falls back to base.en if absent.
+            whisper_model: p("WHISPER_MODEL", if root.join("models/ggml-small.en.bin").exists() { "models/ggml-small.en.bin" } else { "models/ggml-base.en.bin" }),
             vad_model: p("VAD_MODEL", "models/ggml-silero-v5.1.2.bin"),
             clip_dir: p("CLIP_DIR", "models/mobileclip-s2"),
             index_path: p("INDEX", "dev-library/index.json"),
@@ -60,6 +62,7 @@ impl Config {
             stage,
             chunker: {
                 let mut c = ChunkerConfig::default();
+                c.tick_ms = 600; // small.en p90 ≈ 640 ms per pass; a 500 ms tick would fall behind
                 if let Some(t) = env("ASR_TICK_MS").and_then(|v| v.parse().ok()) {
                     c.tick_ms = t;
                 }
