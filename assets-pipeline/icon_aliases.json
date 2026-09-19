@@ -1,0 +1,214 @@
+{
+  "googlecloud": [
+    "GCP",
+    "Google Cloud Platform"
+  ],
+  "kubernetes": [
+    "K8s"
+  ],
+  "postgresql": [
+    "Postgres",
+    "PG"
+  ],
+  "mongodb": [
+    "Mongo"
+  ],
+  "javascript": [
+    "JS"
+  ],
+  "typescript": [
+    "TS"
+  ],
+  "nodejs": [
+    "Node"
+  ],
+  "nextjs": [
+    "Next"
+  ],
+  "vue": [
+    "Vue.js",
+    "VueJS"
+  ],
+  "react": [
+    "React.js",
+    "ReactJS"
+  ],
+  "huggingface": [
+    "HF"
+  ],
+  "microsoft": [
+    "MS",
+    "MSFT"
+  ],
+  "elasticsearch": [
+    "Elastic Search",
+    "ES"
+  ],
+  "openai": [
+    "ChatGPT",
+    "GPT"
+  ],
+  "go": [
+    "Golang"
+  ],
+  "visualstudiocode": [
+    "VSCode",
+    "VS Code"
+  ],
+  "scikitlearn": [
+    "sklearn"
+  ],
+  "pytorch": [
+    "Torch"
+  ],
+  "microsoftsqlserver": [
+    "SQL Server",
+    "MSSQL"
+  ],
+  "awslambda": [
+    "Lambda"
+  ],
+  "awss3": [
+    "S3"
+  ],
+  "awsec2": [
+    "EC2"
+  ],
+  "awsrds": [
+    "RDS"
+  ],
+  "awsdynamodb": [
+    "DynamoDB"
+  ],
+  "awssqs": [
+    "SQS"
+  ],
+  "awssns": [
+    "SNS"
+  ],
+  "awseks": [
+    "EKS"
+  ],
+  "awsecs": [
+    "ECS"
+  ],
+  "awsiam": [
+    "IAM"
+  ],
+  "awscloudfront": [
+    "CloudFront"
+  ],
+  "awscloudwatch": [
+    "CloudWatch"
+  ],
+  "awsredshift": [
+    "Redshift"
+  ],
+  "awselasticache": [
+    "ElastiCache"
+  ],
+  "awsapigateway": [
+    "API Gateway"
+  ],
+  "apachehttp": [
+    "Apache",
+    "httpd",
+    "Apache HTTP Server",
+    "Apache Web Server"
+  ],
+  "html5": [
+    "HTML"
+  ],
+  "tailwindcss": [
+    "Tailwind"
+  ],
+  "nuxt": [
+    "Nuxt.js",
+    "NuxtJS"
+  ],
+  "githubactions": [
+    "GH Actions",
+    "GHA"
+  ],
+  "jupyter": [
+    "Jupyter Notebook",
+    "JupyterLab"
+  ],
+  "csharp": [
+    "CSharp"
+  ],
+  "dotnet": [
+    "Dot NET"
+  ],
+  "rust": [
+    "Rustlang"
+  ],
+  "cplusplus": [
+    "CPP"
+  ],
+  "facebook": [
+    "FB"
+  ],
+  "youtube": [
+    "YT"
+  ],
+  "salesforce": [
+    "SFDC"
+  ],
+  "nvidia": [
+    "NVDA"
+  ],
+  "macos": [
+    "OSX",
+    "Mac OS",
+    "Mac"
+  ],
+  "windows": [
+    "Windows OS"
+  ],
+  "microsoftteams": [
+    "MS Teams"
+  ],
+  "googlebigquery": [
+    "BigQuery",
+    "BQ"
+  ],
+  "googledrive": [
+    "GDrive"
+  ],
+  "googlecolab": [
+    "Colab"
+  ],
+  "googlecloudrun": [
+    "Cloud Run"
+  ],
+  "googlecloudfunctions": [
+    "Cloud Functions"
+  ],
+  "googlepubsub": [
+    "Pub/Sub",
+    "PubSub"
+  ],
+  "googlecloudstorage": [
+    "GCS"
+  ],
+  "googlecloudspanner": [
+    "Spanner"
+  ],
+  "googledataflow": [
+    "Dataflow"
+  ],
+  "googlebigtable": [
+    "Bigtable"
+  ],
+  "googleanalytics": [
+    "GA",
+    "GA4"
+  ],
+  "googletagmanager": [
+    "GTM"
+  ],
+  "azuredevops": [
+    "ADO"
+  ]
+}

@@ -1,0 +1,8 @@
+fiftyone
+torch
+torchvision
+transformers
+pillow
+numpy
+tqdm
+requests
