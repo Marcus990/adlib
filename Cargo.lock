@@ -1526,6 +1526,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ls-decide"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ls-contracts",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "ls-query"
 version = "0.1.0"
 dependencies = [
