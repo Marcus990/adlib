@@ -13,11 +13,18 @@
   .slot .fg { object-fit: cover; }
   .slot.fit .fg { object-fit: contain; }
   .slot:not(.fit) .bg { display: none; }
+  /* Stretch goal: the "deck" that built itself — every image shown, in order. */
+  #grid { position: absolute; inset: 0; display: grid; gap: 1.2vw; padding: 3vw; box-sizing: border-box;
+          background: var(--bg); opacity: 0; pointer-events: none; transition: opacity 400ms ease;
+          grid-template-columns: repeat(auto-fill, minmax(18vw, 1fr)); align-content: center; }
+  #grid.on { opacity: 1; }
+  #grid img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 0.6vw; }
 </style>
 </head>
 <body>
 <div class="slot" id="a"><img class="bg"><img class="fg"></div>
 <div class="slot" id="b"><img class="bg"><img class="fg"></div>
+<div id="grid"></div>
 <script>
   // Presentation only: every decision is made in Rust. See design doc §2.
   const { listen } = window.__TAURI__.event;
@@ -30,6 +37,12 @@
   const afterPaint = cb => { let done = false; const f = () => { if (!done) { done = true; cb(); } };
     requestAnimationFrame(() => requestAnimationFrame(f)); setTimeout(f, 100); };
   let token = 0;
+  const shown = []; // image URLs in the order they appeared
+  function toggleGrid(on) {
+    const g = document.getElementById('grid');
+    if (on) { g.innerHTML = ''; shown.forEach(u => { const i = document.createElement('img'); i.src = u; g.appendChild(i); }); }
+    g.classList.toggle('on', on);
+  }
 
   function place(slot, rect) {
     Object.assign(slot.style, { left: rect.x * 100 + '%', top: rect.y * 100 + '%',
@@ -52,6 +65,7 @@
     try { await fg.decode(); } catch (e) { fe('decode_error', ev.chunk_id, null, ev.url + ' ' + e); return; }
     if (my !== token) return; // a newer event arrived while decoding
     fe('decoded', ev.chunk_id, performance.now() - t0, ev.url);
+    if (shown[shown.length - 1] !== ev.url) shown.push(ev.url);
     // Photos close to the screen's shape fill it; anything else is fitted over a blurred copy.
     const imgAspect = fg.naturalWidth / fg.naturalHeight, scrAspect = innerWidth / innerHeight;
     next.classList.toggle('fit', Math.abs(imgAspect / scrAspect - 1) > 0.15);
@@ -63,9 +77,11 @@
     afterPaint(() => fe('painted', ev.chunk_id, performance.now() - received, ev.kind));
   }
 
+  listen('talk_end', () => { toggleGrid(true); fe('grid', null, shown.length, 'talk_end'); });
   listen('render', e => { const t = performance.now(); fe('received', e.payload.chunk_id, 0, e.payload.kind); show(e.payload, t); });
   fe('loaded', null, null, location.href);
   document.addEventListener('keydown', async e => {
+    if (e.key === 'g') toggleGrid(!document.getElementById('grid').classList.contains('on'));
     if (e.key === 'f') {
       const w = window.__TAURI__.window.getCurrentWindow();
       await w.setFullscreen(!(await w.isFullscreen()));

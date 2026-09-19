@@ -79,6 +79,7 @@ fn main() -> anyhow::Result<()> {
                 let _ = handle.emit_to("debug", "status", json!({"type": "ready"}));
                 match run(engine, source(), sink, log.clone(), Arc::new(AtomicBool::new(false))).await {
                     Ok(s) => {
+                        let _ = handle.emit("talk_end", ());
                         let _ = handle.emit_to("debug", "status", json!({"type": "summary", "summary": s,
                             "p50": s.pct(0.5), "p95": s.pct(0.95)}));
                     }
