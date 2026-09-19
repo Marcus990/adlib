@@ -9,6 +9,7 @@ ls-contracts = { path = "../contracts" }
 ls-hear = { path = "../hear" }
 ls-search = { path = "../search" }
 ls-query = { path = "../query" }
+ls-gen = { path = "../gen" }
 ls-decide = { path = "../decide" }
 ls-stage = { path = "../stage" }
 ls-canvas = { path = "../canvas" }

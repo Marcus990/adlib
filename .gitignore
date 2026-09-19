@@ -8,3 +8,4 @@ logs/
 dev-library/
 build/
 __pycache__/
+generated/

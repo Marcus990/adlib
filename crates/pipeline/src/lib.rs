@@ -5,6 +5,7 @@ use ls_agent::CanvasAgent;
 use ls_canvas::{Canvas, Scene};
 use ls_contracts::{Chunk, RenderEvent};
 use ls_decide::{Decider, Source};
+use ls_gen::ImageGen;
 use ls_hear::{audio, whisper, ChunkTiming, Chunker, ChunkerConfig, SR};
 use ls_query::QueryClient;
 use ls_search::{assets, Clip, ImageCache, Index, Searcher, TextEncoder};
@@ -30,11 +31,17 @@ pub struct Config {
     pub label_min: f32,
     /// Asset card: image score an unlabelled (COCO) photo needs instead (UNLABELLED_MIN).
     pub unlabelled_min: f32,
+    /// Image generation fallback (BASETEN_API_KEY / BASETEN_URL / GEN_SIZE).
+    pub gen_key: Option<String>,
+    pub gen_url: Option<String>,
+    pub gen_size: Option<u32>,
     pub index_path: PathBuf,
     pub api_key: Option<String>,
     pub query_model: Option<String>,
     pub jev_model: Option<String>,
     pub log_path: PathBuf,
+    /// Generated images are kept here and reused on the next run (AS13).
+    pub gen_dir: PathBuf,
     pub stage: StageConfig,
     pub chunker: ChunkerConfig,
     /// Canvas mode (evolving board + agent). LS_MODE=single keeps one full-screen image.
@@ -78,6 +85,10 @@ impl Config {
             assets: env("LS_ASSETS").map(PathBuf::from),
             clip_text_dir: p("CLIP_TEXT_DIR", "models/clip-vit-b32"),
             // 0.92: measured on the card — "a rose"→rose 0.93, while owl→bird 0.87 and junk 0.81–0.84.
+            gen_dir: root.join("generated"),
+            gen_key: env("BASETEN_API_KEY"),
+            gen_url: env("BASETEN_URL"),
+            gen_size: env("GEN_SIZE").and_then(|v| v.parse().ok()),
             label_min: env("LABEL_MIN").and_then(|v| v.parse().ok()).unwrap_or(0.92),
             // Off by default: the card's 5k unlabelled COCO photos score like real matches for anything
             // ("night hunting" → a random photo at 0.32), and nothing separates them. UNLABELLED_MIN=0.31
@@ -157,6 +168,7 @@ pub struct Engine {
     pub decider: Decider,
     pub query: QueryClient,
     pub agent: CanvasAgent,
+    pub gen: ImageGen,
 }
 
 impl Engine {
@@ -181,8 +193,9 @@ impl Engine {
         let query_model = cfg.query_model.clone().unwrap_or_else(|| ls_query::DEFAULT_MODEL.to_string());
         let decider = Decider::new(http.clone(), cfg.api_key.clone(), cfg.jev_model.clone(), query_model.clone(), captions.clone());
         let query = QueryClient::new(http.clone(), cfg.api_key.clone(), Some(query_model), captions);
-        let agent = CanvasAgent::new(http, cfg.api_key.clone(), cfg.canvas_model.clone());
-        Ok(Self { cfg, clip, searcher, cache, decider, query, agent })
+        let agent = CanvasAgent::new(http.clone(), cfg.api_key.clone(), cfg.canvas_model.clone());
+        let gen = ImageGen::new(http, cfg.gen_key.clone(), cfg.gen_url.clone(), cfg.gen_size);
+        Ok(Self { cfg, clip, searcher, cache, decider, query, agent, gen })
     }
 
     /// Warm-up (design doc §6 lever 5): CLIP text path, image prefetch, both HTTPS connections.
@@ -192,6 +205,11 @@ impl Engine {
         // Prefetch only a small curated library; the asset card holds ~15k photos (LRU on demand).
         let n = if self.searcher.index.entries.len() <= 256 { self.cache.prefetch_all() } else { 0 };
         tokio::join!(self.decider.warm_up(), self.query.warm_up());
+        if self.gen.enabled() {
+            // The deployment scales to zero (146 s cold); wake it without blocking startup.
+            let g = self.gen.clone();
+            tokio::spawn(async move { g.warm_up().await });
+        }
         log.log(json!({"ev": "warm_up", "ms": t.elapsed().as_millis() as u64, "prefetched": n,
             "remote": self.decider.has_remote()}));
     }
@@ -207,6 +225,8 @@ enum Msg {
     Search(SearchOutcome, ls_contracts::QueryResult, Vec<ls_search::PhraseHit>, u64, u64, u64),
     /// Canvas agent answer: (scene version it reasoned about, ops, source, chunk id, ms).
     Agent(u64, Vec<ls_canvas::Op>, ls_agent::Source, u64, u64),
+    /// A generated image arrived: chunk it was asked for, subject, JPEG bytes (None = failed), ms.
+    Generated(u64, String, Option<Vec<u8>>, u64),
 }
 
 #[derive(Debug, Default, Clone, serde::Serialize)]
@@ -217,6 +237,8 @@ pub struct Summary {
     pub outcomes: std::collections::BTreeMap<String, usize>,
     pub decide_sources: std::collections::BTreeMap<String, usize>,
     pub query_fallbacks: usize,
+    /// Photos drawn by the generation fallback because the library had nothing.
+    pub generated: usize,
     pub shown: Vec<String>,
 }
 
@@ -243,6 +265,36 @@ fn outcome_name(o: &Outcome) -> &'static str {
         Outcome::TimedOut => "timed_out",
         Outcome::Unconfirmed => "unconfirmed",
     }
+}
+
+/// Do two subjects describe the same picture? (Token overlap, ignoring filler words.)
+fn similar(a: &str, b: &str) -> bool {
+    let words = |s: &str| -> std::collections::HashSet<String> {
+        s.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.len() > 2 && !["the", "and", "from", "with", "into", "our", "for"].contains(w))
+            .map(|w| w.trim_end_matches('s').to_string())
+            .collect()
+    };
+    let (x, y) = (words(a), words(b));
+    if x.is_empty() || y.is_empty() {
+        return false;
+    }
+    let shared = x.intersection(&y).count();
+    shared * 2 >= x.len().min(y.len()) * 2 // every word of the shorter subject appears in the longer one
+}
+
+/// Filename-safe form of a spoken subject ("a sunflower in a field" → "a-sunflower-in-a-field").
+fn slug(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.trim().to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.trim_matches('-').chars().take(60).collect()
 }
 
 /// Compact scene line for the run log (eval + debugging): tile kinds and graphic contents.
@@ -375,8 +427,11 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
     let mut hear_done_at: Option<Instant> = None;
     let mut tick = tokio::time::interval(Duration::from_millis(50));
 
-    let handle_outcome = |chunk_id: u64, o: Outcome, now: u64, summary: &mut Summary, ends: &std::collections::HashMap<u64, u64>| -> Option<RenderEvent> {
+    let handle_outcome = |chunk_id: u64, o: Outcome, now: u64, summary: &mut Summary, ends: &std::collections::HashMap<u64, u64>, gaps: &mut Vec<u64>| -> Option<RenderEvent> {
         *summary.outcomes.entry(outcome_name(&o).into()).or_default() += 1;
+        if matches!(o, Outcome::LibraryGap) {
+            gaps.push(chunk_id); // nothing in the library → maybe generate it
+        }
         match &o {
             Outcome::Rendered(ev) => {
                 sink.render(ev);
@@ -413,6 +468,9 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
     let mut graphic_pending = false;
     let mut last_sent = String::new(); // newest speech last sent to the agent (don't resend an identical final)
     let mut last_clear: Option<Instant> = None;
+    let mut subject_of: std::collections::HashMap<u64, String> = Default::default();
+    let mut generating: std::collections::HashSet<String> = Default::default();
+    let mut recent_subjects: Vec<(String, Instant)> = vec![];
     let caption_of = |id: &str| -> String {
         // Card photos from COCO have no label at all; "photo" keeps board summaries readable.
         match engine.searcher.index.entries.iter().find(|e| e.id == id) {
@@ -432,6 +490,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
 
     loop {
         let mut fresh: Vec<RenderEvent> = vec![];
+        let mut gaps: Vec<u64> = vec![];
         let mut agent_trigger: Option<(String, String, u64)> = None;
         tokio::select! {
             msg = rx.recv() => {
@@ -519,12 +578,56 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                                 let tq = log.now_ms();
                                 let (e2, phrases, on_screen) = (e.clone(), q.phrases.clone(), d.image_id.clone());
                                 let res = tokio::task::spawn_blocking(move || e2.searcher.best_match_avoiding(&*e2.clip, c.id, &phrases, on_screen.as_deref())).await;
-                                let (best, hits) = match res {
+                                let (mut best, hits) = match res {
                                     Ok(Ok(v)) => v,
                                     _ => (None, vec![]),
                                 };
+                                // The library only had a *related* thing (phrase 2+: "flower" for
+                                // "sunflower"). With generation available, the exact subject is better than a
+                                // near-miss, so report a gap and let the finished phrase draw it.
+                                if e.gen.enabled() {
+                                    if let (Some(m), Some(first)) = (&best, q.phrases.first()) {
+                                        if &m.phrase != first && !ls_gen::ImageGen::refuses(first) {
+                                            best = None;
+                                        }
+                                    }
+                                }
                                 let _ = tx.send(Msg::Search(SearchOutcome { chunk_id: c.id, best }, q, hits, t, tq, log.now_ms()));
                             });
+                        }
+                    }
+                    Msg::Generated(chunk_id, subject, bytes, ms) => {
+                        generating.remove(&subject);
+                        let path = cfg.gen_dir.join(format!("{}.jpg", slug(&subject)));
+                        if let Some(b) = bytes {
+                            let _ = std::fs::create_dir_all(&cfg.gen_dir);
+                            let _ = std::fs::write(&path, &b);
+                        }
+                        // Show it only if the subject is still in what was actually said: a mis-transcribed
+                        // partial ("a single scene") is gone by the time its picture lands (09-19).
+                        let still_said = chunk_text.get(&chunk_id).is_some_and(|t| {
+                            let t = t.to_lowercase();
+                            subject.to_lowercase().split_whitespace().filter(|w| w.len() > 3).all(|w| t.contains(w.trim_end_matches('s')))
+                        });
+                        let fresh_enough = still_said
+                            && chunk_end_wall.get(&chunk_id).is_some_and(|e| log.now_ms().saturating_sub(*e) < 12_000);
+                        log.log(json!({"ev": "generated", "chunk_id": chunk_id, "subject": subject, "ms": ms,
+                            "ok": path.exists(), "used": path.exists() && fresh_enough}));
+                        if path.exists() && fresh_enough {
+                            let id = format!("gen-{}", slug(&subject));
+                            engine.cache.add(&id, path);
+                            summary.generated += 1;
+                            summary.shown.push(id.clone());
+                            sink.status(&json!({"type": "generated", "chunk_id": chunk_id, "subject": subject, "ms": ms}));
+                            if cfg.canvas {
+                                let scene = canvas.render(&id, &subject, &format!("img://localhost/{id}"), chunk_id);
+                                stage.sync_current(Some((id.clone(), subject.clone())));
+                                log.log(scene_log(&scene));
+                                sink.scene(&scene);
+                            } else {
+                                sink.render(&RenderEvent { kind: "render", image_id: Some(id), url: Some(format!("img://localhost/gen-{}", slug(&subject))),
+                                    rect: ls_contracts::Rect::FULL, chunk_id, ts_ms: log.now_ms() });
+                            }
                         }
                     }
                     Msg::Agent(version, mut ops, src, chunk_id, ms) => {
@@ -562,10 +665,17 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                             "source": format!("{src:?}"), "ms": t_end - t_start}));
                         let now = log.now_ms();
                         if let Some(o) = stage.on_decision(d.clone(), now) {
-                            fresh.extend(handle_outcome(d.chunk_id, o, now, &mut summary, &chunk_end_wall));
+                            fresh.extend(handle_outcome(d.chunk_id, o, now, &mut summary, &chunk_end_wall, &mut gaps));
                         }
                     }
                     Msg::Search(s, q, hits, t_start, t_query, t_end) => {
+                        if let Some(p) = q.phrases.first() {
+                            subject_of.insert(s.chunk_id, p.clone());
+                            if subject_of.len() > 256 {
+                                let min = *subject_of.keys().min().unwrap();
+                                subject_of.remove(&min);
+                            }
+                        }
                         if q.from_fallback {
                             summary.query_fallbacks += 1;
                         }
@@ -579,7 +689,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                         let now = log.now_ms();
                         let id = s.chunk_id;
                         if let Some(o) = stage.on_search(s, now) {
-                            fresh.extend(handle_outcome(id, o, now, &mut summary, &chunk_end_wall));
+                            fresh.extend(handle_outcome(id, o, now, &mut summary, &chunk_end_wall, &mut gaps));
                         }
                     }
                 }
@@ -587,7 +697,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
             _ = tick.tick() => {
                 let now = log.now_ms();
                 for (id, o) in stage.tick(now) {
-                    fresh.extend(handle_outcome(id, o, now, &mut summary, &chunk_end_wall));
+                    fresh.extend(handle_outcome(id, o, now, &mut summary, &chunk_end_wall, &mut gaps));
                 }
                 // After the audio ends, drain in-flight work and any pending visual (≤ hold), then stop.
                 if let Some(t) = hear_done_at {
@@ -597,6 +707,35 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                 }
             }
         }
+        // ---- nothing in the library → draw it (handoff AS12); never blocks this loop ----
+        for id in gaps {
+            let Some(subject) = subject_of.get(&id).cloned() else { continue };
+            if !engine.gen.enabled() || ls_gen::ImageGen::refuses(&subject) || subject.trim().len() < 4 {
+                continue;
+            }
+            // "planet Earth from space" right after "planet Earth" is the same picture.
+            if recent_subjects.iter().any(|(s, t): &(String, Instant)| t.elapsed() < Duration::from_secs(25) && similar(s, &subject)) {
+                continue;
+            }
+            if !generating.insert(subject.clone()) {
+                continue;
+            }
+            recent_subjects.push((subject.clone(), Instant::now()));
+            recent_subjects.retain(|(_, t)| t.elapsed() < Duration::from_secs(60));
+            let cached = cfg.gen_dir.join(format!("{}.jpg", slug(&subject)));
+            let (e, tx, log2) = (engine.clone(), tx.clone(), log.clone());
+            tokio::spawn(async move {
+                if cached.exists() {
+                    // generated earlier in this talk (or a rehearsal) — reuse, no call
+                    let _ = tx.send(Msg::Generated(id, subject, None, 0));
+                    return;
+                }
+                let t = log2.now_ms();
+                let bytes = e.gen.generate(&subject).await;
+                let _ = tx.send(Msg::Generated(id, subject, bytes, log2.now_ms() - t));
+            });
+        }
+
         // ---- canvas mode: fast path onto the board, then (maybe) the agent ----
         if cfg.canvas {
             for ev in fresh {
