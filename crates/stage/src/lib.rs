@@ -131,6 +131,20 @@ impl Stage {
         }
     }
 
+    /// The canvas agent changed the board (cleared it, removed or refocused a picture): make "on screen"
+    /// follow the board's focused image so the next decision/search isn't compared against a picture
+    /// that is gone (live test 09-19: board cleared, stage still thought "owl" → every search said owl).
+    pub fn sync_current(&mut self, focused: Option<(String, String)>) {
+        if self.current.image_id.as_deref() == focused.as_ref().map(|f| f.0.as_str()) {
+            return;
+        }
+        self.current = match focused {
+            Some((id, caption)) => Visual { kind: "render", image_id: Some(id), caption: Some(caption), trigger_text: self.current.trigger_text.clone(), chunk_id: self.current.chunk_id },
+            None => Visual { kind: "clear", image_id: None, caption: None, trigger_text: String::new(), chunk_id: self.current.chunk_id },
+        };
+        self.candidate = None;
+    }
+
     pub fn on_decision(&mut self, d: ChangeDecision, now_ms: u64) -> Option<Outcome> {
         let id = d.chunk_id;
         let h = self.halves.entry(id).or_insert_with(|| Half { first_seen_ms: now_ms, ..Default::default() });
@@ -294,6 +308,18 @@ mod tests {
         assert_eq!(s.on_decision(dec(1, 1, Action::NoChange, 0.99), 0), Some(Outcome::NoChange));
         s.on_search(found(2, "eagle", 0.6), 0);
         assert_eq!(s.on_decision(dec(2, 2, Action::NewRender, 0.3), 0), Some(Outcome::BelowProbability));
+    }
+
+    #[test]
+    fn board_clear_resets_on_screen() {
+        let mut s = Stage::new(StageConfig { confirm_partials: false, ..StageConfig::default() });
+        s.on_search(found(1, "owl", 0.6), 0);
+        assert!(matches!(s.on_decision(dec(1, 1, Action::NewRender, 0.9), 0), Some(Outcome::Rendered(_))));
+        s.sync_current(None);
+        assert_eq!(s.displayed().image_id, None);
+        // saying "owl" again after the board was cleared shows it again instead of "duplicate"
+        s.on_search(found(2, "owl", 0.6), 5000);
+        assert!(matches!(s.on_decision(dec(2, 2, Action::NewRender, 0.9), 5000), Some(Outcome::Rendered(_))));
     }
 
     #[test]

@@ -396,6 +396,8 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                         sink.status(&json!({"type": "agent", "chunk_id": chunk_id, "source": format!("{src:?}"), "ms": ms,
                             "ops": ops.len(), "applied": applied.as_ref().map(|s| s.reason.clone())}));
                         if let Some(scene) = applied {
+                            let focused = scene.elements.iter().find(|e| e.focus).or(scene.elements.last());
+                            stage.sync_current(focused.map(|e| (e.image_id.clone(), e.caption.clone())));
                             log.log(json!({"ev": "scene", "version": scene.version, "reason": scene.reason, "n": scene.elements.len(), "layout": scene.layout}));
                             sink.scene(&scene);
                         }

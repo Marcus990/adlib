@@ -20,7 +20,12 @@ case "$MODE" in
 esac
 [ -n "$ARG" ] && export LS_DISPLAY="$ARG"
 [ -n "$FULL" ] && export LS_FULLSCREEN=1
-[ -x target/release/live-slides ] || { echo "build first: CARGO_BUILD_JOBS=2 cargo build --release"; exit 1; }
+# Rebuild the app if any source is newer than the binary (a stale binary once ran a live test).
+if [ ! -x target/release/live-slides ] || [ -n "$(find crates app/src-tauri/src app/dist app/src-tauri/tauri.conf.json Cargo.toml -newer target/release/live-slides -type f 2>/dev/null | head -1)" ]; then
+  echo "sources changed — building the app (2 jobs, ~1 min)…"
+  CARGO_BUILD_JOBS=2 cargo build --release -p live-slides 2>&1 | grep -E "^(error|warning: unused)|Finished" || true
+  [ -x target/release/live-slides ] || { echo "build failed"; exit 1; }
+fi
 grep -qE '^OPENROUTER_API_KEY=.+' .env 2>/dev/null || echo "note: no OPENROUTER_API_KEY in .env — using local fallbacks"
 echo "source=$LS_SOURCE display=${LS_DISPLAY:-this} fullscreen=${FULL:+yes} index=${INDEX:-dev-library/index.json}"
 echo "stage keys: f full screen · Esc exit full screen · b blank · g grid"

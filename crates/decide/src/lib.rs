@@ -11,6 +11,10 @@
 //! update / clear). Action = `kind` if P(intent) ≥ τ_intent, else no_change.
 //! `DECIDE_MODE=topic` keeps the earlier single "did the topic change?" choice for A/B comparison.
 //!
+//! **Supplement (default since 09-19 live test).** Requiring "here's…" made the presenter spell out every
+//! request. The intent question becomes "is the talk now about something a visual would supplement, that
+//! isn't on screen?" — same two-question call and parsing; `DECIDE_MODE=intent` keeps the explicit gate.
+//!
 //! Fallbacks behind the same `ChangeDecision` output:
 //! 1. Jev fails but a key exists → ask the chat query model for the action (doc §9 fallback).
 //! 2. No key at all (offline dev/replay) → a transparent cue + vocabulary heuristic.
@@ -30,8 +34,8 @@ pub const DEFAULT_JEV_MODEL: &str = "typesafe/jev-1.13";
 /// Total time a decision may take, fallbacks included (Jev gets 700 ms of it).
 pub const DECIDE_BUDGET: Duration = Duration::from_millis(1100);
 
-const CONTEXT: &str = "A presenter is speaking live and one picture is on screen behind them. \
-`displayed` is the picture now on screen and `displayed.trigger_text` is what they said when it went up. \
+const CONTEXT: &str = "A presenter is speaking live and visuals on a screen behind them illustrate the talk. \
+`displayed` is the main picture now on screen and `displayed.trigger_text` is what they said when it went up. \
 `prev` is their previous phrase and `curr` is what they are saying right now.";
 
 const INTENT_Q: &str = "Is the presenter, in `curr`, signalling that the audience should now SEE something — \
@@ -39,6 +43,12 @@ directing attention to a picture, photo, graphic or chart (e.g. \"here's what a 
 \"take a look at\", \"picture this\", \"as you can see\", \"let me show you\", \"this is our office\"), or \
 explicitly asking to change or clear what is shown? Merely mentioning or having an opinion about something \
 (\"I like watermelons\", \"we talked about dogs\") is NOT a signal.";
+
+const SUPPLEMENT_Q: &str = "Is the presenter, in `curr`, now talking about a concrete subject (an object, animal, \
+plant, place, person, scene or a set of numbers) that a picture would help the audience follow, and that is \
+DIFFERENT from `displayed`? Yes when the subject is what they are talking about, even without \"here's\" or \
+\"look at\". No for filler, greetings, abstract talk with nothing to picture, or when they are still talking \
+about what is already displayed.";
 
 const KIND_Q: &str = "If the presenter wants the audience to see something, what should happen to the picture?";
 
@@ -65,6 +75,7 @@ pub fn criteria() -> serde_json::Value {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
+    Supplement,
     Intent,
     Topic,
 }
@@ -73,7 +84,8 @@ impl Mode {
     pub fn from_env() -> Self {
         match std::env::var("DECIDE_MODE").map(|v| v.to_lowercase()) {
             Ok(v) if v == "topic" => Mode::Topic,
-            _ => Mode::Intent,
+            Ok(v) if v == "intent" => Mode::Intent,
+            _ => Mode::Supplement,
         }
     }
 }
@@ -125,8 +137,8 @@ impl Decider {
 
     pub fn build_request(&self, prev: &str, curr: &str, d: &Displayed, now_ms: u64) -> serde_json::Value {
         let questions = match self.mode {
-            Mode::Intent => serde_json::json!({
-                "intent": {"type": "noul", "instructions": format!("{CONTEXT} {INTENT_Q}")},
+            Mode::Intent | Mode::Supplement => serde_json::json!({
+                "intent": {"type": "noul", "instructions": format!("{CONTEXT} {}", if self.mode == Mode::Intent { INTENT_Q } else { SUPPLEMENT_Q })},
                 "kind": {"type": "choice", "instructions": format!("{CONTEXT} {KIND_Q}"), "criteria": kind_criteria()}
             }),
             Mode::Topic => serde_json::json!({
@@ -172,7 +184,7 @@ impl Decider {
         }
         let (action, p) = match self.mode {
             Mode::Intent => heuristic_intent(curr, d, &self.vocab),
-            Mode::Topic => heuristic(curr, d, &self.vocab),
+            Mode::Topic | Mode::Supplement => heuristic(curr, d, &self.vocab),
         };
         (ChangeDecision { chunk_id, seq, action, p }, Source::Heuristic, Detail::default())
     }
@@ -186,7 +198,7 @@ impl Decider {
             anyhow::bail!("HTTP {status}: {}", &text[..text.len().min(300)]);
         }
         match self.mode {
-            Mode::Intent => parse_jev_intent(&text, self.tau_intent),
+            Mode::Intent | Mode::Supplement => parse_jev_intent(&text, self.tau_intent),
             Mode::Topic => parse_jev(&text).map(|(a, p)| (a, p, Detail::default())),
         }
     }
