@@ -2,10 +2,14 @@
 //! path has placed an image. Model-agnostic over OpenRouter (CANVAS_MODEL, default Claude Haiku 4.5;
 //! bake-off vs Gemini Flash-Lite once a key exists). No key / error / timeout → offline cue rules.
 
-use ls_canvas::{has_section_cue, rule_ops, AnnotationKind, ChartKind, DiagramLayout, EdgeSpec, ElementKind, Layout, NodeSpec, Op, Point, Scene};
+use ls_canvas::{has_removal_cue, has_section_cue, rule_ops, AnnotationKind, ChartKind, DiagramLayout, EdgeSpec, ElementKind, Layout, NodeSpec, Op, Point, Scene};
 use serde_json::{json, Value};
 use std::time::Duration;
 
+/// Claude Haiku 4.5. Gemini 2.5 Flash was ~2× faster (p50 802 vs 1612 ms, 09-19 bake-off) but in real
+/// replays it "tidied" the board (removing photos) and skipped clears, so we stay on Haiku; the canvas
+/// guards (grounded numbers, cue-gated clear/remove, no chart-kind jumps) cover Haiku's misses.
+/// `CANVAS_MODEL=google/gemini-2.5-flash` to try it again (thinking is switched off automatically).
 pub const DEFAULT_MODEL: &str = "anthropic/claude-haiku-4.5";
 
 fn base() -> String {
@@ -22,16 +26,20 @@ DIAGRAMS — when the speech describes structure: steps or a process (draw_diagr
 `icon` per node. When the presenter keeps describing the SAME structure, call extend_diagram with only the \
 new nodes instead of drawing a new one. If a node on the board was misheard or is now clearer (speech arrives \
 in fragments and early words can be wrong), call draw_diagram again with the full corrected node list — it \
-replaces the old one in place. Don't add a node that repeats one already there.\n\
+replaces the old one in place. Don't add a node that repeats one already there. If they restate or sum up a structure that is already on \
+the board, rework that diagram (draw_diagram with its id's layout) — never draw a second copy of it.\n\
 CHARTS — only from numbers the presenter actually says (never invent or estimate data): values over time or \
 across groups (bar; line for a trend over 3+ times), shares of a whole (pie), one headline number or a \
 before → after (stat). Use plain numbers in `value` (\"fifteen thousand\" → 15000, \"60 percent\" → 60 with \
 unit \"%\"). Every value must be one the presenter said: never add an \"Other\", \"Rest\" or \"Not X\" \
 remainder — a pie may sum to less than 100. When they add a number or the transcript firms up (early words \
-can be misheard), call update_chart with the full corrected list of values.\n\
+can be misheard), call update_chart with the full corrected list of values. update_chart is only for the SAME \
+series; a new set of numbers (e.g. shares of a whole after a growth trend) is a new chart — draw_chart. Never \
+turn one chart into another kind.\n\
 LAYOUT — compare two things (arrange compare), zoom in on one (focus + arrange hero), everything together \
 (arrange grid), draw attention (annotate highlight), link two tiles (annotate arrow), clear the board when \
-they move to a new section.\n\
+they move to a new section. Never remove photos to tidy up — the board makes room by itself; remove a tile only \
+when the presenter asks to take it away.\n\
 If the newest sentence is unfinished, or there is nothing to structure or count, call NO tool — that is the \
 right answer most of the time. Never invent element ids; use the ids listed on the board.";
 
@@ -159,7 +167,7 @@ impl CanvasAgent {
             .map(|a| json!({"kind": a.kind, "targets": a.targets, "label": a.label}))
             .collect();
         let user = json!({"board": board, "layout": scene.layout, "annotations": notes, "previous_speech": prev, "newest_speech": curr});
-        json!({
+        let mut body = json!({
             "model": self.model,
             "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user.to_string()}],
             "tools": tools(),
@@ -167,7 +175,12 @@ impl CanvasAgent {
             "temperature": 0,
             "max_tokens": 700,
             "provider": {"sort": "latency"}
-        })
+        });
+        // Thinking models (Gemini 2.5 Flash, …) are ~2× slower with reasoning on; this call needs none.
+        if !self.model.starts_with("anthropic/") {
+            body["reasoning"] = if self.model.contains("gpt-oss") { json!({"effort": "low"}) } else { json!({"enabled": false}) };
+        }
+        body
     }
 
     async fn remote(&self, scene: &Scene, prev: &str, curr: &str) -> anyhow::Result<Vec<Op>> {
@@ -191,6 +204,7 @@ impl CanvasAgent {
 /// Code-level guards on model output (prompt rules alone were not reliable, 09-19 probes):
 /// - `clear_board` only when the newest words close a section ("let's move on") — the model also
 ///   cleared on a *previous* sentence's "moving on", wiping photos that had just appeared;
+/// - `remove` only when the newest words ask to take something away — Gemini tidied the board tile by tile;
 /// - chart values must be numbers the presenter said (or already on the board): drops invented
 ///   remainders like "Not stoned: 40" from "60% of them are stoned".
 pub fn ground(ops: Vec<Op>, scene: &Scene, prev: &str, curr: &str) -> Vec<Op> {
@@ -204,6 +218,7 @@ pub fn ground(ops: Vec<Op>, scene: &Scene, prev: &str, curr: &str) -> Vec<Op> {
     ops.into_iter()
         .filter_map(|op| match op {
             Op::ClearBoard if !has_section_cue(curr) => None,
+            Op::Remove { .. } if !has_removal_cue(curr) => None,
             Op::DrawChart { kind, title, unit, points } => {
                 let points: Vec<Point> = points.into_iter().filter(|p| grounded(p.value)).collect();
                 (!points.is_empty()).then_some(Op::DrawChart { kind, title, unit, points })
@@ -495,6 +510,9 @@ mod tests {
             o => panic!("{o:?}"),
         }
         assert_eq!(ground(vec![Op::ClearBoard], c.scene(), "", "Great. Let's move on.").len(), 1);
+        let rm = || Op::Remove { id: "e1".into() };
+        assert!(ground(vec![rm()], c.scene(), "", "Think about a sunflower in a field.").is_empty(), "no tidying");
+        assert_eq!(ground(vec![rm()], c.scene(), "", "Let's get rid of the sunflower.").len(), 1);
         assert!(ground(vec![pie(&[("Other", 40.0)])], c.scene(), "", "about sixty percent").is_empty());
     }
 

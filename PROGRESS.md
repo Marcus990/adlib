@@ -205,3 +205,18 @@
   good — every wrong one had p ≤ 0.55 (eagle for misheard "Hangouts", white rose for "My grandfather",
   yin-yang for "this O"); one blocked was right (owl for "Auls", p 0.61–0.67).
 - 34/48 photos came from a chunk that literally names the library subject.
+
+## 2026-09-19 — latency changes (after checkpoint `pre-latency`), verified against a fresh baseline
+- Photo path: (1) confident partials skip confirmation (Jev p ≥ 0.6); (2) named-subject shortcut: a chunk
+  that names exactly one library subject unambiguously is searched at once, skipping the phrase model
+  (`ls_query::named_subject`; "a rose and a white rose" / "owls and penguins" still go to the model);
+  (3) board mode hold 4 s → 1.5 s (new photos add tiles, nothing flickers).
+- Canvas guards found while testing Gemini 2.5 Flash as the agent (kept for Haiku): chart-kind jumps / unrelated
+  data sets become a NEW chart (Haiku and Gemini both turned the users bar chart into the pie); a same-layout
+  redraw replaces the diagram in focus; `remove` only on a removal cue ("get rid of", "take away"…).
+- Agent model: stayed on Claude Haiku 4.5 (user decision). Gemini 2.5 Flash was ~2× faster but tidied the board
+  (removals) and skipped a clear in real replays; `CANVAS_MODEL=google/gemini-2.5-flash` to retry (thinking off).
+- Same 4 inputs, baseline → after (real models): canvas-talk 6/6, 0 FP both; keyword→photo p50 1232 → 402 ms;
+  14:40 AirPods word→photo 1685 → 337 ms; 15:05 AirPods 3310 → 1508 ms (and keeps the sunflower the baseline
+  missed; both roses side by side); graphics-talk final board identical (users bars, 60/30/10 pie, cycle);
+  graphics latency unchanged (Haiku, ~1.5–2.5 s after the sentence).
