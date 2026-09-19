@@ -89,4 +89,16 @@ class H(BaseHTTPRequestHandler):
 
 
 print(f"mock OpenRouter on :{PORT}  subjects={len(subjects)} JEV_MS={JEV} CHAT_MS={CHAT} FAIL={FAIL} SLOW={SLOW}", flush=True)
-ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+    request_queue_size = 64
+
+    def server_bind(self):
+        # HTTPServer.server_bind does a reverse-DNS getfqdn() before listening, which hangs when the
+        # network is asleep (socket stuck un-listened). Skip it.
+        import socketserver
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "localhost", self.server_address[1]
+
+
+Server(("127.0.0.1", PORT), H).serve_forever()
