@@ -30,7 +30,8 @@ mic → VAD + Whisper (local) → ┬→ Jev "change?" (OpenRouter)            �
   device lookup blocks for 5 s the app reports "audio device lookup timed out" in the debug window.
 - Demo (AirPods): `INDEX=<lib>/index.json LS_SOURCE=mic:AirPods LS_FULLSCREEN=1 ./target/release/live-slides`
   - Two windows: the full-screen stage and a debug window (live transcript, decisions, phrases, timings).
-  - `f` toggles full screen on the stage window.
+  - `f` toggles full screen on the stage window; `g` toggles the grid of every image shown so far
+    (the "deck that built itself"; it also appears automatically when a replay ends).
 - Rehearsal replay of a recording: `LS_SOURCE=wav:talk.wav ./target/release/live-slides`
 - Headless (no UI) replay with a summary: `./target/release/ls-replay talk.wav`
 - Every run writes `logs/run-<epoch>.jsonl`: chunk (asr/vad ms, lag), decide (source, action, p, ms),
