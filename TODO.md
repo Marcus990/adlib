@@ -18,16 +18,20 @@
 - [x] C Decide: Jev via OpenRouter, LLM fallback, offline heuristic, 5 tests
 - [x] D Query: OpenRouter chat JSON, 700 ms timeout, noun-phrase fallback, 5 tests
 - [x] E Stage: join + state machine, 10 tests
-- [ ] E Show: Tauri app (img:// protocol, crossfades, blurred backdrop, debug window, ack timing) — building
+- [x] E Show: Tauri app (img:// protocol, crossfades, blurred backdrop, debug window, frontend step timing)
 
 ## Integration
 - [x] Headless e2e WAV replay (ls-replay): 6/6 correct renders on dev talk, chunk-end→render p50 274 ms (offline)
-- [ ] Tauri app: WAV replay → screen
-- [ ] Tauri app: live mic (needs user at the machine; AirPods)
-- [ ] Remote models: rerun replay with OPENROUTER_API_KEY; record Jev/query latency + quality
+- [x] Tauri app: WAV replay → screen (3-min rehearsal 15/15, all frames received/decoded/painted)
+- [ ] BLOCKED (user): live mic — CoreAudio unavailable unattended; mic permission prompt; default input is BlackHole
+- [ ] BLOCKED (user): OPENROUTER_API_KEY → rerun rehearsal, record Jev/query latency + quality
 - [ ] Demo library + demo talk (humans), recalibrate τ, rehearsals ×3
 
 ## Known issues / follow-ups
-- [ ] One ASR outlier 2.5 s in first replay — investigate (Metal contention with CPU CLIP?)
-- [ ] Search embeds up to 3 phrases sequentially (~68 ms) — batch into one forward pass
+- [x] ASR 2.2 s spikes = whisper temperature fallback → disabled; max now 412 ms
+- [x] Batching phrases rejected (no padding mask in Candle OpenCLIP → cos 0.963); sequential kept
 - [ ] Heuristic decider over-triggers on repeated subject variants (sunflower → flower)
+- [x] Mic device lookup can hang → 5 s timeout + clear error in debug window
+- [ ] Stretch (P2): end-of-talk grid of shown images
+- [ ] With real Jev: watch for over-triggering on variants of the same subject (sunflower → flower)
+- [ ] Clean build from scratch before the demo (`cargo clean` then `CARGO_BUILD_JOBS=2 cargo build --release`, ~20 min)
