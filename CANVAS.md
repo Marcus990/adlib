@@ -61,3 +61,15 @@ Offline rules (no key): "compare/versus/side by side" → compare; "focus on/thi
 - Real-model replay (fixtures/audio/graphics-talk.wav, Haiku 4.5): users 2K → 15K → 40K as bars, pie
   60/30/10, a 4-step flow that became a cycle on "it all runs in a loop"; graphics land 1.1–2.7 s after the
   sentence. canvas-talk unchanged: 6/6, 0 false positives, p50 1.1 s.
+
+## "Live sketch" theme (2026-09-19, default; `LS_THEME=slate` restores the dark cards)
+- Warm paper with fibre grain; photos are taped polaroids (tilt + tape angle seeded by element id) with a
+  handwritten caption; diagrams/charts are drawn straight onto the page.
+- `app/dist/sketch.js` (same `render(svg, el, W, H, seen, full)` API as graphics.js): hand-drawn primitives —
+  bowed strokes that overshoot their ends, loose ellipses that overlap where they started, clipped hatching,
+  two-stroke arrowheads; colour washes deliberately offset from outlines. Seeded PRNG per element/node, so a
+  graphic never re-wobbles on re-render. Strokes draw themselves (dash offset); handwriting writes left→right.
+- Fonts are macOS built-ins (Noteworthy → Chalkboard SE → Marker Felt), no downloads.
+- Highlights are red marker circles around the tile with a handwritten label; arrows are sketched curves.
+- Preview without the app: serve the repo root, open /app/dist/index.html (loads preview.js), call
+  `demo.photos() / demo.charts() / demo.diagrams() / demo.board() / demo.full('pie')`; `?theme=slate` for the old look.

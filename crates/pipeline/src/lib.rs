@@ -363,6 +363,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
     let mut recent: std::collections::VecDeque<String> = Default::default();
     // A number / structure word was heard; ask the agent once the sentence is complete.
     let mut graphic_pending = false;
+    let mut last_clear: Option<Instant> = None;
     let caption_of = |id: &str| -> String {
         engine.searcher.index.entries.iter().find(|e| e.id == id).map(|e| e.caption.clone()).unwrap_or_else(|| id.to_string())
     };
@@ -453,8 +454,16 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                             });
                         }
                     }
-                    Msg::Agent(version, ops, src, chunk_id, ms) => {
+                    Msg::Agent(version, mut ops, src, chunk_id, ms) => {
                         agent_busy = false;
+                        // One clear per section cue: the partial and the final of "let's move on to one
+                        // last thing…" both asked to clear, wiping a photo that had just appeared (09-19).
+                        if last_clear.is_some_and(|t: Instant| t.elapsed() < Duration::from_secs(6)) {
+                            ops.retain(|o| !matches!(o, ls_canvas::Op::ClearBoard));
+                        }
+                        if ops.iter().any(|o| matches!(o, ls_canvas::Op::ClearBoard)) {
+                            last_clear = Some(Instant::now());
+                        }
                         let applied = canvas.apply(version, &ops, chunk_id);
                         log.log(json!({"ev": "agent", "chunk_id": chunk_id, "source": format!("{src:?}"), "ms": ms,
                             "ops": ops, "applied": applied.is_some(), "stale": version != canvas.scene().version && applied.is_none()}));
@@ -519,7 +528,10 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
         if cfg.canvas {
             for ev in fresh {
                 let scene = match (ev.kind, ev.image_id.as_deref()) {
-                    ("clear", _) | (_, None) => canvas.clear(ev.chunk_id),
+                    ("clear", _) | (_, None) => {
+                        last_clear = Some(Instant::now());
+                        canvas.clear(ev.chunk_id)
+                    }
                     ("update", Some(id)) => canvas.update(id, &caption_of(id), ev.url.as_deref().unwrap_or_default(), ev.chunk_id),
                     (_, Some(id)) => canvas.render(id, &caption_of(id), ev.url.as_deref().unwrap_or_default(), ev.chunk_id),
                 };
