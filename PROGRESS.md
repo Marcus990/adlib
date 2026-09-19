@@ -155,3 +155,22 @@
   (3) Whisper initial prompt = library subjects ("red roads" → "red rose"). (TODO B2)
 - Asked for panda / panther / heron — not in the 43-image dev library (library gap, expected).
 - Re-verified on canvas-talk with real models: 6/6, 0 false positives, keyword→render p50 1150 ms.
+
+## 2026-09-19 — second live test (AirPods, noisy room) → ASR fixes
+- Live: 168 chunks of mostly abstract talk, 1 image ("prize track" → medal, no cue needed); supplement gate
+  stayed quiet on garble. Problems: Whisper base.en garbled noisy speech + repetition loops; the vocab
+  prompt leaked library words ("white rose, blue rose, blue rose…") → removed (WHISPER_VOCAB=1 opt-in).
+- Fixes: repeat-collapse in clean(), suppress non-speech tokens, token cap per window; mic sessions are
+  recorded to logs/run-*.wav (replay with ls-replay); query timeout 900 ms; `_exit` on quit (no ggml abort).
+- ASR bake-off on fixtures/audio/canvas-talk-noisy.wav (TTS + competing talker −9 dB + hiss + low-pass):
+
+  | model | audio ctx | WER | keywords | asr p50 / p90 |
+  |---|---|---|---|---|
+  | base.en | full 30 s | 45.7% | 4/10 | 293 / 408 ms |
+  | base.en | floor 768 | 30.4% | 7/10 | 170 / 248 ms |
+  | small.en | full | 17.4% | 10/10 | 963 / 1241 ms |
+  | **small.en** | **floor 768 (15 s)** | **16.3%** | **10/10** | **423 / 641 ms** |
+  | small.en | exact length / floor 512 | 28.3% | 9/10 | ~320 / 600 ms |
+
+  → default small.en + audio-ctx floor 768 + ASR tick 600 ms. Full pipeline, real models: noisy talk 6/6,
+  0 false positives, keyword→render p50 1384 ms; clean talk 6/6 (+ golf, now expected in supplement mode).
