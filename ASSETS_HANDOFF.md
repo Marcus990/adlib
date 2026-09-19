@@ -50,18 +50,33 @@ Iconify data, so a re-run can differ slightly from the shipped card.
 
 Goal: text query → best photo from our 15,000, using our embeddings.
 
-- [ ] **AS1 (me, M, P0) CLIP ViT-B/32 text encoder in Candle.** Load `openai/clip-vit-base-patch32`
+- [x] **AS1 DONE (Rust side, 09-19).** `crates/search/src/assets.rs::ClipText` — text tower only, built from
+      `openai/clip-vit-base-patch32`'s `pytorch_model.bin` (that repo has no safetensors) and converted once into
+      `models/clip-vit-b32/clip-text-vit-b32.safetensors` (254 MB) so later starts mmap it. **Measured on the
+      8 GB M2: 19–21 ms per phrase on CPU** (MobileCLIP was 21 ms, so no latency regression), model load 1.3 s
+      warm / 3.0 s on the converting run. Original task text below.
+      **AS1 (me, M, P0) CLIP ViT-B/32 text encoder in Candle.** Load `openai/clip-vit-base-patch32`
       (HF; `model.safetensors` + `tokenizer.json`, context 77). Only the *text* tower runs at query time; images
       are precomputed. Check `candle_transformers::models::clip` supports the ViT-B/32 config
       (`ClipConfig::vit_base_patch32()`); output = projected text features, then L2-normalize. **Measure CPU
       latency of one query on the 8 GB Mac** (not measured by us; your MobileCLIP-S2 choice was made for speed).
-- [ ] **AS2 (me, S, P0) `.npy` + manifest loader.** Parse npy v1 (little-endian f32, shape `(N,512)`, 128-byte
+- [x] **AS2 DONE (09-19).** `assets::load_index` parses npy v1/v2 (little-endian f32, C order, shape checked
+      against the manifest), L2-normalizes rows on load, and builds the existing `Index`/`Entry` in memory, so
+      `Match`, the LRU cache and `img://` are untouched. `file` is relative (`images/<filename>`), root =
+      `LS_ASSETS`. COCO rows keep an empty caption and read as "photo" in board summaries. Prompts and the
+      named-subject shortcut now use `Index::vocab(200)` (distinct labels by frequency) instead of 15k captions;
+      image prefetch is skipped above 256 entries. Unit-tested with a synthetic card. Original task text below.
+      **AS2 (me, S, P0) `.npy` + manifest loader.** Parse npy v1 (little-endian f32, shape `(N,512)`, 128-byte
       header — file size is exactly `15000*512*4 + 128`), L2-normalize rows, keep in RAM (~31 MB). Build your
       existing in-memory `Entry {id, file, caption, img, cap}` from it (`caption` = `class_label` or empty,
       `cap` empty) so `Match`, the LRU image cache and the `img://` protocol keep working unchanged. Point at the
       library with a new env var (suggest `LS_ASSETS=/Volumes/NO NAME/assets`); resolve `file` relative to it
       (your C1: no absolute paths).
-- [ ] **AS3 (me, S, P0) Recalibrate `TAU`.** 0.52 was calibrated for MobileCLIP. CLIP ViT-B/32 image–text cosines
+- [~] **AS3 IN PROGRESS.** `TAU` defaults to **0.25** whenever `LS_ASSETS` is set (0.52 stays for MobileCLIP),
+      but this is a guess from your handoff, **not calibrated** — the card was not mounted on this machine, so no
+      real scores exist yet. `ls-assets <assets-dir> <clip-text-dir> "phrase"…` prints the top 5 with scores and
+      timings; run it on the card to pick the threshold. Original task text below.
+      **AS3 (me, S, P0) Recalibrate `TAU`.** 0.52 was calibrated for MobileCLIP. CLIP ViT-B/32 image–text cosines
       are typically much lower (expect roughly 0.2–0.35 for good matches — verify), so the current default would
       reject nearly everything. Use `ls-calibrate` with a phrase→image set (your C5).
 - [ ] **AS4 (me, S, P1) Query phrasing.** CLIP text tends to match better with "a photo of a {x}". A/B it against
@@ -200,3 +215,16 @@ edge pixels. **Not verified:** anything in Rust; end-to-end behavior; text→ima
 
 Secrets: nothing secret is committed. `baseten/.env` (the Baseten key) is local only and ignored; put the key in
 your own `.env`.
+
+
+## Status from the Rust side (2026-09-19, Claude Code session)
+
+Done: **AS1, AS2** (photo search runs on your embeddings behind `LS_ASSETS`), plus the `ls-assets` query CLI.
+Not done: AS3 calibration (needs the card), AS4–AS6, AS7–AS10 (icons), AS11–AS14 (generation).
+
+Blocked on hardware: the card was never mounted here (`/Volumes` had only Macintosh HD), so **retrieval quality
+and TAU are unverified** — AS5 remains open. Everything else was measured: text encode 19–21 ms/phrase on CPU,
+index load 0.6 ms per 64 rows (≈150 ms for 15k, plus reading 31 MB off the card), brute-force search 48 µs per
+64 rows (≈11 ms over 15k).
+
+To try it: `LS_ASSETS="/Volumes/NO NAME/assets" ./demo.sh window airpods`.

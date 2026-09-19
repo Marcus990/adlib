@@ -50,6 +50,10 @@ With no mic named, the app prefers AirPods, then the MacBook mic, and never a vi
   frontend_ack (decode + receive→paint ms).
 
 ## Tuning knobs
+- `LS_ASSETS` (asset card root, e.g. `/Volumes/NO NAME/assets`) — switches photo search to Marcus's 15k-photo
+  library (OpenAI CLIP ViT-B/32 embeddings, see ASSETS_HANDOFF.md). Unset = the local MobileCLIP index.
+- `CLIP_TEXT_DIR` (default `models/clip-vit-b32`) — `tokenizer.json` + `pytorch_model.bin` from
+  openai/clip-vit-base-patch32; the text tower is extracted once into `clip-text-vit-b32.safetensors`.
 - `LS_THEME` (`sketch` = paper + hand-drawn graphics, default; `slate` = dark cards).
 - `TAU` (image score threshold, default 0.52 — recalibrate per library with `ls-calibrate` (labels TSV: phrase<TAB>image_id or -)).
 - Stage holds/probabilities: `crates/stage` `StageConfig` (4 s render hold, 1.5 s update, p ≥ 0.6/0.7).
