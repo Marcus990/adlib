@@ -423,7 +423,10 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                                 recent.pop_front();
                             }
                         }
-                        let displayed = stage.displayed();
+                        let mut displayed = stage.displayed();
+                        if cfg.canvas {
+                            displayed.on_screen = ls_canvas::board_summary(canvas.scene());
+                        }
                         let prev = prev_final.clone();
                         if c.is_final {
                             prev_final = c.text.clone();

@@ -181,3 +181,12 @@
   candidates expire after 2.5 s (two weak matches 11 s apart had "confirmed" an Earth photo).
 - Probe harness for agent prompts: `cargo test -p ls-agent dump_tools -- --ignored --nocapture` + a JSON of
   board/speech cases → call OpenRouter directly (faster than a 90 s replay per prompt change).
+
+## 2026-09-19 — Jev sees the whole board
+- `Displayed.on_screen` (one line per tile: photos, charts with values, diagrams with steps) is passed to Jev
+  next to the focused photo; the question says "not already on screen, as a photo or covered by a chart or
+  diagram", with refinements/variants ("make that the white one", "X and a Y") counting as new.
+- A/B on real Jev (2 test talks + 2 AirPods recordings): "show" decisions −20–35%; "side-by-side of a rose and
+  a white rose" now keeps both (was replaced as a refinement); canvas-talk 6/6, 0 false positives.
+- Prompt probe: `cargo test -p ls-decide dump_jev_cases -- --ignored --nocapture` → POST each to
+  /api/alpha/decisions (6 cases: refine, side-by-side, chart covers it, already shown, new subject, filler).

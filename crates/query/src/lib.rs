@@ -95,7 +95,7 @@ impl QueryClient {
 }
 
 fn blank() -> Displayed {
-    Displayed { image_id: None, caption: None, trigger_text: String::new(), shown_at_ms: 0 }
+    Displayed::default()
 }
 
 fn truncate(s: &str, n: usize) -> &str {

@@ -604,6 +604,41 @@ fn op_name(op: &Op) -> String {
     }
 }
 
+/// One short line per tile, for Jev's `on_screen` (09-19: without it Jev couldn't see that a chart already
+/// covered "200 users… 500…", and photo searches competed with the chart).
+pub fn board_summary(scene: &Scene) -> Vec<String> {
+    let n = scene.elements.len();
+    let num = |v: f64| {
+        let a = v.abs();
+        let t = |x: f64| format!("{x:.1}").trim_end_matches(".0").to_string();
+        if a >= 1e9 { format!("{}B", t(v / 1e9)) } else if a >= 1e6 { format!("{}M", t(v / 1e6)) } else if a >= 1e3 { format!("{}K", t(v / 1e3)) } else { t(v) }
+    };
+    scene
+        .elements
+        .iter()
+        .map(|e| {
+            let focus = if e.focus && n > 1 { " (in focus)" } else { "" };
+            match (&e.diagram, &e.chart) {
+                (Some(d), _) => {
+                    let labels: Vec<&str> = d.nodes.iter().map(|x| x.label.as_str()).collect();
+                    let body = match d.layout {
+                        DiagramLayout::Hub if labels.len() > 1 => format!("{} — {}", labels[0], labels[1..].join(", ")),
+                        DiagramLayout::Cycle => format!("{} → (repeats)", labels.join(" → ")),
+                        _ => labels.join(" → "),
+                    };
+                    format!("{:?} diagram{}: {body}{focus}", d.layout, d.title.as_deref().map(|t| format!(" '{t}'")).unwrap_or_default()).to_lowercase()
+                }
+                (_, Some(c)) => {
+                    let unit = c.unit.as_deref().map(|u| if u.trim() == "%" { "%".to_string() } else { format!(" {u}") }).unwrap_or_default();
+                    let pts: Vec<String> = c.points.iter().map(|p| format!("{} {}{unit}", p.label, num(p.value))).collect();
+                    format!("{:?} chart{}: {}{focus}", c.kind, c.title.as_deref().map(|t| format!(" '{t}'")).unwrap_or_default(), pts.join(", ")).to_lowercase()
+                }
+                _ => format!("photo: {}{focus}", e.caption.split('(').next().unwrap_or(&e.caption).trim()),
+            }
+        })
+        .collect()
+}
+
 /// The presenter explicitly closes a section — the only time the agent may clear the board.
 pub fn has_section_cue(text: &str) -> bool {
     let t = text.to_lowercase().replace('’', "'");
@@ -901,6 +936,20 @@ mod tests {
         // image refinement still targets the image, not the focused chart
         let s = c.update("owl", "owl", "u", 4);
         assert!(s.elements.iter().any(|e| e.image_id == "owl") && !s.elements.iter().any(|e| e.image_id == "eagle"));
+    }
+
+    #[test]
+    fn board_summary_lists_every_tile() {
+        let mut c = Canvas::new();
+        add(&mut c, "penguin");
+        let s = c.apply(c.scene().version, &[Op::DrawChart { kind: ChartKind::Bar, title: Some("Users".into()), unit: Some("users".into()),
+            points: pts(&[("Last year", 200.0), ("This year", 1500.0)]) }], 2).unwrap();
+        let s = c.apply(s.version, &[Op::DrawDiagram { layout: DiagramLayout::Cycle, title: None, nodes: ns(&["Listen", "Decide", "Show"]), edges: vec![] }], 3).unwrap();
+        assert_eq!(board_summary(&s), vec![
+            "photo: penguin".to_string(),
+            "bar chart 'users': last year 200 users, this year 1.5k users".to_string(),
+            "cycle diagram: listen → decide → show → (repeats) (in focus)".to_string(),
+        ]);
     }
 
     #[test]
