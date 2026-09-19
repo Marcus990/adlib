@@ -24,6 +24,10 @@ mic → VAD + Whisper (local) → ┬→ Jev "change?" (OpenRouter)            �
 
 ## Run
 
+- **Pick the mic by name.** On this Mac the default input is "BlackHole 2ch" (a virtual loopback), so
+  `LS_SOURCE=mic` alone would hear silence. Use `mic:AirPods` (or `mic:MacBook Air Microphone`).
+  The first live run will trigger macOS's microphone permission prompt for the terminal/app; if the
+  device lookup blocks for 5 s the app reports "audio device lookup timed out" in the debug window.
 - Demo (AirPods): `INDEX=<lib>/index.json LS_SOURCE=mic:AirPods LS_FULLSCREEN=1 ./target/release/live-slides`
   - Two windows: the full-screen stage and a debug window (live transcript, decisions, phrases, timings).
   - `f` toggles full screen on the stage window.

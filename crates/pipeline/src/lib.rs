@@ -129,6 +129,7 @@ enum Msg {
     Chunk(Chunk, ChunkTiming, u64 /* wall ms when emitted */),
     AudioStart(u64),
     HearDone,
+    HearError(String),
     Decision(ls_contracts::ChangeDecision, Source, u64, u64),
     Search(SearchOutcome, ls_contracts::QueryResult, Vec<ls_search::PhraseHit>, u64, u64, u64),
 }
@@ -224,6 +225,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
             if let Err(e) = r {
                 log.log(json!({"ev": "hear_error", "error": format!("{e:#}")}));
                 eprintln!("hear error: {e:#}");
+                let _ = tx.send(Msg::HearError(format!("{e:#}")));
             }
             let _ = tx.send(Msg::HearDone);
         });
@@ -268,6 +270,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                 match msg {
                     Msg::AudioStart(t) => audio_t0 = t,
                     Msg::HearDone => hear_done_at = Some(Instant::now()),
+                    Msg::HearError(e) => sink.status(&json!({"type": "error", "error": e})),
                     Msg::Chunk(c, tm, wall) => {
                         summary.chunks += 1;
                         chunk_end_wall.insert(c.id, audio_t0 + c.t_end_ms);

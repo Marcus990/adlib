@@ -29,6 +29,7 @@
     else if (s.type === 'decide') add('decide', `#${s.chunk_id} jev ${s.action} p=${s.p.toFixed(2)} (${s.source}, ${s.ms} ms)`);
     else if (s.type === 'search') add('search', `#${s.chunk_id} ${JSON.stringify(s.phrases)} → ${s.best ?? '—'} ${s.score?.toFixed(3) ?? ''} (q ${s.query_ms} ms${s.fallback ? ' fallback' : ''}, s ${s.search_ms} ms)`);
     else if (s.type === 'outcome') add(s.outcome === 'rendered' ? 'render' : '', `#${s.chunk_id} → ${s.outcome}${s.image_id ? ' ' + s.image_id : ''}${s.latency_ms != null ? ' (' + s.latency_ms + ' ms)' : ''}`);
+    else if (s.type === 'error') { document.getElementById('state').textContent = 'ERROR: ' + s.error; add('decide', 'ERROR ' + s.error); }
     else if (s.type === 'summary') add('render', 'SUMMARY ' + JSON.stringify(s));
   });
 </script>

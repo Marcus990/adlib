@@ -326,14 +326,25 @@ pub mod audio {
         device_hint: Option<&str>,
     ) -> anyhow::Result<(cpal::Stream, std::sync::mpsc::Receiver<Vec<f32>>, String)> {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-        let host = cpal::default_host();
-        let dev = match device_hint {
-            Some(h) => host
-                .input_devices()?
-                .find(|d| d.name().map(|n| n.to_lowercase().contains(&h.to_lowercase())).unwrap_or(false))
-                .ok_or_else(|| anyhow::anyhow!("no input device matching {h:?}"))?,
-            None => host.default_input_device().ok_or_else(|| anyhow::anyhow!("no default input device"))?,
-        };
+        // Device lookup can block inside CoreAudio (seen with the iPhone Continuity mic and when mic
+        // permission is pending), so resolve it on a helper thread with a timeout.
+        let hint = device_hint.map(|h| h.to_lowercase());
+        let (dtx, drx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let host = cpal::default_host();
+            let dev = match &hint {
+                Some(h) => host
+                    .input_devices()
+                    .ok()
+                    .and_then(|mut it| it.find(|d| d.name().map(|n| n.to_lowercase().contains(h)).unwrap_or(false))),
+                None => host.default_input_device(),
+            };
+            let _ = dtx.send(dev);
+        });
+        let dev = drx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .map_err(|_| anyhow::anyhow!("audio device lookup timed out after 5 s (mic permission pending? device asleep?)"))?
+            .ok_or_else(|| anyhow::anyhow!("no input device matching {device_hint:?} (see `ls-hear --list`)"))?;
         let name = dev.name().unwrap_or_default();
         let cfg = dev.default_input_config()?;
         let (ch, rate) = (cfg.channels() as usize, cfg.sample_rate().0 as usize);
