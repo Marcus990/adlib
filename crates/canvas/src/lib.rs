@@ -479,10 +479,12 @@ impl Canvas {
                 // Models often redraw a diagram instead of extending it: if one on the board shares
                 // most of these nodes, replace it in place (keeps its tile and the animation calm).
                 let labels: Vec<&str> = d.nodes.iter().map(|n| n.label.as_str()).collect();
+                // …and a same-layout diagram while one is in focus is that explanation being reworked
+                // ("it runs in a loop … we listen, we decide, we show" drew a 2nd cycle, 09-19).
                 let twin = self.scene.elements.iter().position(|e| {
                     e.diagram.as_ref().is_some_and(|o| {
                         let shared = o.nodes.iter().filter(|n| labels.iter().any(|l| same(l, &n.label))).count();
-                        shared * 2 >= o.nodes.len().max(2)
+                        shared * 2 >= o.nodes.len().max(2) || (e.focus && o.layout == d.layout)
                     })
                 });
                 let caption = d.title.clone().unwrap_or_else(|| labels.join(" → "));
@@ -539,6 +541,21 @@ impl Canvas {
                 true
             }
             Op::UpdateChart { id, kind, title, points } => {
+                // A different kind of chart (bar → pie) or a data set sharing no labels with this chart is a
+                // NEW chart, not an update: 09-19, "60% of them are students" turned the users bar chart
+                // into a pie and wiped it (both Haiku and Gemini did this).
+                if let Some(old) = self.scene.elements.iter().find(|e| &e.id == id).and_then(|e| e.chart.as_ref()) {
+                    let pie = |k: ChartKind| k == ChartKind::Pie;
+                    let kind_jump = kind.is_some_and(|k| pie(k) != pie(old.kind));
+                    let fresh: Vec<Point> = clean_points(points).into_iter().filter(|p| !old.points.iter().any(|o| same(&o.label, &p.label) && o.value == p.value)).collect();
+                    // related = shares a label or a value ("Stoned 60%" → "Students 60%" is a correction, not a new chart)
+                    let unrelated = !old.points.is_empty() && !points.is_empty()
+                        && !points.iter().any(|p| old.points.iter().any(|o| same(&o.label, &p.label) || o.value == p.value));
+                    if kind_jump || unrelated {
+                        let k = kind.unwrap_or(old.kind);
+                        return !fresh.is_empty() && self.apply_one(&Op::DrawChart { kind: k, title: title.clone(), unit: None, points: fresh });
+                    }
+                }
                 let Some(e) = self.scene.elements.iter_mut().find(|e| &e.id == id && e.chart.is_some()) else { return false };
                 if let Some(t) = title.as_deref().map(|t| short(t, 48)).filter(|t| !t.is_empty()) {
                     e.caption = t.clone();
@@ -645,6 +662,19 @@ pub fn has_section_cue(text: &str) -> bool {
     [
         "move on", "moving on", "next topic", "new section", "set that aside", "start fresh", "switch gears",
         "switching gears", "next up", "clean slate", "clear the screen", "change of topic", "different topic",
+    ]
+    .iter()
+    .any(|c| t.contains(c))
+}
+
+/// The presenter asks for something to be taken off the screen — the only time the agent may remove a tile
+/// (09-19: Gemini "tidied" the board, removing photos 0.6 s after they appeared).
+pub fn has_removal_cue(text: &str) -> bool {
+    let t = text.to_lowercase().replace('’', "'");
+    [
+        "remove", "get rid of", "take away", "take that away", "take it away", "take that down", "take it down", "put that aside",
+        "put it aside", "set aside", "set that aside", "forget the", "forget about", "drop the", "hide the", "don't need the",
+        "no longer need",
     ]
     .iter()
     .any(|c| t.contains(c))
@@ -950,6 +980,34 @@ mod tests {
             "bar chart 'users': last year 200 users, this year 1.5k users".to_string(),
             "cycle diagram: listen → decide → show → (repeats) (in focus)".to_string(),
         ]);
+    }
+
+    #[test]
+    fn a_new_breakdown_is_a_new_chart_and_reworks_stay_in_one_diagram() {
+        let mut c = Canvas::new();
+        let s = c.apply(0, &[Op::DrawChart { kind: ChartKind::Bar, title: Some("Users".into()), unit: None, points: pts(&[("Last year", 2000.0), ("This year", 15000.0)]) }], 1).unwrap();
+        let users = s.elements[0].id.clone();
+        // the model "updates" the users chart into a pie that keeps the old points plus a new share
+        let s = c.apply(s.version, &[Op::UpdateChart { id: users.clone(), kind: Some(ChartKind::Pie), title: Some("Who".into()),
+            points: pts(&[("Last year", 2000.0), ("This year", 15000.0), ("Students", 60.0)]) }], 2).unwrap();
+        assert_eq!(s.elements.len(), 2, "pie is a new tile");
+        assert_eq!(s.elements[0].chart.as_ref().unwrap().points.len(), 2, "users chart untouched");
+        assert_eq!(s.elements[1].chart.as_ref().unwrap().points, pts(&[("Students", 60.0)]), "old series not copied into the pie");
+        // a misheard label corrected (same value) stays the same chart
+        let pie_id = s.elements[1].id.clone();
+        let s = c.apply(s.version, &[Op::UpdateChart { id: pie_id, kind: None, title: None, points: pts(&[("Students", 60.0), ("Teachers", 30.0), ("Parents", 10.0)]) }], 2).unwrap();
+        assert_eq!(s.elements.len(), 2, "correction in place");
+        assert_eq!(s.elements[1].chart.as_ref().unwrap().points.len(), 3);
+        let users = s.elements[0].id.clone();
+        // a data set with no labels or values in common is also a new chart
+        let s = c.apply(s.version, &[Op::UpdateChart { id: users, kind: None, title: None, points: pts(&[("Paris", 3.0), ("Tokyo", 5.0)]) }], 3).unwrap();
+        assert_eq!(s.elements.len(), 3);
+        // diagrams: a same-layout redraw while a diagram is in focus replaces it
+        let s = c.apply(s.version, &[Op::DrawDiagram { layout: DiagramLayout::Cycle, title: None, nodes: ns(&["Speak", "Transcribe", "Decide", "Show"]), edges: vec![] }], 4).unwrap();
+        let n = s.elements.len();
+        let s = c.apply(s.version, &[Op::DrawDiagram { layout: DiagramLayout::Cycle, title: Some("How it works".into()), nodes: ns(&["Listen", "Decide", "Show"]), edges: vec![] }], 5).unwrap();
+        assert_eq!(s.elements.len(), n, "reworked in place");
+        assert_eq!(s.elements.iter().find(|e| e.focus).unwrap().diagram.as_ref().unwrap().nodes.len(), 3);
     }
 
     #[test]

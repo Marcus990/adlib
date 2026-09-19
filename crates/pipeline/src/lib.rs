@@ -48,6 +48,14 @@ impl Config {
         if env("CONFIRM").as_deref() == Some("0") {
             stage.confirm_partials = false;
         }
+        // Board mode: a new photo adds a tile instead of replacing one, so the single-image anti-flicker hold
+        // (4 s) only delayed back-to-back subjects ("owls and penguins" waited up to 3.3 s). HOLD_MS overrides.
+        if env("LS_MODE").map(|m| m != "single").unwrap_or(true) {
+            stage.hold_render_ms = 1500;
+        }
+        if let Some(h) = env("HOLD_MS").and_then(|v| v.parse().ok()) {
+            stage.hold_render_ms = h;
+        }
         Self {
             // small.en: 16% WER / 10 of 10 keywords on the noisy fixture vs base.en 46% / 4 of 10, at
             // 423 ms p50 with the audio-context floor (PROGRESS 09-19). Falls back to base.en if absent.
@@ -445,7 +453,12 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                             let (e, tx, c, d, prev, log) = (engine.clone(), tx.clone(), c.clone(), displayed, prev, log.clone());
                             tokio::spawn(async move {
                                 let t = log.now_ms();
-                                let q = e.query.query(c.id, &prev, &c.text, &d).await;
+                                // The speech names one library subject outright → search it now; the phrase
+                                // model (≈0.45 s, mostly network) is only needed to interpret the speech.
+                                let q = match ls_query::named_subject(&c.text, e.query.vocab()) {
+                                    Some(s) => ls_contracts::QueryResult { chunk_id: c.id, phrases: vec![s], from_fallback: false, named: true },
+                                    None => e.query.query(c.id, &prev, &c.text, &d).await,
+                                };
                                 let tq = log.now_ms();
                                 let (e2, phrases, on_screen) = (e.clone(), q.phrases.clone(), d.image_id.clone());
                                 let res = tokio::task::spawn_blocking(move || e2.searcher.best_match_avoiding(&e2.clip, c.id, &phrases, on_screen.as_deref())).await;
@@ -499,7 +512,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                         if q.from_fallback {
                             summary.query_fallbacks += 1;
                         }
-                        log.log(json!({"ev": "search", "chunk_id": s.chunk_id, "phrases": q.phrases, "fallback": q.from_fallback,
+                        log.log(json!({"ev": "search", "chunk_id": s.chunk_id, "phrases": q.phrases, "fallback": q.from_fallback, "named": q.named,
                             "query_ms": t_query - t_start, "search_ms": t_end - t_query,
                             "best": s.best.as_ref().map(|m| json!({"id": m.image_id, "score": m.score, "phrase": m.phrase})),
                             "hits": hits.iter().map(|h| json!({"phrase": h.phrase, "id": h.id, "score": h.score})).collect::<Vec<_>>()}));

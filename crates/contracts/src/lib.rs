@@ -57,6 +57,9 @@ pub struct QueryResult {
     pub chunk_id: u64,
     pub phrases: Vec<String>,
     pub from_fallback: bool,
+    /// The speech named one library subject outright, so the phrase model was skipped (≈0.45 s saved).
+    #[serde(default)]
+    pub named: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

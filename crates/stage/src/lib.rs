@@ -27,6 +27,9 @@ pub struct StageConfig {
     /// A new image from an in-progress (non-final) phrase must be matched by two consecutive
     /// updates before it shows — partial transcripts misfire ("what a bald…" heard as "what a ball is").
     pub confirm_partials: bool,
+    /// …unless Jev is this confident: on 09-19 logs every wrong candidate the rule caught had p ≤ 0.55,
+    /// while 34 of 42 correct ones had p ≥ 0.6 and paid ~0.6 s for the wait.
+    pub confirm_below_p: f32,
 }
 
 impl Default for StageConfig {
@@ -40,6 +43,7 @@ impl Default for StageConfig {
             hold_update_ms: 1500,
             join_timeout_ms: 1000,
             confirm_partials: true,
+            confirm_below_p: 0.6,
         }
     }
 }
@@ -240,7 +244,7 @@ impl Stage {
                     return Outcome::Duplicate;
                 }
                 let confirmed = matches!(&self.candidate, Some((id, t)) if id == &m.image_id && now_ms.saturating_sub(*t) <= CANDIDATE_TTL_MS);
-                if self.cfg.confirm_partials && !self.finals.contains(&d.chunk_id) && !confirmed {
+                if self.cfg.confirm_partials && d.p < self.cfg.confirm_below_p && !self.finals.contains(&d.chunk_id) && !confirmed {
                     self.candidate = Some((m.image_id.clone(), now_ms));
                     return Outcome::Unconfirmed;
                 }
@@ -314,6 +318,17 @@ mod tests {
         assert_eq!(s.on_decision(dec(1, 1, Action::NoChange, 0.99), 0), Some(Outcome::NoChange));
         s.on_search(found(2, "eagle", 0.6), 0);
         assert_eq!(s.on_decision(dec(2, 2, Action::NewRender, 0.3), 0), Some(Outcome::BelowProbability));
+    }
+
+    #[test]
+    fn confident_partials_skip_confirmation() {
+        let mut s = Stage::new(StageConfig::default());
+        // chunk 1 is a partial: weak evidence waits for a second agreeing update …
+        s.on_search(found(1, "eagle", 0.6), 0);
+        assert_eq!(s.on_decision(dec(1, 1, Action::NewRender, 0.5), 0), Some(Outcome::Unconfirmed));
+        // … strong evidence shows at once
+        s.on_search(found(2, "owl", 0.6), 100);
+        assert!(matches!(s.on_decision(dec(2, 2, Action::NewRender, 0.8), 100), Some(Outcome::Rendered(_))));
     }
 
     #[test]
@@ -414,12 +429,13 @@ mod tests {
     #[test]
     fn partials_need_two_agreeing_updates_finals_do_not() {
         let mut s = Stage::new(StageConfig::default());
+        // (weak evidence, p < confirm_below_p — confident partials skip this; see confident_partials_skip_confirmation)
         s.on_search(found(1, "8ball", 0.6), 0);
-        assert_eq!(s.on_decision(dec(1, 1, Action::NewRender, 0.9), 0), Some(Outcome::Unconfirmed));
+        assert_eq!(s.on_decision(dec(1, 1, Action::NewRender, 0.5), 0), Some(Outcome::Unconfirmed));
         s.on_search(found(2, "eagle", 0.6), 800);
-        assert_eq!(s.on_decision(dec(2, 2, Action::NewRender, 0.9), 800), Some(Outcome::Unconfirmed), "disagreeing update resets");
+        assert_eq!(s.on_decision(dec(2, 2, Action::NewRender, 0.5), 800), Some(Outcome::Unconfirmed), "disagreeing update resets");
         s.on_search(found(3, "eagle", 0.6), 1600);
-        assert_eq!(rendered(s.on_decision(dec(3, 3, Action::NewRender, 0.9), 1600)).image_id.as_deref(), Some("eagle"));
+        assert_eq!(rendered(s.on_decision(dec(3, 3, Action::NewRender, 0.5), 1600)).image_id.as_deref(), Some("eagle"));
         // A final chunk shows immediately.
         s.on_chunk(&Chunk { id: 9, text: "take a look at this owl".into(), t_start_ms: 0, t_end_ms: 1, is_final: true });
         s.on_search(found(9, "owl", 0.6), 9000);

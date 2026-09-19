@@ -384,7 +384,6 @@ mod tests {
         d
     }
 
-    #[test]
     /// `cargo test -p ls-decide dump_jev_cases -- --ignored --nocapture` → real request bodies for probes.
     #[test]
     #[ignore]
