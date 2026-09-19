@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+hound = "3"
 ls-contracts = { path = "../contracts" }
 ls-hear = { path = "../hear" }
 ls-search = { path = "../search" }

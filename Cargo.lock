@@ -2721,6 +2721,7 @@ name = "live-slides"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "libc",
  "ls-canvas",
  "ls-contracts",
  "ls-pipeline",
@@ -2808,6 +2809,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "dotenvy",
+ "hound",
  "ls-agent",
  "ls-canvas",
  "ls-contracts",
