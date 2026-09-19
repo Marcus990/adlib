@@ -32,7 +32,7 @@ impl Default for StageConfig {
             p_render: 0.6,
             p_update: 0.6,
             p_clear: 0.7,
-            tau: 0.475,
+            tau: 0.477,
             hold_render_ms: 4000,
             hold_update_ms: 1500,
             join_timeout_ms: 1000,

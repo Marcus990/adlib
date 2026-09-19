@@ -7,6 +7,23 @@ use std::time::{Duration, Instant};
 
 fn main() -> anyhow::Result<()> {
     let a: Vec<String> = std::env::args().collect();
+    if a.get(1).map(|s| s.as_str()) == Some("--probe") {
+        // Capture only: prove audio blocks arrive, with level. `ls-hear --probe [device] [secs]`
+        let hint = a.get(2).map(|s| s.as_str()).filter(|s| *s != "default");
+        let secs: u64 = a.get(3).and_then(|s| s.parse().ok()).unwrap_or(3);
+        let (_s, rx, name) = audio::capture(hint)?;
+        let t0 = Instant::now();
+        let (mut n, mut samples, mut peak) = (0usize, 0usize, 0f32);
+        while t0.elapsed() < Duration::from_secs(secs) {
+            if let Ok(b) = rx.recv_timeout(Duration::from_millis(200)) {
+                n += 1;
+                samples += b.len();
+                peak = b.iter().fold(peak, |m, x| m.max(x.abs()));
+            }
+        }
+        println!("device={name:?} blocks={n} seconds_of_audio={:.2} peak={peak:.4}", samples as f32 / SR as f32);
+        return Ok(());
+    }
     if a.get(1).map(|s| s.as_str()) == Some("--list") {
         for d in audio::list_inputs() {
             println!("{d}");
