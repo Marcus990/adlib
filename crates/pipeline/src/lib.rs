@@ -211,7 +211,22 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                         emit(ch.finish()?);
                     }
                     AudioSource::Mic { device } => {
-                        let (_stream, arx, name) = audio::capture(device.as_deref())?;
+                        // Keep retrying: the first launch of the app waits on macOS's microphone
+                        // permission prompt, and a Bluetooth mic can take a moment to appear.
+                        let (_stream, arx, name) = loop {
+                            match audio::capture(device.as_deref()) {
+                                Ok(c) => break c,
+                                Err(e) => {
+                                    if stop.load(Ordering::Relaxed) {
+                                        return Ok(());
+                                    }
+                                    log.log(json!({"ev": "mic_retry", "error": format!("{e:#}")}));
+                                    let _ = tx.send(Msg::Status(json!({"type": "error",
+                                        "error": format!("waiting for microphone ({e:#}) — allow the macOS prompt / connect the mic; retrying")})));
+                                    std::thread::sleep(Duration::from_secs(3));
+                                }
+                            }
+                        };
                         log.log(json!({"ev": "mic", "device": name}));
                         let _ = tx.send(Msg::Status(json!({"type": "mic", "device": name})));
                         let _ = tx.send(Msg::AudioStart(log.now_ms()));
@@ -270,7 +285,10 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
             msg = rx.recv() => {
                 let Some(msg) = msg else { break };
                 match msg {
-                    Msg::AudioStart(t) => audio_t0 = t,
+                    Msg::AudioStart(t) => {
+                        audio_t0 = t;
+                        sink.status(&json!({"type": "mic_ok"})); // audio is flowing → "listening"
+                    }
                     Msg::HearDone => hear_done_at = Some(Instant::now()),
                     Msg::HearError(e) => sink.status(&json!({"type": "error", "error": e})),
                     Msg::Status(v) => sink.status(&v),

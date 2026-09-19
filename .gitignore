@@ -6,3 +6,4 @@ logs/
 *.wav
 !fixtures/**/*.wav
 dev-library/
+build/

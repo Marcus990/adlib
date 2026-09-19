@@ -44,6 +44,10 @@ impl RenderSink for TauriSink {
                 let s = self.state.merge(json!({"source": format!("mic: {}", v["device"].as_str().unwrap_or("?"))}));
                 let _ = self.app.emit("state", s);
             }
+            Some("mic_ok") => {
+                let s = self.state.merge(json!({"phase": "listening", "error": null}));
+                let _ = self.app.emit("state", s);
+            }
             Some("error") => {
                 let s = self.state.merge(json!({"phase": "error", "error": v["error"]}));
                 let _ = self.app.emit("state", s);
@@ -140,7 +144,6 @@ fn main() -> anyhow::Result<()> {
             tauri::async_runtime::spawn(async move {
                 engine.warm_up(&log).await;
                 let sink = Arc::new(TauriSink { app: handle.clone(), state: state.clone() });
-                let _ = handle.emit("state", state.merge(json!({"phase": "listening"})));
                 match run(engine, src, sink, log.clone(), Arc::new(AtomicBool::new(false))).await {
                     Ok(s) => {
                         let _ = handle.emit("talk_end", ());
