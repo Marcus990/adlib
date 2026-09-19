@@ -79,6 +79,9 @@
   function toggleGrid(on) {
     const g = $('grid');
     if (on) {
+      // Enough columns that every image fits on one screen (≈16:10 tiles).
+      const cols = Math.max(3, Math.ceil(Math.sqrt(shown.length * 1.4 * innerWidth / innerHeight / 1.6)));
+      g.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
       g.innerHTML = '';
       shown.forEach((u, i) => { const im = document.createElement('img'); im.src = u; im.style.transitionDelay = (i * 60) + 'ms'; g.appendChild(im); });
     }

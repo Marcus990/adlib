@@ -329,34 +329,50 @@ pub mod audio {
         // Device lookup can block inside CoreAudio (seen with the iPhone Continuity mic and when mic
         // permission is pending), so resolve it on a helper thread with a timeout.
         let hint = device_hint.map(|h| h.to_lowercase());
-        let (dtx, drx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let host = cpal::default_host();
-            let dev = match &hint {
-                Some(h) => host
-                    .input_devices()
-                    .ok()
-                    .and_then(|mut it| it.find(|d| d.name().map(|n| n.to_lowercase().contains(h)).unwrap_or(false))),
-                // No hint: prefer AirPods, then the built-in mic; never a virtual loopback (BlackHole,
-                // Teams Audio…) that happens to be the system default and would hear silence.
-                None => {
-                    let devs: Vec<_> = host.input_devices().map(|it| it.collect()).unwrap_or_default();
-                    let name = |d: &cpal::Device| d.name().unwrap_or_default().to_lowercase();
-                    let virtual_dev = |n: &str| ["blackhole", "teams", "zoom", "loopback", "soundflower", "aggregate"].iter().any(|v| n.contains(v));
-                    let pos = |want: &str| devs.iter().position(|d| name(d).contains(want));
-                    pos("airpods")
-                        .or_else(|| pos("macbook"))
-                        .or_else(|| devs.iter().position(|d| !virtual_dev(&name(d))))
-                        .map(|i| devs[i].clone())
-                        .or_else(|| host.default_input_device())
-                }
-            };
-            let _ = dtx.send(dev);
-        });
-        let dev = drx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .map_err(|_| anyhow::anyhow!("audio device lookup timed out after 5 s (mic permission pending? device asleep?)"))?
-            .ok_or_else(|| anyhow::anyhow!("no input device matching {device_hint:?} (see `ls-hear --list`)"))?;
+        // At most one lookup in flight: if an earlier one is still blocked (e.g. on the permission
+        // prompt), wait on it again instead of piling up blocked threads on every retry.
+        static PENDING: std::sync::Mutex<Option<(Option<String>, std::sync::mpsc::Receiver<Option<cpal::Device>>)>> =
+            std::sync::Mutex::new(None);
+        let mut pending = PENDING.lock().unwrap();
+        let reuse = matches!(&*pending, Some((h, _)) if *h == hint);
+        if !reuse {
+            let (dtx, drx) = std::sync::mpsc::channel();
+            let hint2 = hint.clone();
+            std::thread::spawn(move || {
+                let host = cpal::default_host();
+                let dev = match &hint2 {
+                    Some(h) => host
+                        .input_devices()
+                        .ok()
+                        .and_then(|mut it| it.find(|d| d.name().map(|n| n.to_lowercase().contains(h)).unwrap_or(false))),
+                    // No hint: prefer AirPods, then the built-in mic; never a virtual loopback (BlackHole,
+                    // Teams Audio…) that happens to be the system default and would hear silence.
+                    None => {
+                        let devs: Vec<_> = host.input_devices().map(|it| it.collect()).unwrap_or_default();
+                        let name = |d: &cpal::Device| d.name().unwrap_or_default().to_lowercase();
+                        let virtual_dev = |n: &str| ["blackhole", "teams", "zoom", "loopback", "soundflower", "aggregate"].iter().any(|v| n.contains(v));
+                        let pos = |want: &str| devs.iter().position(|d| name(d).contains(want));
+                        pos("airpods")
+                            .or_else(|| pos("macbook"))
+                            .or_else(|| devs.iter().position(|d| !virtual_dev(&name(d))))
+                            .map(|i| devs[i].clone())
+                            .or_else(|| host.default_input_device())
+                    }
+                };
+                let _ = dtx.send(dev);
+            });
+            *pending = Some((hint.clone(), drx));
+        }
+        let (h, drx) = pending.take().expect("lookup just ensured");
+        let dev = match drx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(d) => d.ok_or_else(|| anyhow::anyhow!("no input device matching {device_hint:?} (see `ls-hear --list`)"))?,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                *pending = Some((h, drx)); // still blocked: the next call waits on this same lookup
+                anyhow::bail!("audio device lookup timed out after 5 s (mic permission pending? device asleep?)")
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => anyhow::bail!("audio device lookup failed"),
+        };
+        drop(pending);
         let name = dev.name().unwrap_or_default();
         let cfg = dev.default_input_config()?;
         let (ch, rate) = (cfg.channels() as usize, cfg.sample_rate().0 as usize);
