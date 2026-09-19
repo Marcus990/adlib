@@ -33,7 +33,7 @@ impl Default for StageConfig {
     fn default() -> Self {
         Self {
             p_render: 0.6,
-            p_update: 0.6,
+            p_update: 0.4, // real Jev: "make that the white rose" → update at P≈0.4–0.5 (intent × kind)
             p_clear: 0.7,
             tau: 0.477,
             hold_render_ms: 4000,
