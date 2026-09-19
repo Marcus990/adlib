@@ -19,12 +19,16 @@ pub struct Chunk {
 }
 
 /// What is on screen (or pending), including the transcript that triggered it (§7.1).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Displayed {
     pub image_id: Option<String>,
     pub caption: Option<String>,
     pub trigger_text: String,
     pub shown_at_ms: u64,
+    /// Canvas mode: one line per tile on the board (photos, charts with values, diagrams with steps),
+    /// so Jev can tell when the talk is already illustrated. `caption` stays the focused photo.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub on_screen: Vec<String>,
 }
 
 // ---- Branch 1: Jev (whether) ----

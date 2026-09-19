@@ -35,8 +35,9 @@ pub const DEFAULT_JEV_MODEL: &str = "typesafe/jev-1.13";
 pub const DECIDE_BUDGET: Duration = Duration::from_millis(1100);
 
 const CONTEXT: &str = "A presenter is speaking live and visuals on a screen behind them illustrate the talk. \
-`displayed` is the main picture now on screen and `displayed.trigger_text` is what they said when it went up. \
-`prev` is their previous phrase and `curr` is what they are saying right now.";
+`on_screen` lists everything on the screen now (photos, charts, diagrams); `displayed` is the photo in focus \
+and `displayed.trigger_text` is what they said when it went up. `prev` is their previous phrase and `curr` is \
+what they are saying right now.";
 
 const INTENT_Q: &str = "Is the presenter, in `curr`, signalling that the audience should now SEE something — \
 directing attention to a picture, photo, graphic or chart (e.g. \"here's what a watermelon looks like\", \
@@ -46,9 +47,11 @@ explicitly asking to change or clear what is shown? Merely mentioning or having 
 
 const SUPPLEMENT_Q: &str = "Is the presenter, in `curr`, now talking about a concrete subject (an object, animal, \
 plant, place, person, scene or a set of numbers) that a picture would help the audience follow, and that is \
-DIFFERENT from `displayed`? Yes when the subject is what they are talking about, even without \"here's\" or \
-\"look at\". No for filler, greetings, abstract talk with nothing to picture, or when they are still talking \
-about what is already displayed.";
+NOT already shown in `on_screen`? Yes when the subject is what they are talking about, even without \"here's\" \
+or \"look at\". Yes when they ask to change what is shown (\"make that the white one\", \"actually…\", \
+\"instead\") or want another thing next to it — a different variant counts as new (a white rose is not the red \
+rose on screen). No for filler, greetings, abstract talk with nothing to picture, or when what they are talking \
+about is already on screen — as that same photo, or covered by a chart or diagram (numbers, steps).";
 
 const KIND_Q: &str = "If the presenter wants the audience to see something, what should happen to the picture?";
 
@@ -57,8 +60,8 @@ const TOPIC_Q: &str = "Should the picture change because of `curr`?";
 /// Options for the `kind` question (intent mode).
 pub fn kind_criteria() -> serde_json::Value {
     serde_json::json!({
-        "new_render": "Show a different thing: they point the audience at a new subject",
-        "update": "Refine what is on screen: same subject, different colour, angle, version or variant",
+        "new_render": "Show a different thing: a new subject, or another thing to see NEXT TO what is shown (\"compare X and Y\", \"side by side\", \"X and a Y\")",
+        "update": "Replace the photo in focus with a variant of the same subject (different colour, angle, version) — only when they want the old one gone, not both",
         "clear": "Take the picture away: they ask the audience to look back at them or to set the images aside"
     })
 }
@@ -150,7 +153,7 @@ impl Decider {
 
     pub async fn warm_up(&self) {
         if self.api_key.is_some() {
-            let blank = Displayed { image_id: None, caption: None, trigger_text: String::new(), shown_at_ms: 0 };
+            let blank = Displayed::default();
             let _ = tokio::time::timeout(Duration::from_secs(5), self.jev("", "hello", &blank, 0)).await;
         }
     }
@@ -236,6 +239,7 @@ fn state(prev: &str, curr: &str, d: &Displayed, now_ms: u64) -> serde_json::Valu
     serde_json::json!({
         "prev": prev,
         "curr": curr,
+        "on_screen": if d.on_screen.is_empty() { vec!["nothing (blank screen)".to_string()] } else { d.on_screen.clone() },
         "displayed": {
             "caption": d.caption.clone().unwrap_or_else(|| "nothing (blank screen)".into()),
             "trigger_text": d.trigger_text,
@@ -372,12 +376,43 @@ mod tests {
     use super::*;
 
     fn disp(caption: Option<&str>) -> Displayed {
-        Displayed { image_id: None, caption: caption.map(String::from), trigger_text: "t".into(), shown_at_ms: 1000 }
+        Displayed { image_id: None, caption: caption.map(String::from), trigger_text: "t".into(), shown_at_ms: 1000, on_screen: vec![] }
     }
     fn decider(mode: Mode) -> Decider {
         let mut d = Decider::new(reqwest::Client::new(), Some("k".into()), None, "m".into(), vec![]);
         d.mode = mode;
         d
+    }
+
+    #[test]
+    /// `cargo test -p ls-decide dump_jev_cases -- --ignored --nocapture` → real request bodies for probes.
+    #[test]
+    #[ignore]
+    fn dump_jev_cases() {
+        let d = |cap: Option<&str>, board: &[&str]| { let mut x = disp(cap); x.on_screen = board.iter().map(|s| s.to_string()).collect(); x };
+        let cases = [
+            ("refine", "Picture this, a single sunflower in a field.", "And here is a red rose, actually, make that the white rose instead.", d(Some("red rose (flowers)"), &["photo: red rose"])),
+            ("side-by-side", "Owls and penguins.", "So let's do a side-by-side of a rose and a white rose.", d(Some("red rose (flowers)"), &["photo: red rose"])),
+            ("chart covers it", "When we started last year we had about 200 users.", "This year we have 500, and next year we're hoping for a thousand.", d(None, &["bar chart 'users': last year 200 users"])),
+            ("already shown", "Penguins can't fly, but they're incredible swimmers.", "They can dive more than 500 meters to find fish.", d(Some("penguin (animals)"), &["photo: penguin"])),
+            ("new subject", "Penguins can't fly, but they're incredible swimmers.", "The owl is different. Owls hunt at night.", d(Some("penguin (animals)"), &["photo: penguin"])),
+            ("filler", "Thank you, everyone.", "Okay, so, um, yeah.", d(Some("sunflower (flowers)"), &["photo: sunflower"])),
+        ];
+        for (name, prev, curr, disp) in cases {
+            println!("JEV_CASE {name}\t{}", decider(Mode::Supplement).build_request(prev, curr, &disp, 5000));
+        }
+    }
+
+    #[test]
+    fn request_carries_the_board() {
+        let mut d = disp(Some("owl (animals)"));
+        d.on_screen = vec!["photo: penguin".into(), "photo: owl (in focus)".into(), "bar chart 'users': 2024 200".into()];
+        let v = decider(Mode::Supplement).build_request("p", "c", &d, 5000);
+        assert_eq!(v["state"]["on_screen"][2], "bar chart 'users': 2024 200");
+        assert_eq!(v["state"]["displayed"]["caption"], "owl (animals)");
+        assert!(v["questions"]["intent"]["instructions"].as_str().unwrap().contains("on_screen"));
+        let blank = decider(Mode::Supplement).build_request("p", "c", &disp(None), 0);
+        assert_eq!(blank["state"]["on_screen"][0], "nothing (blank screen)");
     }
 
     #[test]

@@ -132,6 +132,7 @@ impl Stage {
             caption: v.caption.clone(),
             trigger_text: v.trigger_text.clone(),
             shown_at_ms: self.current_since_ms,
+            on_screen: vec![],
         }
     }
 
