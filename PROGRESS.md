@@ -190,3 +190,18 @@
   a white rose" now keeps both (was replaced as a refinement); canvas-talk 6/6, 0 false positives.
 - Prompt probe: `cargo test -p ls-decide dump_jev_cases -- --ignored --nocapture` → POST each to
   /api/alpha/decisions (6 cases: refine, side-by-side, chart covers it, already shown, new subject, filler).
+
+## 2026-09-19 — latency investigation (before changing anything; checkpoint tag `pre-latency`)
+- Photo path ≈ 1.6–1.8 s word→screen: transcript lag 0.2–0.55 s (p50) + join ≈ 0.5 s (phrase model ≈ 0.45 s is
+  the long pole; Jev ≈ 0.2 s) + partial confirmation ≈ 0.6 s (every photo today) + paint ≈ 0.1 s; back-to-back
+  subjects add up to 3.3 s of hold.
+- OpenRouter floor: a 1-token reply = 425–494 ms, so no phrase-model swap helps much (bake-off, 8 real moments ×2:
+  gemini-2.5-flash-lite p50 518/p90 1077 16/16; 3.1-flash-lite 530/682 16/16; gpt-4.1-nano 679 16/16;
+  gpt-oss-20b 521 8/16; llama-3.3-70b 1065 11/16; mistral-small-3.2 789 16/16).
+- Canvas agent bake-off (6 real moments ×2): haiku-4.5 1612/2216 8/12 (pie → update_chart on the users
+  chart); gemini-2.5-flash 802/1525 12/12; qwen3-235b-2507 862/1403 12/12; gemini-3.1-flash-lite 637 10/12;
+  gpt-oss-120b 467 10/12 (never clears); gpt-4.1-mini 1222 7/12.
+- Confirmation rule today: 42 candidates later confirmed (Jev p 0.45–0.93; 34 had p ≥ 0.6), 11 blocked for
+  good — every wrong one had p ≤ 0.55 (eagle for misheard "Hangouts", white rose for "My grandfather",
+  yin-yang for "this O"); one blocked was right (owl for "Auls", p 0.61–0.67).
+- 34/48 photos came from a chunk that literally names the library subject.
