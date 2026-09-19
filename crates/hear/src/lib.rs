@@ -221,6 +221,10 @@ pub mod whisper {
             p.set_print_realtime(false);
             p.set_print_timestamps(false);
             p.set_suppress_blank(true);
+            // No temperature fallback: on short/low-confidence audio it re-decodes up to 5× (measured
+            // 2.2 s spikes). One greedy pass is enough; the next tick re-transcribes anyway.
+            p.set_temperature(0.0);
+            p.set_temperature_inc(0.0);
             // Whisper needs ≥ 1 s; pad short buffers with silence.
             let padded;
             let pcm = if pcm.len() < super::SR + 1600 {
@@ -246,6 +250,7 @@ pub mod whisper {
         pub fn load(model: &str) -> anyhow::Result<Self> {
             let mut p = WhisperVadContextParams::new();
             p.set_n_threads(2);
+            p.set_use_gpu(false); // tiny model; keep Metal free for Whisper
             Ok(Self { ctx: WhisperVadContext::new(model, p)? })
         }
     }
