@@ -105,3 +105,15 @@
 - Fault run (20% HTTP 500, 10% 1.5 s stalls): found Jev 900 ms + LLM-fallback 900 ms > 1 s join window →
   54 decisions dropped. Fix: total decide budget 1.1 s (Jev 700 ms; LLM fallback only with ≥ 250 ms left,
   else local heuristic). After: 2 dropped, 15/15 correct, p50 469 ms.
+
+### Final unattended verification (clean build)
+- `cargo clean` + `CARGO_BUILD_JOBS=2 cargo build --release --workspace`: OK in 8 m 50 s, no warnings.
+- Tests: 32 unit + 1 model test (`--include-ignored`) all pass.
+- App (`live-slides`, `LS_SOURCE=wav:` rehearsal) against mock OpenRouter: 15/15 correct, 151/151 decisions via
+  Jev path, 0 fallbacks, Jev p50 155 ms, query p50 435 ms, keyword-in-transcript→render p50 512 ms, 15/15 painted,
+  end grid shown.
+- Harness bug found+fixed: Python `HTTPServer.server_bind` does reverse-DNS `getfqdn()` before listening; with the
+  network asleep it hung (socket CLOSED, every request timed out) → mock now skips it. The ~20% "fallbacks" seen in
+  two intermediate runs were this mock bug, not the client.
+- Live mic still blocked: CoreAudio device lookup blocks for this unattended process (all devices; 5 s timeout
+  triggers). Needs the user at the machine (mic permission). `ls-hear --probe AirPods 3` / `scripts/morning_check.sh`.
