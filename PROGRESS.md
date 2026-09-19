@@ -117,3 +117,14 @@
   two intermediate runs were this mock bug, not the client.
 - Live mic still blocked: CoreAudio device lookup blocks for this unattended process (all devices; 5 s timeout
   triggers). Needs the user at the machine (mic permission). `ls-hear --probe AirPods 3` / `scripts/morning_check.sh`.
+
+### Live capture verified (user present, 2026-09-19 morning)
+- Mic access now works (`ls-hear --probe "MacBook Air Microphone" 5` → 4.96 s of audio). The overnight
+  device-lookup hang was the idle/unattended session.
+- System output was muted (volume 0), so an acoustic speakers→mic self-test heard nothing (did not change
+  the user's volume). Instead: `say -a "BlackHole 2ch"` into the BlackHole virtual input, app capturing
+  live with `LS_SOURCE=mic:BlackHole` (real-time CoreAudio capture path, 48 kHz → 16 kHz).
+- Live app run, 2-min rehearsal talk: **15/15 correct, 13/13 subjects, 15/15 painted, min gap 4.0 s,
+  keyword-in-transcript→render p50 71 ms** (local fallbacks; no API key yet).
+- Remaining for the goal's exact configuration: AirPods as the input device, OPENROUTER_API_KEY for real Jev +
+  query model, then the demo library/talk.
