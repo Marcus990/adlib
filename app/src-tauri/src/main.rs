@@ -115,7 +115,9 @@ fn main() -> anyhow::Result<()> {
     let log = Logger::create(&cfg.log_path)?;
     eprintln!("log: {}  remote: {}", cfg.log_path.display(), remote);
     let (src, src_label) = source();
-    let state = AppState(Arc::new(Mutex::new(json!({"phase": "loading", "source": src_label, "remote": remote, "mode": mode}))));
+    // LS_THEME: "sketch" (default: paper, hand-drawn strokes, taped photos) or "slate" (dark cards).
+    let theme = std::env::var("LS_THEME").unwrap_or_else(|_| "sketch".into());
+    let state = AppState(Arc::new(Mutex::new(json!({"phase": "loading", "source": src_label, "remote": remote, "mode": mode, "theme": theme}))));
     let engine = Arc::new(tauri::async_runtime::block_on(Engine::load(cfg))?);
     let cache = engine.cache.clone();
 
