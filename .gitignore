@@ -7,3 +7,4 @@ logs/
 !fixtures/**/*.wav
 dev-library/
 build/
+__pycache__/

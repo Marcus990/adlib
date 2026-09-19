@@ -24,7 +24,9 @@ use std::time::Duration;
 fn base() -> String {
     std::env::var("OPENROUTER_BASE_URL").unwrap_or_else(|_| "https://openrouter.ai".into())
 }
-pub const DEFAULT_JEV_MODEL: &str = "typesafe/jev-latest";
+/// OpenRouter id for Jev on the decisions endpoint (`typesafe/jev-latest` does not exist there;
+/// `~typesafe/jev-latest` is an alias of the same model).
+pub const DEFAULT_JEV_MODEL: &str = "typesafe/jev-1.13";
 /// Total time a decision may take, fallbacks included (Jev gets 700 ms of it).
 pub const DECIDE_BUDGET: Duration = Duration::from_millis(1100);
 
@@ -369,7 +371,7 @@ mod tests {
     #[test]
     fn intent_request_asks_two_questions() {
         let v = decider(Mode::Intent).build_request("prev", "curr", &disp(Some("eagle")), 6000);
-        assert_eq!(v["model"], "typesafe/jev-latest");
+        assert_eq!(v["model"], DEFAULT_JEV_MODEL);
         assert_eq!(v["state"]["displayed"]["caption"], "eagle");
         assert_eq!(v["state"]["displayed"]["seconds_on_screen"], 5);
         assert_eq!(v["questions"]["intent"]["type"], "noul");
