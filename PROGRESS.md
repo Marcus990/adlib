@@ -273,3 +273,17 @@
   subjects within 25 s are not regenerated; vague/logo/chart subjects are refused. Saved to `generated/` and
   reused instantly on repeats.
 - canvas-talk on the card + generation: eagle and rose from the card, owl / sunflower / planet Earth drawn.
+
+
+## 2026-09-19 — Jev routes every sentence (one sentence, one visual)
+- Problem from the live run: "in the first year, we had about 200 users" drew a chart AND generated pictures of
+  "first year" and "200 users" — the photo, chart and board paths each acted on the same sentence.
+- Jev now answers `visual` (photo | photo_update | chart | diagram | board | clear | none) next to `intent`, and
+  the pipeline dispatches: photo → search (+ generation when the library has nothing and p_visual ≥ 0.8),
+  chart/diagram/board → the canvas agent with a `needs` hint, none → nothing. Keyword triggers only run when Jev
+  is unavailable.
+- **Watch the question count:** asking `intent` + `kind` + `visual` (three questions) pushed Jev past its 700 ms
+  budget and *every* decision fell back to the heuristic (a whole replay looked "routed: none"). Folding kind
+  and routing into one choice restored it: 116/117 answered by Jev, p50 212 ms.
+- Probe on real sentences: 13/15 routed right at 0.75–1.00. Replay of the chart-vs-image session: charts on the
+  numbers sentences, board ops for compare/focus/remove, and no stray generated images.

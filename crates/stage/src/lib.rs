@@ -285,7 +285,7 @@ mod tests {
     use super::*;
 
     fn dec(chunk: u64, seq: u64, action: Action, p: f32) -> ChangeDecision {
-        ChangeDecision { chunk_id: chunk, seq, action, p }
+        ChangeDecision { chunk_id: chunk, seq, action, p, ..Default::default() }
     }
     fn found(chunk: u64, id: &str, score: f32) -> SearchOutcome {
         SearchOutcome {

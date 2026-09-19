@@ -73,3 +73,10 @@ Offline rules (no key): "compare/versus/side by side" → compare; "focus on/thi
 - Highlights are red marker circles around the tile with a handwritten label; arrows are sketched curves.
 - Preview without the app: serve the repo root, open /app/dist/index.html (loads preview.js), call
   `demo.photos() / demo.charts() / demo.diagrams() / demo.board() / demo.full('pie')`; `?theme=slate` for the old look.
+
+
+## Routing (2026-09-19)
+Jev decides the kind of visual, not keyword lists: `photo | photo_update | chart | diagram | board | clear | none`
+(one choice, alongside the intent probability, in the same ~212 ms call). The agent is called only when Jev asks
+for chart/diagram/board, and it receives `needs: "chart"|"diagram"|"board"` in its user message. The photo path
+runs only on `photo`/`photo_update`. Keyword triggers remain for the offline path.

@@ -260,6 +260,33 @@ pub mod whisper {
         }
     }
 
+    /// One pass with the confidence whisper.cpp already computes: per-token probability and the
+    /// segment's no-speech probability. Used to refuse acting on words that were barely heard.
+    pub struct Heard {
+        pub text: String,
+        /// (token text, probability) in order.
+        pub tokens: Vec<(String, f32)>,
+        pub no_speech: f32,
+    }
+
+    impl WhisperAsr {
+        pub fn transcribe_detailed(&mut self, pcm: &[f32]) -> anyhow::Result<Heard> {
+            let text = <Self as Asr>::transcribe(self, pcm)?;
+            let (mut tokens, mut no_speech) = (vec![], 0.0f32);
+            for seg in self.state.as_iter() {
+                no_speech = no_speech.max(seg.no_speech_probability());
+                for i in 0..seg.n_tokens() {
+                    if let Some(tok) = seg.get_token(i) {
+                        if let Ok(t) = tok.to_str_lossy() {
+                            tokens.push((t.to_string(), tok.token_probability()));
+                        }
+                    }
+                }
+            }
+            Ok(Heard { text, tokens, no_speech })
+        }
+    }
+
     impl Asr for WhisperAsr {
         fn transcribe(&mut self, pcm: &[f32]) -> anyhow::Result<String> {
             let mut p = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
