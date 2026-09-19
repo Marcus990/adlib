@@ -49,13 +49,15 @@ fn main() -> Result<()> {
 
     let t = Instant::now();
     let mut embs = vec![];
-    for chunk in paths.chunks(8) {
+    let bs: usize = std::env::var("BATCH").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+    for chunk in paths.chunks(bs) {
         let imgs: Vec<Tensor> = chunk.iter().map(|p| load_image(p, cfg.image_size, &dev)).collect::<Result<_>>()?;
         let batch = Tensor::stack(&imgs, 0)?;
         let tb = Instant::now();
         let e = l2(&model.get_image_features(&batch)?)?;
         let _ = e.flatten_all()?.to_vec1::<f32>()?; // force sync
-        println!("  batch of {}: {} ms", chunk.len(), tb.elapsed().as_millis());
+        let rss = std::process::Command::new("ps").args(["-o","rss=","-p",&std::process::id().to_string()]).output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+        println!("  batch of {}: {} ms  rss={} KB", chunk.len(), tb.elapsed().as_millis(), rss);
         embs.push(e);
     }
     let img_emb = Tensor::cat(&embs, 0)?;
