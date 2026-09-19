@@ -17,7 +17,8 @@ Return JSON only: {\"phrases\": [...]} with 1 to 3 short, concrete, visual noun 
 Focus on the NEWEST speech. Drop filler words. Resolve references using what is on screen \
 (\"make it red\" with a car on screen -> \"red car\"). If the presenter points at something (\"here's…\", \"take a look at…\", \"picture this…\"), the thing they point at comes first. \
 If the talk is abstract, name the most picturable concrete thing mentioned. \
-Prefer words used in the library list when they fit.";
+Prefer words used in the library list when they fit. \
+Do NOT include what is already on screen unless the newest speech is about it.";
 
 #[derive(Clone)]
 pub struct QueryClient {

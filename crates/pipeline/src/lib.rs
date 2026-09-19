@@ -198,6 +198,8 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
     let cfg = engine.cfg.clone();
     let (tx, mut rx) = mpsc::unbounded_channel::<Msg>();
 
+    // Library subjects as a Whisper vocabulary hint ("red rose" not "red roads").
+    let vocab: Vec<String> = engine.searcher.index.entries.iter().map(|e| e.caption.split('(').next().unwrap_or(&e.caption).trim().to_string()).collect();
     // ---- Track A on its own OS thread (Whisper is blocking). ----
     {
         let tx = tx.clone();
@@ -206,7 +208,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
         std::thread::spawn(move || {
             let r = (|| -> anyhow::Result<()> {
                 let t = Instant::now();
-                let asr = whisper::WhisperAsr::load(cfg.whisper_model.to_str().unwrap())?;
+                let asr = whisper::WhisperAsr::load(cfg.whisper_model.to_str().unwrap())?.with_vocabulary(&vocab);
                 let vad = whisper::SileroVad::load(cfg.vad_model.to_str().unwrap())?;
                 log.log(json!({"ev": "hear_loaded", "ms": t.elapsed().as_millis() as u64}));
                 let mut ch = Chunker::new(cfg.chunker, asr, vad);
@@ -376,8 +378,8 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                                 let t = log.now_ms();
                                 let q = e.query.query(c.id, &prev, &c.text, &d).await;
                                 let tq = log.now_ms();
-                                let (e2, phrases) = (e.clone(), q.phrases.clone());
-                                let res = tokio::task::spawn_blocking(move || e2.searcher.best_match(&e2.clip, c.id, &phrases)).await;
+                                let (e2, phrases, on_screen) = (e.clone(), q.phrases.clone(), d.image_id.clone());
+                                let res = tokio::task::spawn_blocking(move || e2.searcher.best_match_avoiding(&e2.clip, c.id, &phrases, on_screen.as_deref())).await;
                                 let (best, hits) = match res {
                                     Ok(Ok(v)) => v,
                                     _ => (None, vec![]),

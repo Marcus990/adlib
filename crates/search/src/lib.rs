@@ -173,6 +173,12 @@ impl Searcher {
     /// First phrase's best image, unless another phrase's best scores ≥ 0.05 higher (§7.3).
     /// τ is applied later by the stage, so a weak best is still returned (and logged).
     pub fn best_match(&self, clip: &Clip, chunk_id: u64, phrases: &[String]) -> Result<(Option<Match>, Vec<PhraseHit>)> {
+        self.best_match_avoiding(clip, chunk_id, phrases, None)
+    }
+
+    /// Like `best_match`, but a secondary phrase may not win by pointing at `on_screen` (the query
+    /// model tends to repeat the on-screen subject; live test: ["panther", "white rose"] → white rose).
+    pub fn best_match_avoiding(&self, clip: &Clip, chunk_id: u64, phrases: &[String], on_screen: Option<&str>) -> Result<(Option<Match>, Vec<PhraseHit>)> {
         let mut hits = vec![];
         for p in phrases.iter().take(3) {
             let q = clip.embed_text(&self.query_text(p))?;
@@ -180,7 +186,7 @@ impl Searcher {
                 hits.push(h);
             }
         }
-        Ok((pick(&hits).map(|h| Match {
+        Ok((pick_avoiding(&hits, on_screen).map(|h| Match {
             chunk_id,
             image_id: h.id.clone(),
             caption: h.caption.clone(),
@@ -191,8 +197,15 @@ impl Searcher {
 }
 
 pub fn pick(hits: &[PhraseHit]) -> Option<&PhraseHit> {
+    pick_avoiding(hits, None)
+}
+
+pub fn pick_avoiding<'a>(hits: &'a [PhraseHit], on_screen: Option<&str>) -> Option<&'a PhraseHit> {
     let first = hits.first()?;
-    let best_other = hits[1..].iter().max_by(|a, b| a.score.partial_cmp(&b.score).unwrap());
+    let best_other = hits[1..]
+        .iter()
+        .filter(|h| Some(h.id.as_str()) != on_screen)
+        .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap());
     match best_other {
         Some(o) if o.score + 1e-6 >= first.score + 0.05 => Some(o),
         _ => Some(first),
@@ -303,6 +316,8 @@ mod tests {
         assert_eq!(pick(&[h("a", 0.30), h("b", 0.34)]).unwrap().id, "a");
         assert_eq!(pick(&[h("a", 0.30), h("b", 0.35)]).unwrap().id, "b");
         assert!(pick(&[]).is_none());
+        // the on-screen image can't win through a secondary phrase
+        assert_eq!(pick_avoiding(&[h("panther", 0.40), h("white-rose", 0.59)], Some("white-rose")).unwrap().id, "panther");
     }
 
     #[test]
