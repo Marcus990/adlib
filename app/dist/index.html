@@ -257,7 +257,8 @@
   let resizeT = 0;
   addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => lastScene && renderScene(lastScene), 150); });
   listen('state', e => applyState(e.payload));
-  listen('talk_end', () => { toggleGrid(true); fe('grid', null, shown.length, 'talk_end'); });
+  // Canvas mode: the board itself is the summary (it holds diagrams and charts the photo grid can't show).
+  listen('talk_end', () => { if (mode === 'canvas') return; toggleGrid(true); fe('grid', null, shown.length, 'talk_end'); });
   listen('render', e => { const t = performance.now(); fe('received', e.payload.chunk_id, 0, e.payload.kind); if (mode !== 'canvas') show(e.payload, t); });
   invoke('app_state').then(applyState).catch(() => {});
   fe('loaded', null, null, location.href);
