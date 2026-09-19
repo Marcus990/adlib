@@ -6,11 +6,11 @@
 <style>
   /* One theme (design doc §2): background, backdrop treatment and motion, all as variables. */
   :root {
-    --bg: #07080c;
+    --bg: #000;            /* pure black: matches the notch band macOS paints in full screen */
     --backdrop-blur: 70px;
-    --backdrop-dim: 0.32;
+    --backdrop-dim: 0.22;
     --backdrop-sat: 1.25;
-    --vignette: radial-gradient(ellipse at center, rgba(0,0,0,0) 45%, rgba(0,0,0,0.55) 100%);
+    --vignette: radial-gradient(ellipse at center, rgba(0,0,0,0.25) 30%, rgba(0,0,0,0.75) 100%);
     --drift-scale: 1.035;   /* slow zoom over a held image */
     --drift-ms: 9000ms;
     --enter-scale: 1.015;   /* new image settles into place while it fades in */
@@ -22,7 +22,7 @@
   .slot .bg { object-fit: cover; filter: blur(var(--backdrop-blur)) brightness(var(--backdrop-dim)) saturate(var(--backdrop-sat)); transform: scale(1.25); }
   .slot .vig { position: absolute; inset: 0; background: var(--vignette); pointer-events: none; }
   .slot .fg { object-fit: cover; transform-origin: 50% 45%; }
-  .slot.fit .fg { object-fit: contain; filter: drop-shadow(0 2.5vh 5vh rgba(0,0,0,0.55)); }
+  .slot.fit .fg { object-fit: contain; filter: drop-shadow(0 3vh 7vh rgba(0,0,0,0.85)); }
   .slot.fit .fg { inset: 5vh 5vw; width: 90vw; height: 90vh; }
   .slot:not(.fit) .bg, .slot:not(.fit) .vig { display: none; }
   .slot.on .fg { animation: drift var(--drift-ms) ease-out forwards; }
