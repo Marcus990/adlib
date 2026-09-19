@@ -10,6 +10,7 @@ find "/Library/User Pictures" -name '*.heic' | sort | while read -r f; do
   name=$(basename "$f" .heic)
   id="${cat}-$(echo "$name" | tr 'A-Z ' 'a-z-')"
   sips -s format jpeg "$f" --out "$OUT/$id.jpg" >/dev/null
-  printf '%s\t%s\n' "$id" "$(echo "$name" | tr 'A-Z' 'a-z') ($cat)" >> "$OUT/captions.tsv"
+  cap=$(echo "$name" | tr 'A-Z' 'a-z' | sed -e 's/whiterose/white rose/' -e 's/8ball/eight ball/')
+  printf '%s\t%s\n' "$id" "$cap ($cat)" >> "$OUT/captions.tsv"
 done
 echo "built $(wc -l < "$OUT/captions.tsv") images in $OUT"
