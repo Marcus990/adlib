@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Live Slides",
+  "version": "0.1.0",
+  "identifier": "dev.liveslides.poc",
+  "build": { "frontendDist": "../dist" },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      { "label": "main", "title": "Live Slides", "url": "index.html", "width": 1280, "height": 720, "backgroundColor": "#0b0d12" },
+      { "label": "debug", "title": "Live Slides — debug", "url": "debug.html", "width": 560, "height": 720, "x": 40, "y": 40 }
+    ],
+    "security": { "csp": null }
+  },
+  "bundle": { "active": false, "icon": ["icons/icon.png"] }
+}
