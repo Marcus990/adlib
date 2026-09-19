@@ -648,6 +648,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dotenvy"
+version = "0.15.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
+
+[[package]]
 name = "dyn-stack"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1690,6 +1696,24 @@ dependencies = [
  "ls-contracts",
  "serde_json",
  "whisper-rs",
+]
+
+[[package]]
+name = "ls-pipeline"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dotenvy",
+ "ls-contracts",
+ "ls-decide",
+ "ls-hear",
+ "ls-query",
+ "ls-search",
+ "ls-stage",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
