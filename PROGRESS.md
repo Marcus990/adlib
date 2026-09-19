@@ -95,3 +95,13 @@
     (+ ≤ 0.75 s ASR tick ⇒ ~0.1–0.9 s from the spoken word). The only slow render (2.4 s) was a hold.
   - Run B (invalid OpenRouter key → real 401s → fallbacks): 15/15 correct, decide p50 30 ms, query p50 17 ms.
 - Dev-library captions fixed ("whiterose" → "white rose", "8ball" → "eight ball"); re-indexed in 65 s.
+
+### Hosted-model path tested without a key (mock OpenRouter)
+- `scripts/mock_openrouter.py <captions.tsv> 8787` serves Jev-shaped `/api/alpha/decisions` and chat-shaped
+  `/api/v1/chat/completions` with vendor-like latency (Jev 70–500 ms skewed low, chat 300–550 ms) and
+  fault injection (FAIL_RATE, SLOW_RATE). Point the app at it with `OPENROUTER_BASE_URL=http://127.0.0.1:8787 OPENROUTER_API_KEY=mock`.
+- Clean latency run: 15/15 correct, all 151 decisions via the Jev path, decide p50 179 ms, query p50 427 ms,
+  keyword-in-transcript→render p50 428 ms (+ ≤ 0.75 s ASR tick ⇒ ~0.4–1.2 s from the word). Query branch dominates.
+- Fault run (20% HTTP 500, 10% 1.5 s stalls): found Jev 900 ms + LLM-fallback 900 ms > 1 s join window →
+  54 decisions dropped. Fix: total decide budget 1.1 s (Jev 700 ms; LLM fallback only with ≥ 250 ms left,
+  else local heuristic). After: 2 dropped, 15/15 correct, p50 469 ms.

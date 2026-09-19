@@ -13,9 +13,13 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::time::Duration;
 
-const DECISIONS_URL: &str = "https://openrouter.ai/api/alpha/decisions";
-const CHAT_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
+/// OpenRouter base URL; override with OPENROUTER_BASE_URL (e.g. a local mock for latency tests).
+fn base() -> String {
+    std::env::var("OPENROUTER_BASE_URL").unwrap_or_else(|_| "https://openrouter.ai".into())
+}
 pub const DEFAULT_JEV_MODEL: &str = "typesafe/jev-latest";
+/// Total time a decision may take, fallbacks included (Jev gets 700 ms of it).
+pub const DECIDE_BUDGET: Duration = Duration::from_millis(1100);
 
 const INSTRUCTIONS: &str = "A presenter is speaking live and one picture is on screen behind them. \
 `displayed` is the picture now on screen and `displayed.trigger_text` is what they said when it went up. \
@@ -55,7 +59,7 @@ impl Decider {
             api_key: api_key.filter(|k| !k.trim().is_empty()),
             jev_model: jev_model.unwrap_or_else(|| DEFAULT_JEV_MODEL.into()),
             chat_model,
-            timeout: Duration::from_millis(900),
+            timeout: Duration::from_millis(700),
             vocab,
         }
     }
@@ -83,16 +87,22 @@ impl Decider {
 
     /// Never fails: on any error it degrades to the next fallback. Returns the source for logging.
     pub async fn decide(&self, chunk_id: u64, seq: u64, prev: &str, curr: &str, d: &Displayed, now_ms: u64) -> (ChangeDecision, Source) {
+        // Whole decision must land inside the stage's 1 s join window (measured: 900 + 900 ms
+        // Jev-then-LLM timeouts made fallback answers arrive too late to be used).
+        let started = std::time::Instant::now();
         if self.api_key.is_some() {
             match tokio::time::timeout(self.timeout, self.jev(prev, curr, d, now_ms)).await {
                 Ok(Ok((action, p))) => return (ChangeDecision { chunk_id, seq, action, p }, Source::Jev),
                 Ok(Err(e)) => eprintln!("decide: jev error: {e:#}"),
                 Err(_) => eprintln!("decide: jev timed out after {:?}", self.timeout),
             }
-            match tokio::time::timeout(self.timeout, self.llm(prev, curr, d)).await {
-                Ok(Ok(action)) => return (ChangeDecision { chunk_id, seq, action, p: 0.7 }, Source::LlmFallback),
-                Ok(Err(e)) => eprintln!("decide: llm fallback error: {e:#}"),
-                Err(_) => eprintln!("decide: llm fallback timed out"),
+            let left = DECIDE_BUDGET.saturating_sub(started.elapsed());
+            if left >= Duration::from_millis(250) {
+                match tokio::time::timeout(left, self.llm(prev, curr, d)).await {
+                    Ok(Ok(action)) => return (ChangeDecision { chunk_id, seq, action, p: 0.7 }, Source::LlmFallback),
+                    Ok(Err(e)) => eprintln!("decide: llm fallback error: {e:#}"),
+                    Err(_) => eprintln!("decide: llm fallback timed out"),
+                }
             }
         }
         let (action, p) = heuristic(curr, d, &self.vocab);
@@ -101,7 +111,7 @@ impl Decider {
 
     async fn jev(&self, prev: &str, curr: &str, d: &Displayed, now_ms: u64) -> anyhow::Result<(Action, f32)> {
         let body = self.build_request(prev, curr, d, now_ms);
-        let resp = self.http.post(DECISIONS_URL).bearer_auth(self.api_key.as_deref().unwrap_or_default()).json(&body).send().await?;
+        let resp = self.http.post(format!("{}/api/alpha/decisions", base())).bearer_auth(self.api_key.as_deref().unwrap_or_default()).json(&body).send().await?;
         let status = resp.status();
         let text = resp.text().await?;
         if !status.is_success() {
@@ -123,7 +133,7 @@ impl Decider {
             "temperature": 0, "max_tokens": 20,
             "provider": {"sort": "latency"}
         });
-        let resp = self.http.post(CHAT_URL).bearer_auth(self.api_key.as_deref().unwrap_or_default()).json(&body).send().await?;
+        let resp = self.http.post(format!("{}/api/v1/chat/completions", base())).bearer_auth(self.api_key.as_deref().unwrap_or_default()).json(&body).send().await?;
         let status = resp.status();
         let text = resp.text().await?;
         if !status.is_success() {

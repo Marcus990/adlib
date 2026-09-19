@@ -7,7 +7,10 @@ use serde::Deserialize;
 use std::time::Duration;
 
 pub const DEFAULT_MODEL: &str = "google/gemini-2.5-flash-lite";
-const OPENROUTER_CHAT: &str = "https://openrouter.ai/api/v1/chat/completions";
+/// OpenRouter base URL; override with OPENROUTER_BASE_URL (e.g. a local mock for latency tests).
+fn base() -> String {
+    std::env::var("OPENROUTER_BASE_URL").unwrap_or_else(|_| "https://openrouter.ai".into())
+}
 
 const SYSTEM_PROMPT: &str = "You turn a live presenter's speech into image search phrases for a local photo library. \
 Return JSON only: {\"phrases\": [...]} with 1 to 3 short, concrete, visual noun phrases (2-5 words each), most important first. \
@@ -79,7 +82,7 @@ impl QueryClient {
             "max_tokens": 60,
             "provider": {"sort": "latency"}
         });
-        let resp = self.http.post(OPENROUTER_CHAT).bearer_auth(key).json(&body).send().await?;
+        let resp = self.http.post(format!("{}/api/v1/chat/completions", base())).bearer_auth(key).json(&body).send().await?;
         let status = resp.status();
         let text = resp.text().await?;
         if !status.is_success() {
