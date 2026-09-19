@@ -1506,6 +1506,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ls-stage"
+version = "0.1.0"
+dependencies = [
+ "ls-contracts",
+]
+
+[[package]]
 name = "macro_rules_attribute"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
