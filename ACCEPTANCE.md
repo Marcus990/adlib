@@ -17,6 +17,7 @@ real key**, and the **live AirPods path has not been run** — both need the use
 | Image cache works | — | Met | 43/43 prefetched; img:// decode 4–146 ms; cache unit test |
 | Full-screen + crossfades | — | Built; **needs a human eyeball** | `LS_FULLSCREEN=1` / `f` key; frontend painted steps logged; screen capture impossible while display slept |
 | Survives a 3-min run | — | Met (replay, app) | 125 s app run, no errors, memory < 3.2 GB guard |
+| Live capture → full loop | — | Met with a live CoreAudio input (BlackHole ← `say`); AirPods + real hosted models pending | app, `LS_SOURCE=mic:BlackHole`: 15/15 correct, 15/15 painted, p50 71 ms |
 
 Tools for the human steps: `scripts/prepare_library.sh` (images → jpg + editable captions), `ls-index`,
 `ls-calibrate` (top-1 accuracy + best τ from labelled phrases), `scripts/eval_run.py`, and
