@@ -264,3 +264,12 @@
   is generic (tree 1661, person 673, bird 188, flower 35) with no owl/sunflower/earth, and the phrase model
   generalises ("owl" → "bird"), which then matches a real label. A scripted talk needs either generation
   (AS11/AS12) or a curated tier (AS6).
+
+## 2026-09-19 — image generation fallback (AS11–AS14)
+- `crates/gen`: SDXL-Lightning on Baseten. Cold start 146 s, warm 1.1–1.3 s @512 / ~2.0 s @768 (measured).
+  Prompt template matters: bare prompts gave colour noise for "planet Earth from space".
+- Fires on a library gap, and also when only a *related* library photo matched (near-miss suppressed).
+  Shown only if the subject is still in the latest transcript for that phrase and it is < 12 s old; similar
+  subjects within 25 s are not regenerated; vague/logo/chart subjects are refused. Saved to `generated/` and
+  reused instantly on repeats.
+- canvas-talk on the card + generation: eagle and rose from the card, owl / sunflower / planet Earth drawn.

@@ -1,3 +1,3 @@
 [workspace]
 resolver = "2"
-members = ["app/src-tauri", "crates/contracts", "crates/stage", "crates/canvas", "crates/agent", "crates/query", "crates/decide", "crates/search", "crates/hear", "crates/pipeline", "spikes/whisper", "spikes/clip"]
+members = ["app/src-tauri", "crates/contracts", "crates/stage", "crates/canvas", "crates/agent", "crates/query", "crates/gen", "crates/decide", "crates/search", "crates/hear", "crates/pipeline", "spikes/whisper", "spikes/clip"]

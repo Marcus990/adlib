@@ -360,6 +360,11 @@ impl ImageCache {
     }
 
     /// Load every image (up to the byte cap) so the talk never waits on the card.
+    /// Make an image available to `img://` that was not in the index (a generated one).
+    pub fn add(&self, id: &str, path: PathBuf) {
+        self.inner.lock().unwrap().paths.insert(id.to_string(), path);
+    }
+
     pub fn prefetch_all(&self) -> usize {
         let ids: Vec<String> = self.inner.lock().unwrap().paths.keys().cloned().collect();
         ids.iter().filter(|id| self.get(id).is_some()).count()

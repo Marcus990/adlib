@@ -178,16 +178,35 @@ Your repo has **no** generation code (grep confirms). What exists:
   **We did not record latency numbers in the repo — re-measure** (including cold start vs warm) before designing
   around them.
 
-- [ ] **AS11 (me, M, P0) `crates/gen`:** `POST` to the predict URL with header `Authorization: Api-Key $BASETEN_API_KEY`,
+- [x] **AS11 DONE (09-19).** `crates/gen` (`ls-gen::ImageGen`): POST to the predict URL with
+      `Authorization: Api-Key $BASETEN_API_KEY`, base64 → JPEG bytes, own 8 s timeout, never blocks the loop.
+      **Measured from this Mac: 146 s cold start (scaled to zero), then 1.1–1.3 s at 512 px and ~2.0 s at
+      768 px.** `warm_up()` is fired in the background at launch so the first real request is warm. Bare
+      prompts were unusable ("planet Earth from space" → colour noise); the template
+      `"{}, high quality photograph, sharp focus, natural colors, plain background"` at 768 px gives good
+      results. Original task text below.
+      **AS11 (me, M, P0) `crates/gen`:** `POST` to the predict URL with header `Authorization: Api-Key $BASETEN_API_KEY`,
       body `{prompt,width,height}`, decode base64 → bytes. Own timeout; never blocks the pipeline (like
       `crates/query`). Add `BASETEN_API_KEY=` and the URL to `.env.example`. **Never commit `.env`** (already
       ignored by your `.gitignore`).
-- [ ] **AS12 (both, P0) Trigger policy.** Generate only when display-intent says show AND the best library score
+- [x] **AS12 DONE (09-19).** Generation fires when the stage reports a library gap (Jev wants a photo, nothing
+      passed the label gate). It also fires when the library only had a *related* thing — a second-phrase hit
+      like "flower" for "sunflower" is suppressed while generation is on, because the exact subject beats a
+      near-miss. The picture is shown only if the subject is still in that phrase's latest transcript and the
+      phrase is < 12 s old, so a mis-transcribed partial never lands. Similar subjects within 25 s are not
+      generated twice ("planet Earth" vs "planet Earth from space"). Original task text below.
+      **AS12 (both, P0) Trigger policy.** Generate only when display-intent says show AND the best library score
       is below `TAU` (after AS3). Generation will exceed your ~1 s join window: reuse the stage "pending" mechanism
       — hold the previous image / a placeholder, then swap in when it lands; drop it if the talk moved on.
-- [ ] **AS13 (me, S, P1) Persist + gap report.** Save generated images into a `generated/` folder with their
+- [x] **AS13 PARTLY DONE (09-19).** Generated images are saved to `generated/<slug>.jpg` (gitignored) and
+      reused instantly on a repeat — a rehearsed talk re-runs with no API calls at all. The gap report
+      (`scripts/gaps.py`) is still to do. Original task text below.
+      **AS13 (me, S, P1) Persist + gap report.** Save generated images into a `generated/` folder with their
       prompt as caption and log the miss — this is your C3 gap report (`scripts/gaps.py`). Photos only.
-- [ ] **AS14 (both, P1) Policy:** never generate logos, icons or text-bearing images (models render them badly —
+- [x] **AS14 PARTLY DONE (09-19).** `ImageGen::refuses` blocks logos, icons, brands, screenshots, charts,
+      diagrams and text-bearing subjects, and vague ones ("a single scene"). Theme-matched prompt styling is
+      still to do. Original task text below.
+      **AS14 (both, P1) Policy:** never generate logos, icons or text-bearing images (models render them badly —
       the reason the icon library exists); those come from the library or are omitted. Match the prompt style to
       the active theme. 512 px is the fast default; the stage is full-bleed, so decide upscale vs `1024`.
 
@@ -227,4 +246,11 @@ and TAU are unverified** — AS5 remains open. Everything else was measured: tex
 index load 0.6 ms per 64 rows (≈150 ms for 15k, plus reading 31 MB off the card), brute-force search 48 µs per
 64 rows (≈11 ms over 15k).
 
-To try it: `LS_ASSETS="/Volumes/NO NAME/assets" ./demo.sh window airpods`.
+To try it: `LS_ASSETS="/Volumes/NO NAME/assets" ./demo.sh window airpods` (with `BASETEN_API_KEY` in `.env`).
+
+**Update, later on 09-19:** the card arrived, so AS3/AS5 were measured and AS11–AS14 built. Verdict on the
+photo library for a scripted talk: the labelled subset is generic (tree 1661, person 673, bird 188, flower 35;
+no owl, sunflower or Earth) and the images are casual snapshots — "this owl" returned a cardinal on a backpack,
+"a sunflower in a field" returned cherry blossoms. With generation on, the same talk now shows the card's eagle
+and rose and *draws* the owl, sunflower and Earth in ~2 s. The photo library is best treated as recall for
+common nouns; anything specific is generated.
