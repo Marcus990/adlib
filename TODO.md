@@ -1,5 +1,18 @@
 # TODO
 
+## Now (2026-09-19 evening, after Jev routing + asset card + generation)
+- [ ] N1 (me, M, P0) **Trust the transcript**: attach Whisper's per-token confidence to each chunk (already
+      exposed via `transcribe_detailed`) and refuse to act on a subject whose own words were barely heard
+      ("bird stank" 0.09). Feed the same number to Jev so it can judge garbled input.
+- [ ] N2 (me, S, P0) **Extractive phrases**: every word of a search phrase must appear in the transcript — the
+      phrase model turned "parrots are nice" into "Paris" and a picture of Paris was drawn.
+- [ ] N3 (me, S, P1) Generation waits for the settled phrase ("painting" → "pipeline" one revision later).
+- [ ] N4 (me, M, P1) Icons/logos in diagram nodes (ASSETS_HANDOFF AS7/AS8) — worth more than photos for a
+      technical talk; `icons/lookup.json` + `icon_search.py` are ready to port.
+- [ ] N5 (me, S, P2) Gap report (`scripts/gaps.py`, handoff AS13) so the library can be grown where it misses.
+- [ ] N6 (you, P0) Pre-warm generation before the demo: the Baseten deployment scales to zero (146 s cold).
+
+
 Owner: **me** = coding agent can do it now · **you** = needs the human · blocked items say what they wait on.
 Done items live in PROGRESS.md / git history.
 

@@ -33,21 +33,44 @@ pub struct Displayed {
 
 // ---- Branch 1: Jev (whether) ----
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
+    #[default]
     NoChange,
     NewRender,
     Update,
     Clear,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Which path owns this sentence. Jev routes; the pipeline dispatches. One sentence, one visual — before
+/// this, a sentence with numbers drew a chart *and* generated pictures of "first year" and "200 users".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Visual {
+    /// A concrete thing to look at → library photo, or generated when the library has none.
+    Photo,
+    /// Quantities → the canvas agent draws a chart.
+    Chart,
+    /// Steps, cycles, parts, cause and effect → the canvas agent draws a diagram.
+    Diagram,
+    /// About what is already on screen: compare, zoom, point at it, clear, remove.
+    Board,
+    #[default]
+    None,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ChangeDecision {
     pub chunk_id: u64,
     pub seq: u64,
     pub action: Action,
     pub p: f32,
+    /// Jev's routing answer and its probability (0 when Jev was unavailable).
+    #[serde(default)]
+    pub visual: Visual,
+    #[serde(default)]
+    pub p_visual: f32,
 }
 
 // ---- Branch 2: query model + search (what) ----

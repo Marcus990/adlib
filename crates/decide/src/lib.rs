@@ -53,6 +53,23 @@ or \"look at\". Yes when they ask to change what is shown (\"make that the white
 rose on screen). No for filler, greetings, abstract talk with nothing to picture, or when what they are talking \
 about is already on screen — as that same photo, or covered by a chart or diagram (numbers, steps).";
 
+const VISUAL_Q: &str = "What should happen on screen because of `curr`? Judge what the presenter is saying now. \
+One sentence gets one visual, so pick the single best fit.";
+
+/// The router: what this sentence needs. One choice, so the call stays at two questions — asking `kind`
+/// and `visual` separately pushed Jev past its 700 ms budget and every decision fell back (09-19).
+pub fn visual_criteria() -> serde_json::Value {
+    serde_json::json!({
+        "photo": "Show a picture of a concrete thing, place, animal or person they are talking about now",
+        "photo_update": "Replace the picture on screen with a variant of the same thing (\"make that the white one\", \"actually, in red\")",
+        "chart": "Quantities they state: amounts, shares, percentages, change over time",
+        "diagram": "Structure: steps of a process, a cycle, parts of a whole, cause and effect, dated events",
+        "board": "A request about what is already on screen: compare them, zoom in, point at a detail, remove one thing",
+        "clear": "Take everything off the screen: they are moving on, starting a new section, or asking to clear or reset it",
+        "none": "Nothing: filler, greetings, opinions, an unfinished sentence, or the subject is already on screen"
+    })
+}
+
 const KIND_Q: &str = "If the presenter wants the audience to see something, what should happen to the picture?";
 
 const TOPIC_Q: &str = "Should the picture change because of `curr`?";
@@ -105,6 +122,11 @@ pub enum Source {
 pub struct Detail {
     /// P(display intent) when the intent question was asked.
     pub p_intent: Option<f32>,
+    /// Which path Jev routed this sentence to, and how sure it was.
+    pub visual: ls_contracts::Visual,
+    pub p_visual: f32,
+    /// The raw choice ("photo", "photo_update", "chart", "diagram", "board", "clear", "none").
+    pub route: String,
 }
 
 #[derive(Clone)]
@@ -142,7 +164,7 @@ impl Decider {
         let questions = match self.mode {
             Mode::Intent | Mode::Supplement => serde_json::json!({
                 "intent": {"type": "noul", "instructions": format!("{CONTEXT} {}", if self.mode == Mode::Intent { INTENT_Q } else { SUPPLEMENT_Q })},
-                "kind": {"type": "choice", "instructions": format!("{CONTEXT} {KIND_Q}"), "criteria": kind_criteria()}
+                "visual": {"type": "choice", "instructions": format!("{CONTEXT} {VISUAL_Q}"), "criteria": visual_criteria()}
             }),
             Mode::Topic => serde_json::json!({
                 "action": {"type": "choice", "instructions": format!("{CONTEXT} {TOPIC_Q}"), "criteria": criteria()}
@@ -170,7 +192,10 @@ impl Decider {
         let started = std::time::Instant::now();
         if self.api_key.is_some() {
             match tokio::time::timeout(self.timeout, self.jev(prev, curr, d, now_ms)).await {
-                Ok(Ok((action, p, detail))) => return (ChangeDecision { chunk_id, seq, action, p }, Source::Jev, detail),
+                Ok(Ok((action, p, detail))) => {
+                    let d = ChangeDecision { chunk_id, seq, action, p, visual: detail.visual, p_visual: detail.p_visual };
+                    return (d, Source::Jev, detail);
+                }
                 Ok(Err(e)) => eprintln!("decide: jev error: {e:#}"),
                 Err(_) => eprintln!("decide: jev timed out after {:?}", self.timeout),
             }
@@ -178,7 +203,7 @@ impl Decider {
             if left >= Duration::from_millis(250) {
                 match tokio::time::timeout(left, self.llm(prev, curr, d)).await {
                     Ok(Ok(action)) => {
-                        return (ChangeDecision { chunk_id, seq, action, p: 0.7 }, Source::LlmFallback, Detail::default())
+                        return (ChangeDecision { chunk_id, seq, action, p: 0.7, ..Default::default() }, Source::LlmFallback, Detail::default())
                     }
                     Ok(Err(e)) => eprintln!("decide: llm fallback error: {e:#}"),
                     Err(_) => eprintln!("decide: llm fallback timed out"),
@@ -189,7 +214,7 @@ impl Decider {
             Mode::Intent => heuristic_intent(curr, d, &self.vocab),
             Mode::Topic | Mode::Supplement => heuristic(curr, d, &self.vocab),
         };
-        (ChangeDecision { chunk_id, seq, action, p }, Source::Heuristic, Detail::default())
+        (ChangeDecision { chunk_id, seq, action, p, ..Default::default() }, Source::Heuristic, Detail::default())
     }
 
     async fn jev(&self, prev: &str, curr: &str, d: &Displayed, now_ms: u64) -> anyhow::Result<(Action, f32, Detail)> {
@@ -290,14 +315,32 @@ pub fn parse_jev_intent(body: &str, tau_intent: f32) -> anyhow::Result<(Action, 
         .get("intent")
         .and_then(|a| a.noul)
         .ok_or_else(|| anyhow::anyhow!("no `intent` noul in {body}"))?;
-    let detail = Detail { p_intent: Some(p_intent) };
-    if p_intent < tau_intent {
+    let mut detail = Detail { p_intent: Some(p_intent), ..Default::default() };
+    // Routing is parsed before the intent gate so it is logged even when intent is too low to act on.
+    if let Some(v) = r.answers.get("visual") {
+        if let Some(c) = v.choice.as_deref() {
+            detail.route = c.to_string();
+            detail.visual = match c {
+                "photo" | "photo_update" => ls_contracts::Visual::Photo,
+                "chart" => ls_contracts::Visual::Chart,
+                "diagram" => ls_contracts::Visual::Diagram,
+                "board" | "clear" => ls_contracts::Visual::Board,
+                _ => ls_contracts::Visual::None,
+            };
+            detail.p_visual = v.probabilities.get(c).copied().or(v.confidence).unwrap_or(0.0);
+        }
+    }
+    if p_intent < tau_intent || detail.visual == ls_contracts::Visual::None {
         return Ok((Action::NoChange, 1.0 - p_intent, detail));
     }
-    let k = r.answers.get("kind").ok_or_else(|| anyhow::anyhow!("no `kind` answer in {body}"))?;
-    let choice = k.choice.clone().ok_or_else(|| anyhow::anyhow!("no kind choice in {body}"))?;
-    let p_kind = k.probabilities.get(&choice).copied().or(k.confidence).unwrap_or(0.0);
-    Ok((parse_action(&choice)?, p_intent * p_kind, detail))
+    // The photo path acts on `action`; chart/diagram/board are dispatched by `visual` instead.
+    let action = match detail.route.as_str() {
+        "photo" => Action::NewRender,
+        "photo_update" => Action::Update,
+        "clear" => Action::Clear,
+        _ => Action::NoChange,
+    };
+    Ok((action, p_intent * detail.p_visual, detail))
 }
 
 pub use ls_query::{after_last_cue, CUES};
@@ -422,8 +465,11 @@ mod tests {
         assert_eq!(v["state"]["displayed"]["seconds_on_screen"], 5);
         assert_eq!(v["questions"]["intent"]["type"], "noul");
         assert!(v["questions"]["intent"].get("criteria").is_none(), "OpenRouter needs both true/false if criteria present");
-        assert_eq!(v["questions"]["kind"]["type"], "choice");
-        assert_eq!(v["questions"]["kind"]["criteria"].as_object().unwrap().len(), 3);
+        // Two questions only: a third pushed Jev past its 700 ms budget (09-19), so routing and kind are
+        // one choice — photo / photo_update / chart / diagram / board / clear / none.
+        assert_eq!(v["questions"].as_object().unwrap().len(), 2);
+        assert_eq!(v["questions"]["visual"]["type"], "choice");
+        assert_eq!(v["questions"]["visual"]["criteria"].as_object().unwrap().len(), 7);
     }
 
     #[test]
@@ -435,12 +481,20 @@ mod tests {
 
     #[test]
     fn parses_intent_response() {
-        let body = r#"{"model":"jev-1.13.0","answers":{"intent":{"type":"noul","noul":0.9},"kind":{"type":"choice","choice":"new_render","confidence":0.8,"probabilities":{"new_render":0.8,"update":0.15,"clear":0.05}}}}"#;
+        use ls_contracts::Visual;
+        let body = r#"{"model":"jev-1.13.0","answers":{"intent":{"type":"noul","noul":0.9},"visual":{"type":"choice","choice":"photo","confidence":0.8,"probabilities":{"photo":0.8,"chart":0.15,"none":0.05}}}}"#;
         let (a, p, d) = parse_jev_intent(body, 0.6).unwrap();
-        assert_eq!(a, Action::NewRender);
+        assert_eq!((a, d.visual), (Action::NewRender, Visual::Photo));
         assert!((p - 0.72).abs() < 1e-5);
         assert_eq!(d.p_intent, Some(0.9));
-        let low = r#"{"answers":{"intent":{"type":"noul","noul":0.2},"kind":{"type":"choice","choice":"new_render","probabilities":{"new_render":0.9}}}}"#;
+        // a chart sentence never reaches the photo path
+        let chart = r#"{"answers":{"intent":{"type":"noul","noul":0.9},"visual":{"type":"choice","choice":"chart","probabilities":{"chart":0.95}}}}"#;
+        let (a, _, d) = parse_jev_intent(chart, 0.6).unwrap();
+        assert_eq!((a, d.visual), (Action::NoChange, Visual::Chart));
+        // "make it the white one" refines the photo on screen
+        let upd = r#"{"answers":{"intent":{"type":"noul","noul":0.9},"visual":{"type":"choice","choice":"photo_update","probabilities":{"photo_update":0.9}}}}"#;
+        assert_eq!(parse_jev_intent(upd, 0.6).unwrap().0, Action::Update);
+        let low = r#"{"answers":{"intent":{"type":"noul","noul":0.2},"visual":{"type":"choice","choice":"photo","probabilities":{"photo":0.9}}}}"#;
         let (a, p, _) = parse_jev_intent(low, 0.6).unwrap();
         assert_eq!(a, Action::NoChange);
         assert!((p - 0.8).abs() < 1e-5);

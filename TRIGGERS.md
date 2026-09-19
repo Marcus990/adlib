@@ -32,6 +32,20 @@ A quick guide for presenters (top) and for whoever tunes it (bottom). Canvas mod
 
 ## How each decision is made
 
+**Jev routes every sentence (2026-09-19).** One call per transcript update (~0.6 s apart, ~212 ms each) asks
+two questions: *should the screen change at all* (yes/no probability) and *what does this sentence need* —
+`photo` · `photo_update` · `chart` · `diagram` · `board` · `clear` · `none`. The pipeline dispatches on that
+answer, and **one sentence gets one visual**: a sentence with numbers goes to the chart path and the photo path
+stands down (before this, "in the first year we had 200 users" drew a chart *and* generated pictures of "first
+year" and "200 users"). Drawing a picture that doesn't exist in the library needs Jev to be ≥ 0.8 sure the
+sentence wanted a photo at all.
+
+Measured on real sentences: 13/15 routed correctly at 0.75–1.00 confidence. A third question was tried and
+removed — it pushed Jev past its 700 ms budget and every decision silently fell back to the local heuristic.
+
+The word lists below are now **the offline path** (no API key, or Jev unreachable) plus mid-sentence shortcuts.
+They no longer decide anything when Jev is answering.
+
 | Visual | Who decides | When it's considered | Hard rules in code |
 |---|---|---|---|
 | Photo | **Jev** decides *whether* ("is the talk about something picturable that isn't already on screen?", sees the whole board); the **phrase model** or the **named-subject shortcut** decides *what*; **image search** finds it | Every transcript update (~0.6 s) | Match score ≥ 0.52; Jev confidence ≥ 0.45 new / 0.4 swap / 0.7 clear; an unfinished phrase with Jev < 0.6 needs a second agreeing update; ≥ 1.5 s between new photos |

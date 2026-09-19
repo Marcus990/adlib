@@ -460,7 +460,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
     let mut canvas = Canvas::new();
     let mut chunk_text: std::collections::HashMap<u64, String> = Default::default();
     let mut agent_busy = false;
-    let mut agent_next: Option<(String, String, u64)> = None;
+    let mut agent_next: Option<(String, String, u64, Option<&'static str>)> = None;
     let mut last_curr = String::new();
     // The agent sees the last few finished phrases (a process or a set of numbers spans sentences).
     let mut recent: std::collections::VecDeque<String> = Default::default();
@@ -471,6 +471,12 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
     let mut subject_of: std::collections::HashMap<u64, String> = Default::default();
     let mut generating: std::collections::HashSet<String> = Default::default();
     let mut recent_subjects: Vec<(String, Instant)> = vec![];
+    // A sentence belongs to one path: numbers and structure are the agent's (chart/diagram), things are
+    // the photo path's. Without this, "in the first year we had 200 users" drew a chart *and* generated
+    // pictures of "first year" and "200 users" (09-19).
+    let mut graphic_chunks: std::collections::HashSet<u64> = Default::default();
+    // How sure Jev was that this sentence wants a photo; drawing one needs more than showing a stock one.
+    let mut photo_conf: std::collections::HashMap<u64, f32> = Default::default();
     let caption_of = |id: &str| -> String {
         // Card photos from COCO have no label at all; "photo" keeps board summaries readable.
         match engine.searcher.index.entries.iter().find(|e| e.id == id) {
@@ -479,11 +485,11 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
             None => id.to_string(),
         }
     };
-    let spawn_agent = |scene: Scene, prev: String, curr: String, chunk_id: u64| {
+    let spawn_agent = |scene: Scene, prev: String, curr: String, chunk_id: u64, hint: Option<&'static str>| {
         let (e, tx, log) = (engine.clone(), tx.clone(), log.clone());
         tokio::spawn(async move {
             let t = log.now_ms();
-            let (ops, src) = e.agent.propose(&scene, &prev, &curr).await;
+            let (ops, src) = e.agent.propose_hinted(&scene, &prev, &curr, hint).await;
             let _ = tx.send(Msg::Agent(scene.version, ops, src, chunk_id, log.now_ms() - t));
         });
     };
@@ -491,7 +497,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
     loop {
         let mut fresh: Vec<RenderEvent> = vec![];
         let mut gaps: Vec<u64> = vec![];
-        let mut agent_trigger: Option<(String, String, u64)> = None;
+        let mut agent_trigger: Option<(String, String, u64, Option<&'static str>)> = None;
         tokio::select! {
             msg = rx.recv() => {
                 let Some(msg) = msg else { break };
@@ -519,8 +525,13 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                         let new_words = c.text.strip_prefix(last_curr.trim_end_matches(|ch: char| !ch.is_alphanumeric())).unwrap_or(&c.text).to_string();
                         last_curr = if c.is_final { String::new() } else { c.text.clone() };
                         let context = recent.iter().cloned().collect::<Vec<_>>().join(" ");
-                        if cfg.canvas && !canvas.scene().elements.is_empty() && ls_canvas::has_layout_cue(&new_words) {
-                            agent_trigger = Some((context.clone(), c.text.clone(), c.id));
+                        // Keyword triggers are the offline path only: with Jev available, routing decides.
+                        let jev_routes = engine.decider.has_remote();
+                        if cfg.canvas && !jev_routes && !canvas.scene().elements.is_empty() && ls_canvas::has_layout_cue(&new_words) {
+                            agent_trigger = Some((context.clone(), c.text.clone(), c.id, None));
+                        }
+                        if cfg.canvas && ls_canvas::has_graphic_cue(&c.text) {
+                            graphic_chunks.insert(c.id);
                         }
                         if cfg.canvas && ls_canvas::has_graphic_cue(&new_words) {
                             graphic_pending = true;
@@ -528,18 +539,18 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                         // Early graphics call: a number/structure word was heard and Whisper closed the sentence
                         // mid-phrase. This is only a head start — the finished phrase is always sent too (below),
                         // so a premature "And then we." can no longer use the trigger up (09-19).
-                        if cfg.canvas && graphic_pending && !c.is_final && c.text.trim_end().ends_with(['.', '?', '!']) {
+                        if cfg.canvas && !jev_routes && graphic_pending && !c.is_final && c.text.trim_end().ends_with(['.', '?', '!']) {
                             graphic_pending = false;
                             last_sent = c.text.clone();
-                            agent_trigger = Some((context.clone(), c.text.clone(), c.id));
+                            agent_trigger = Some((context.clone(), c.text.clone(), c.id, None));
                         }
                         // Every finished phrase goes to the agent: fixed trigger words missed natural phrasing
                         // ("in parallel we also run…", "and then once…", "remove the eagle", 09-19). The word lists
                         // above are just mid-sentence shortcuts; the agent's guards still apply.
-                        if cfg.canvas && c.is_final && c.text.split_whitespace().count() >= 3 && c.text != last_sent {
+                        if cfg.canvas && !jev_routes && c.is_final && c.text.split_whitespace().count() >= 3 && c.text != last_sent {
                             graphic_pending = false;
                             last_sent = c.text.clone();
-                            agent_trigger = Some((context, c.text.clone(), c.id));
+                            agent_trigger = Some((context, c.text.clone(), c.id, None));
                         }
                         if c.is_final {
                             recent.push_back(c.text.clone());
@@ -609,7 +620,8 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                             let t = t.to_lowercase();
                             subject.to_lowercase().split_whitespace().filter(|w| w.len() > 3).all(|w| t.contains(w.trim_end_matches('s')))
                         });
-                        let fresh_enough = still_said
+                        let fresh_enough = !graphic_chunks.contains(&chunk_id)
+                            && still_said
                             && chunk_end_wall.get(&chunk_id).is_some_and(|e| log.now_ms().saturating_sub(*e) < 12_000);
                         log.log(json!({"ev": "generated", "chunk_id": chunk_id, "subject": subject, "ms": ms,
                             "ok": path.exists(), "used": path.exists() && fresh_enough}));
@@ -645,6 +657,9 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                             "ops": ops, "applied": applied.is_some(), "stale": version != canvas.scene().version && applied.is_none()}));
                         sink.status(&json!({"type": "agent", "chunk_id": chunk_id, "source": format!("{src:?}"), "ms": ms,
                             "ops": ops.len(), "applied": applied.as_ref().map(|s| s.reason.clone())}));
+                        if applied.is_some() && ops.iter().any(|o| matches!(o, ls_canvas::Op::DrawChart { .. } | ls_canvas::Op::UpdateChart { .. } | ls_canvas::Op::DrawDiagram { .. } | ls_canvas::Op::ExtendDiagram { .. })) {
+                            graphic_chunks.insert(chunk_id); // this sentence got its visual
+                        }
                         if let Some(scene) = applied {
                             let images = || scene.elements.iter().filter(|e| e.kind == ls_canvas::ElementKind::Image);
                             let focused = images().find(|e| e.focus).or_else(|| images().last());
@@ -652,17 +667,40 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                             log.log(scene_log(&scene));
                             sink.scene(&scene);
                         }
-                        if let Some((p, c, id)) = agent_next.take() {
+                        if let Some((p, c, id, h)) = agent_next.take() {
                             agent_busy = true;
-                            spawn_agent(canvas.scene().clone(), p, c, id);
+                            spawn_agent(canvas.scene().clone(), p, c, id, h);
                         }
                     }
-                    Msg::Decision(d, src, t_start, t_end) => {
+                    Msg::Decision(mut d, src, t_start, t_end) => {
                         *summary.decide_sources.entry(format!("{src:?}")).or_default() += 1;
                         log.log(json!({"ev": "decide", "chunk_id": d.chunk_id, "action": d.action, "p": d.p,
+                            "visual": d.visual, "p_visual": d.p_visual,
                             "source": format!("{src:?}"), "start_ms": t_start, "ms": t_end - t_start}));
                         sink.status(&json!({"type": "decide", "chunk_id": d.chunk_id, "action": d.action, "p": d.p,
-                            "source": format!("{src:?}"), "ms": t_end - t_start}));
+                            "visual": d.visual, "source": format!("{src:?}"), "ms": t_end - t_start}));
+                        // ---- Jev routes the sentence; each path owns it alone (one sentence, one visual) ----
+                        if cfg.canvas && matches!(src, Source::Jev) && d.p_visual >= 0.5 {
+                            use ls_contracts::Visual;
+                            match d.visual {
+                                Visual::Photo => {
+                                    photo_conf.insert(d.chunk_id, d.p_visual);
+                                }
+                                Visual::Chart | Visual::Diagram | Visual::Board => {
+                                    d.action = ls_contracts::Action::NoChange; // the photo path stands down
+                                    graphic_chunks.insert(d.chunk_id);
+                                    if let Some(text) = chunk_text.get(&d.chunk_id).cloned() {
+                                        let hint = match d.visual {
+                                            Visual::Chart => "chart",
+                                            Visual::Diagram => "diagram",
+                                            _ => "board",
+                                        };
+                                        agent_trigger = Some((recent.iter().cloned().collect::<Vec<_>>().join(" "), text, d.chunk_id, Some(hint)));
+                                    }
+                                }
+                                Visual::None => d.action = ls_contracts::Action::NoChange,
+                            }
+                        }
                         let now = log.now_ms();
                         if let Some(o) = stage.on_decision(d.clone(), now) {
                             fresh.extend(handle_outcome(d.chunk_id, o, now, &mut summary, &chunk_end_wall, &mut gaps));
@@ -713,6 +751,16 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
             if !engine.gen.enabled() || ls_gen::ImageGen::refuses(&subject) || subject.trim().len() < 4 {
                 continue;
             }
+            // Numbers/structure → the agent draws a chart or diagram for this sentence; don't also draw a
+            // picture of "first year" or "200 users".
+            if graphic_chunks.contains(&id) {
+                continue;
+            }
+            // Drawing asserts "this is the thing you meant", so it needs Jev to be sure it wanted a photo
+            // at all (a library photo is cheaper to be wrong about). Offline (no routing) → allowed.
+            if engine.decider.has_remote() && photo_conf.get(&id).copied().unwrap_or(0.0) < 0.8 {
+                continue;
+            }
             // "planet Earth from space" right after "planet Earth" is the same picture.
             if recent_subjects.iter().any(|(s, t): &(String, Instant)| t.elapsed() < Duration::from_secs(25) && similar(s, &subject)) {
                 continue;
@@ -751,7 +799,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                 sink.scene(&scene);
                 if !scene.elements.is_empty() {
                     let text = chunk_text.get(&ev.chunk_id).cloned().unwrap_or_default();
-                    agent_trigger = Some((recent.iter().cloned().collect::<Vec<_>>().join(" "), text, ev.chunk_id));
+                    agent_trigger = Some((recent.iter().cloned().collect::<Vec<_>>().join(" "), text, ev.chunk_id, None));
                 }
             }
             if let Some(t) = agent_trigger {
@@ -759,7 +807,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                     agent_next = Some(t); // latest wins; runs when the in-flight call returns
                 } else {
                     agent_busy = true;
-                    spawn_agent(canvas.scene().clone(), t.0, t.1, t.2);
+                    spawn_agent(canvas.scene().clone(), t.0, t.1, t.2, t.3);
                 }
             }
         }

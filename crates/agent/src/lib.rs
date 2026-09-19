@@ -39,6 +39,8 @@ remainder — a pie may sum to less than 100. When they add a number or the tran
 can be misheard), call update_chart with the full corrected list of values. update_chart is only for the SAME \
 series; a new set of numbers (e.g. shares of a whole after a growth trend) is a new chart — draw_chart. Never \
 turn one chart into another kind.\n\
+`needs` (when present) is a router's call on what this sentence needs — \"chart\", \"diagram\" or \"board\". \
+Produce that unless the sentence plainly cannot support it (then call no tool).\n\
 BOARD — \"let's move on\", \"next topic\", \"new section\", \"start fresh\", \"clear the screen\", \"reset the \
 canvas\" → clear_board (skip only if the board is already empty). \"Remove / get rid of / take away X\" → \
 remove that tile.\n\
@@ -138,8 +140,14 @@ impl CanvasAgent {
 
     /// Ops for the current board given the newest speech. Never fails.
     pub async fn propose(&self, scene: &Scene, prev: &str, curr: &str) -> (Vec<Op>, Source) {
+        self.propose_hinted(scene, prev, curr, None).await
+    }
+
+    /// `hint` is Jev's routing answer ("chart" | "diagram" | "board") — it decided this sentence needs
+    /// that kind of visual, so the agent should produce it unless the sentence clearly doesn't support it.
+    pub async fn propose_hinted(&self, scene: &Scene, prev: &str, curr: &str, hint: Option<&str>) -> (Vec<Op>, Source) {
         if self.api_key.is_some() {
-            match tokio::time::timeout(self.timeout, self.remote(scene, prev, curr)).await {
+            match tokio::time::timeout(self.timeout, self.remote(scene, prev, curr, hint)).await {
                 Ok(Ok(ops)) => return (ground(ops, scene, prev, curr), Source::Model),
                 Ok(Err(e)) => eprintln!("canvas agent: {e:#}"),
                 Err(_) => eprintln!("canvas agent: timed out after {:?}", self.timeout),
@@ -149,6 +157,10 @@ impl CanvasAgent {
     }
 
     pub fn request_body(&self, scene: &Scene, prev: &str, curr: &str) -> Value {
+        self.request_body_hinted(scene, prev, curr, None)
+    }
+
+    pub fn request_body_hinted(&self, scene: &Scene, prev: &str, curr: &str, hint: Option<&str>) -> Value {
         let board: Vec<Value> = scene
             .elements
             .iter()
@@ -171,7 +183,10 @@ impl CanvasAgent {
             .iter()
             .map(|a| json!({"kind": a.kind, "targets": a.targets, "label": a.label}))
             .collect();
-        let user = json!({"board": board, "layout": scene.layout, "annotations": notes, "previous_speech": prev, "newest_speech": curr});
+        let mut user = json!({"board": board, "layout": scene.layout, "annotations": notes, "previous_speech": prev, "newest_speech": curr});
+        if let Some(h) = hint {
+            user["needs"] = json!(h);
+        }
         let mut body = json!({
             "model": self.model,
             "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user.to_string()}],
@@ -190,8 +205,8 @@ impl CanvasAgent {
         body
     }
 
-    async fn remote(&self, scene: &Scene, prev: &str, curr: &str) -> anyhow::Result<Vec<Op>> {
-        let body = self.request_body(scene, prev, curr);
+    async fn remote(&self, scene: &Scene, prev: &str, curr: &str, hint: Option<&str>) -> anyhow::Result<Vec<Op>> {
+        let body = self.request_body_hinted(scene, prev, curr, hint);
         let resp = self
             .http
             .post(format!("{}/api/v1/chat/completions", base()))
