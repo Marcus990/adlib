@@ -77,3 +77,21 @@
 - Headless: `./target/release/ls-replay <talk.wav>` or `ls-replay --mic [AirPods] --seconds 180`
 - App: `LS_SOURCE=mic:AirPods LS_FULLSCREEN=1 ./target/release/live-slides` (or `LS_SOURCE=wav:<path>`)
 - Logs: `logs/run-<epoch>.jsonl` (chunk/decide/search/join/render/frontend_ack with timings)
+
+### App + rehearsal results (offline mode: no API key)
+- Tauri app verified end to end with `LS_SOURCE=wav:...`: frontend steps logged via the `fe` command
+  (`loaded`, `received`, `decoded`, `painted`). emit→received 2–6 ms; img:// decode 4–8 ms (LRU cache).
+  With the display asleep, rAF stalls → `painted` falls back to a 100 ms timer (expected ~16 ms when awake).
+- `screencapture` fails ("could not create image from display") while the user's display sleeps, so
+  visual checks are via the frontend step log. A human should eyeball the stage once.
+- Whisper temperature fallback caused 2.2 s ASR spikes on the first short `curr` of an utterance →
+  disabled (temperature_inc 0). ASR max now 412 ms. VAD moved to CPU (1.9 s Metal-contention spike gone).
+- Tried batching the 1–3 query phrases into one MobileCLIP forward pass: **rejected** — Candle's
+  OpenCLIP text encoder has no padding mask, embeddings drift (cos 0.963). Per-phrase embedding kept
+  (~21 ms each); guarded by `crates/search/tests/model.rs` (`cargo test --release -p ls-search -- --ignored`).
+- 3-min rehearsal fixture: `fixtures/audio/rehearsal-3min.{txt,wav,expected.tsv}` (125 s, 13 subjects incl. a
+  red→white rose refinement). Score with `python3 scripts/eval_run.py <log> fixtures/audio/rehearsal-3min.expected.tsv`.
+  - Run A (offline): 15/15 renders correct, 13/13 subjects, min gap 4.01 s, keyword-in-transcript→render p50 70 ms
+    (+ ≤ 0.75 s ASR tick ⇒ ~0.1–0.9 s from the spoken word). The only slow render (2.4 s) was a hold.
+  - Run B (invalid OpenRouter key → real 401s → fallbacks): 15/15 correct, decide p50 30 ms, query p50 17 ms.
+- Dev-library captions fixed ("whiterose" → "white rose", "8ball" → "eight ball"); re-indexed in 65 s.

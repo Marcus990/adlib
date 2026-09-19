@@ -124,7 +124,12 @@ impl Decider {
             "provider": {"sort": "latency"}
         });
         let resp = self.http.post(CHAT_URL).bearer_auth(self.api_key.as_deref().unwrap_or_default()).json(&body).send().await?;
-        let v: serde_json::Value = resp.json().await?;
+        let status = resp.status();
+        let text = resp.text().await?;
+        if !status.is_success() {
+            anyhow::bail!("HTTP {status}: {}", &text[..text.len().min(300)]);
+        }
+        let v: serde_json::Value = serde_json::from_str(&text)?;
         let content = v["choices"][0]["message"]["content"].as_str().unwrap_or_default();
         let start = content.find('{').unwrap_or(0);
         let end = content.rfind('}').map(|i| i + 1).unwrap_or(content.len());

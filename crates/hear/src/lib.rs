@@ -201,6 +201,7 @@ pub mod whisper {
 
     impl WhisperAsr {
         pub fn load(model: &str) -> anyhow::Result<Self> {
+            whisper_rs::install_logging_hooks(); // silence whisper.cpp/ggml stderr spam
             let ctx = WhisperContext::new_with_params(model, WhisperContextParameters::default())?;
             let state = ctx.create_state()?;
             let mut s = Self { _ctx: ctx, state };
