@@ -30,6 +30,8 @@ pub struct Config {
     pub stage: StageConfig,
     pub chunker: ChunkerConfig,
     /// Canvas mode (evolving board + agent). LS_MODE=single keeps one full-screen image.
+    /// Words the talk uses that Whisper mangles (TALK_TERMS / talk-terms.txt) — passed as its initial prompt.
+    pub talk_terms: Vec<String>,
     pub canvas: bool,
     pub canvas_model: Option<String>,
 }
@@ -76,6 +78,10 @@ impl Config {
                 }
                 c
             },
+            talk_terms: env("TALK_TERMS")
+                .or_else(|| std::fs::read_to_string(root.join("talk-terms.txt")).ok())
+                .map(|v| v.split([',', '\n']).map(|t| t.trim().to_string()).filter(|t| !t.is_empty() && !t.starts_with('#')).collect())
+                .unwrap_or_default(),
             canvas: env("LS_MODE").map(|m| m != "single").unwrap_or(true),
             canvas_model: env("CANVAS_MODEL"),
         }
@@ -226,13 +232,13 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
     let cfg = engine.cfg.clone();
     let (tx, mut rx) = mpsc::unbounded_channel::<Msg>();
 
-    // Library subjects as a Whisper vocabulary hint — opt-in (WHISPER_VOCAB=1): on noisy audio Whisper
-    // emits prompt words ("white rose, blue rose, blue rose…", live test 09-19).
-    let vocab: Vec<String> = if std::env::var("WHISPER_VOCAB").as_deref() == Ok("1") {
-        engine.searcher.index.entries.iter().map(|e| e.caption.split('(').next().unwrap_or(&e.caption).trim().to_string()).collect()
-    } else {
-        vec![]
-    };
+    // Whisper vocabulary hint: the talk's own words (product and technical terms it otherwise mangles —
+    // "prototype" → "ProSive", "text" → "SEX"). From TALK_TERMS or talk-terms.txt; empty = no hint.
+    // WHISPER_VOCAB=1 adds the library subjects too (they leaked into noisy audio on 09-19, so opt-in).
+    let mut vocab: Vec<String> = cfg.talk_terms.clone();
+    if std::env::var("WHISPER_VOCAB").as_deref() == Ok("1") {
+        vocab.extend(engine.searcher.index.entries.iter().map(|e| e.caption.split('(').next().unwrap_or(&e.caption).trim().to_string()));
+    }
     // ---- Track A on its own OS thread (Whisper is blocking). ----
     {
         let tx = tx.clone();

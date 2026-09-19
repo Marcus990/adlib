@@ -6,18 +6,20 @@ use ls_canvas::{has_removal_cue, has_section_cue, rule_ops, AnnotationKind, Char
 use serde_json::{json, Value};
 use std::time::Duration;
 
-/// Claude Haiku 4.5. Gemini 2.5 Flash was ~2× faster (p50 802 vs 1612 ms, 09-19 bake-off) but in real
-/// replays it "tidied" the board (removing photos) and skipped clears, so we stay on Haiku; the canvas
-/// guards (grounded numbers, cue-gated clear/remove, no chart-kind jumps) cover Haiku's misses.
-/// `CANVAS_MODEL=google/gemini-2.5-flash` to try it again (thinking is switched off automatically).
-pub const DEFAULT_MODEL: &str = "anthropic/claude-haiku-4.5";
+/// GPT-5.6 Luna (user's choice, 09-19). Reasoning is set to minimal — this call is a small tool decision,
+/// not a puzzle. Alternatives: `CANVAS_MODEL=anthropic/claude-haiku-4.5` (previous default, ignored repeated
+/// "let's move on"), `google/gemini-2.5-flash` (fast but tidied the board away).
+pub const DEFAULT_MODEL: &str = "openai/gpt-5.6-luna";
 
 fn base() -> String {
     std::env::var("OPENROUTER_BASE_URL").unwrap_or_else(|_| "https://openrouter.ai".into())
 }
 
-const SYSTEM: &str = "You are the live designer for a talk. Act only on `newest_speech`; `previous_speech` is \
-context that was already handled — never act on it again. The screen behind the presenter is a board of up to 4 \
+const SYSTEM: &str = "You are the live designer for a talk. Act on `newest_speech`; `previous_speech` is only \
+context — don't draw a graphic again just because it was mentioned earlier. BOARD COMMANDS ARE DIFFERENT: if the \
+newest words ask to move on, start a new section, clear or reset the screen, or take something away, DO IT NOW, \
+even if they said it a moment ago — a repeated command means it has not happened yet, and ignoring it leaves the \
+presenter talking to a stale screen. Clearing is cheap; the board rebuilds itself from the next sentence. The screen behind the presenter is a board of up to 4 \
 tiles: photos (added automatically when the presenter talks about something picturable), diagrams and charts \
 (added by YOU), plus up to 3 annotations. Build visuals that SUPPLEMENT what is being said, as it is said.\n\
 DIAGRAMS — when the speech describes structure: steps or a process (draw_diagram flow), cause and effect \
@@ -37,9 +39,11 @@ remainder — a pie may sum to less than 100. When they add a number or the tran
 can be misheard), call update_chart with the full corrected list of values. update_chart is only for the SAME \
 series; a new set of numbers (e.g. shares of a whole after a growth trend) is a new chart — draw_chart. Never \
 turn one chart into another kind.\n\
+BOARD — \"let's move on\", \"next topic\", \"new section\", \"start fresh\", \"clear the screen\", \"reset the \
+canvas\" → clear_board (skip only if the board is already empty). \"Remove / get rid of / take away X\" → \
+remove that tile.\n\
 LAYOUT — compare two things (arrange compare), zoom in on one (focus + arrange hero), everything together \
-(arrange grid), draw attention (annotate highlight), link two tiles (annotate arrow), clear the board when \
-they move to a new section. Never remove photos to tidy up — the board makes room by itself; remove a tile only \
+(arrange grid), draw attention (annotate highlight), link two tiles (annotate arrow). Never remove photos to tidy up — the board makes room by itself; remove a tile only \
 when the presenter asks to take it away.\n\
 If the newest sentence is unfinished, or there is nothing to structure or count, call NO tool — that is the \
 right answer most of the time. Never invent element ids; use the ids listed on the board.";
@@ -178,8 +182,10 @@ impl CanvasAgent {
             "provider": {"sort": "latency"}
         });
         // Thinking models (Gemini 2.5 Flash, …) are ~2× slower with reasoning on; this call needs none.
-        if !self.model.starts_with("anthropic/") {
-            body["reasoning"] = if self.model.contains("gpt-oss") { json!({"effort": "low"}) } else { json!({"enabled": false}) };
+        if self.model.starts_with("openai/gpt-5") || self.model.contains("gpt-oss") {
+            body["reasoning"] = json!({"effort": "minimal"});
+        } else if !self.model.starts_with("anthropic/") {
+            body["reasoning"] = json!({"enabled": false});
         }
         body
     }

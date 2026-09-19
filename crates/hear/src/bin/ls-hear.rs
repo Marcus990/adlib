@@ -30,7 +30,8 @@ fn main() -> anyhow::Result<()> {
         }
         return Ok(());
     }
-    let asr = whisper::WhisperAsr::load(&a[1])?;
+    let terms: Vec<String> = std::env::var("TALK_TERMS").unwrap_or_default().split([',', '\n']).map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
+    let asr = whisper::WhisperAsr::load(&a[1])?.with_vocabulary(&terms);
     let vad = whisper::SileroVad::load(&a[2])?;
     let mut ch = Chunker::new(ChunkerConfig::default(), asr, vad);
     let print = |c: &ls_contracts::Chunk, t: &ls_hear::ChunkTiming| {

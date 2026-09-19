@@ -232,3 +232,15 @@
   (Record audio → Transcription → "JET model" → Image retrieval → "Tori Rust-R"; labels = ASR mishearings).
   Agent calls 58 → 126. Test talks unchanged: canvas-talk 6/6, 0 FP, no extra graphics; graphics-talk same board.
 - New: TRIGGERS.md — presenter guide + every hardcoded list with code locations.
+
+## 2026-09-19 — board commands obeyed (live run: "let's move on" ignored 20+ times)
+- Cause: the prompt said `previous_speech` "was already handled — never act on it again", so a repeated command
+  looked handled; Haiku returned no tool on 50 clear requests (5 cleared). Both clears that worked came from the
+  offline rule fallback.
+- Fix (prompt, not code): previous speech is context for *graphics*, but a board command in the newest words is
+  always obeyed — "a repeated command means it has not happened yet"; explicit BOARD section listing the phrases.
+- Canvas model → `openai/gpt-5.6-luna` with `reasoning: {effort: minimal}` (user's choice). Probe: clears,
+  resets, remove-when-absent, flow and chart updates all correct; agent p50 923 → 1553 ms (graphics ~1.5–2.3 s).
+- Replay of the same 8-min session: clear asked with a non-empty board 8× → cleared 8× (was 50× → 5×).
+- Whisper talk vocabulary: `TALK_TERMS` / `talk-terms.txt` (comma or newline separated) → Whisper initial prompt;
+  `ls-hear` honours TALK_TERMS too, for A/B on a recording. No file = no hint (unchanged default).
