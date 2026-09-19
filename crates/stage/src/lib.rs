@@ -32,7 +32,7 @@ pub struct StageConfig {
 impl Default for StageConfig {
     fn default() -> Self {
         Self {
-            p_render: 0.6,
+            p_render: 0.45, // live test: "here's our red rose" scored 0.49–0.66 (intent × kind; intent already ≥ 0.6)
             p_update: 0.4, // real Jev: "make that the white rose" → update at P≈0.4–0.5 (intent × kind)
             p_clear: 0.7,
             tau: 0.477,
@@ -293,7 +293,7 @@ mod tests {
         s.on_search(found(1, "eagle", 0.6), 0);
         assert_eq!(s.on_decision(dec(1, 1, Action::NoChange, 0.99), 0), Some(Outcome::NoChange));
         s.on_search(found(2, "eagle", 0.6), 0);
-        assert_eq!(s.on_decision(dec(2, 2, Action::NewRender, 0.5), 0), Some(Outcome::BelowProbability));
+        assert_eq!(s.on_decision(dec(2, 2, Action::NewRender, 0.3), 0), Some(Outcome::BelowProbability));
     }
 
     #[test]

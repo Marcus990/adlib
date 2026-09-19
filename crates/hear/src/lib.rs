@@ -197,6 +197,7 @@ pub mod whisper {
     pub struct WhisperAsr {
         _ctx: WhisperContext,
         state: WhisperState,
+        prompt: Option<String>,
     }
 
     impl WhisperAsr {
@@ -204,9 +205,24 @@ pub mod whisper {
             whisper_rs::install_logging_hooks(); // silence whisper.cpp/ggml stderr spam
             let ctx = WhisperContext::new_with_params(model, WhisperContextParameters::default())?;
             let state = ctx.create_state()?;
-            let mut s = Self { _ctx: ctx, state };
+            let mut s = Self { _ctx: ctx, state, prompt: None };
             let _ = s.transcribe(&vec![0.0; super::SR]); // warm-up (Metal init)
             Ok(s)
+        }
+
+        /// Bias recognition toward the image library's words (Whisper initial prompt). Kept short.
+        pub fn with_vocabulary(mut self, words: &[String]) -> Self {
+            let mut uniq: Vec<&String> = vec![];
+            for w in words {
+                if !w.is_empty() && !uniq.contains(&w) {
+                    uniq.push(w);
+                }
+            }
+            if !uniq.is_empty() {
+                let list: Vec<&str> = uniq.iter().take(80).map(|s| s.as_str()).collect();
+                self.prompt = Some(format!("Talk mentioning: {}.", list.join(", ")));
+            }
+            self
         }
     }
 
@@ -222,6 +238,9 @@ pub mod whisper {
             p.set_print_realtime(false);
             p.set_print_timestamps(false);
             p.set_suppress_blank(true);
+            if let Some(prompt) = &self.prompt {
+                p.set_initial_prompt(prompt);
+            }
             // No temperature fallback: on short/low-confidence audio it re-decodes up to 5× (measured
             // 2.2 s spikes). One greedy pass is enough; the next tick re-transcribes anyway.
             p.set_temperature(0.0);

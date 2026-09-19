@@ -26,7 +26,7 @@ picturable mentioned?". "I like watermelons" → no change; "here's what a water
 ## B. Pipeline — reliability & latency
 - [ ] B1 (me, S, P0) Mic-drop watchdog: if no audio blocks for 2 s mid-talk (AirPods disconnect / route switch),
       re-open capture (same device → built-in mic), show it in the debug window. Today the loop just waits.
-- [ ] B2 (me, XS, P1) Whisper initial prompt with library captions + talk terms (names, products).
+- [x] B2 (me, XS, P1) Whisper initial prompt with library captions (done 09-19; talk terms still to add).
 - [ ] B3 (me, S, P1) ASR tick 750 → 500 ms if CPU/Metal headroom allows (measure first).
 - [ ] B4 (me, M, P2) Local-first search: show local-phrase match immediately, upgrade if remote phrases beat it
       within the join window (takes the ~435 ms query model off the critical path).

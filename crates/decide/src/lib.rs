@@ -101,7 +101,7 @@ pub struct Decider {
     timeout: Duration,
     vocab: Vec<String>,
     pub mode: Mode,
-    /// Minimum P(intent) to act (intent mode). DECIDE_INTENT_TAU, default 0.6.
+    /// Minimum P(intent) to act (intent mode). DECIDE_INTENT_TAU, default 0.5 (live test: real requests 0.57–0.9, plain mentions ≤ 0.07).
     pub tau_intent: f32,
 }
 
@@ -115,7 +115,7 @@ impl Decider {
             timeout: Duration::from_millis(700),
             vocab,
             mode: Mode::from_env(),
-            tau_intent: std::env::var("DECIDE_INTENT_TAU").ok().and_then(|v| v.parse().ok()).unwrap_or(0.6),
+            tau_intent: std::env::var("DECIDE_INTENT_TAU").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5),
         }
     }
 

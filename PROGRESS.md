@@ -145,3 +145,13 @@
   must NOT show; eval reports false_positives): 6/6 correct, 0 false positives, compare/highlight/clear/update all fire.
 - The old rehearsal-3min talk has no display cues → under intent mode it (correctly) shows almost nothing;
   use canvas-talk for intent/canvas regression, rehearsal-3min with DECIDE_MODE=topic.
+
+## 2026-09-19 — first live test by the user (MacBook mic, hosted models)
+- Worked: "here's our red rose" → red rose (~1.7 s), "make it a white rose" → in-place update; plain mentions ignored.
+- Fixed: (1) the query model kept repeating the on-screen caption as a 2nd phrase and search picked it
+  (["panther","white rose"] → white rose) → `pick_avoiding`: the on-screen image can't win via a secondary
+  phrase + prompt says don't repeat it. (2) Real Jev scores for genuine requests were 0.45–0.66 (intent ×
+  kind) vs `p_render` 0.6 → p_render 0.45, τ_intent 0.6 → 0.5 (plain mentions sit at P(intent) ≤ 0.07).
+  (3) Whisper initial prompt = library subjects ("red roads" → "red rose"). (TODO B2)
+- Asked for panda / panther / heron — not in the 43-image dev library (library gap, expected).
+- Re-verified on canvas-talk with real models: 6/6, 0 false positives, keyword→render p50 1150 ms.
