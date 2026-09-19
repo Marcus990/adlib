@@ -7,6 +7,7 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+libc = "0.2"
 tauri = { version = "2", features = [] }
 ls-contracts = { path = "../../crates/contracts" }
 ls-pipeline = { path = "../../crates/pipeline" }

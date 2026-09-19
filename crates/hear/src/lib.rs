@@ -178,12 +178,43 @@ pub fn clean(s: &str) -> String {
             _ => {}
         }
     }
-    let out = out.split_whitespace().collect::<Vec<_>>().join(" ");
+    let out = collapse_repeats(&out.split_whitespace().collect::<Vec<_>>().join(" "));
     let lower = out.to_lowercase();
     if ["", ".", "you", "you.", "thank you.", "thanks for watching!"].contains(&lower.as_str()) {
         return String::new();
     }
     out
+}
+
+/// Whisper on noisy/unclear audio loops: "it's just, it's just, it's just…", "oh, oh, oh…", "blue rose,
+/// blue rose…" (live test 09-19). Any 1–4 word run repeated 3+ times in a row is kept once.
+pub fn collapse_repeats(s: &str) -> String {
+    let words: Vec<&str> = s.split_whitespace().collect();
+    let norm: Vec<String> = words
+        .iter()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'').to_lowercase())
+        .collect();
+    let mut keep: Vec<&str> = Vec::with_capacity(words.len());
+    let mut i = 0;
+    'outer: while i < words.len() {
+        for n in 1..=4 {
+            if i + 3 * n > words.len() || norm[i..i + n].iter().all(|w| w.is_empty()) {
+                continue;
+            }
+            let mut k = 1;
+            while i + (k + 1) * n <= words.len() && norm[i + k * n..i + (k + 1) * n] == norm[i..i + n] {
+                k += 1;
+            }
+            if k >= 3 {
+                keep.extend_from_slice(&words[i..i + n]);
+                i += k * n;
+                continue 'outer;
+            }
+        }
+        keep.push(words[i]);
+        i += 1;
+    }
+    keep.join(" ")
 }
 
 pub mod whisper {
@@ -238,6 +269,9 @@ pub mod whisper {
             p.set_print_realtime(false);
             p.set_print_timestamps(false);
             p.set_suppress_blank(true);
+            p.set_suppress_nst(true); // no "(laughs)", "*music*" style non-speech tokens
+            // Speech is ~3–4 tokens/s; a hard cap per window stops runaway repetition loops.
+            p.set_max_tokens((pcm.len() as f32 / super::SR as f32 * 6.0).ceil() as i32 + 6);
             if let Some(prompt) = &self.prompt {
                 p.set_initial_prompt(prompt);
             }
@@ -523,6 +557,10 @@ mod tests {
         assert_eq!(clean(" [BLANK_AUDIO] "), "");
         assert_eq!(clean("Thank you."), "");
         assert_eq!(clean(" Hello (music) world "), "Hello world");
+        assert_eq!(clean("Oh, it's just, it's just, it's just, it's just so exciting."), "Oh, it's just, so exciting.");
+        assert_eq!(clean("what, what, what, what, what"), "what,");
+        assert_eq!(clean("the eagle, white rose, blue rose, blue rose, blue rose, blue rose"), "the eagle, white rose, blue rose");
+        assert_eq!(clean("very very good"), "very very good"); // two in a row is real speech
     }
 
     #[test]

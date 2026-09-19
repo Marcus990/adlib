@@ -88,6 +88,7 @@ pub trait RenderSink: Send + Sync + 'static {
 pub struct Logger {
     t0: Instant,
     out: Arc<Mutex<std::io::BufWriter<std::fs::File>>>,
+    pub path: std::path::PathBuf,
 }
 
 impl Logger {
@@ -95,7 +96,7 @@ impl Logger {
         if let Some(d) = path.parent() {
             std::fs::create_dir_all(d)?;
         }
-        Ok(Self { t0: Instant::now(), out: Arc::new(Mutex::new(std::io::BufWriter::new(std::fs::File::create(path)?))) })
+        Ok(Self { t0: Instant::now(), out: Arc::new(Mutex::new(std::io::BufWriter::new(std::fs::File::create(path)?))), path: path.to_path_buf() })
     }
     pub fn now_ms(&self) -> u64 {
         self.t0.elapsed().as_millis() as u64
@@ -198,8 +199,13 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
     let cfg = engine.cfg.clone();
     let (tx, mut rx) = mpsc::unbounded_channel::<Msg>();
 
-    // Library subjects as a Whisper vocabulary hint ("red rose" not "red roads").
-    let vocab: Vec<String> = engine.searcher.index.entries.iter().map(|e| e.caption.split('(').next().unwrap_or(&e.caption).trim().to_string()).collect();
+    // Library subjects as a Whisper vocabulary hint — opt-in (WHISPER_VOCAB=1): on noisy audio Whisper
+    // emits prompt words ("white rose, blue rose, blue rose…", live test 09-19).
+    let vocab: Vec<String> = if std::env::var("WHISPER_VOCAB").as_deref() == Ok("1") {
+        engine.searcher.index.entries.iter().map(|e| e.caption.split('(').next().unwrap_or(&e.caption).trim().to_string()).collect()
+    } else {
+        vec![]
+    };
     // ---- Track A on its own OS thread (Whisper is blocking). ----
     {
         let tx = tx.clone();
@@ -252,13 +258,34 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                                 }
                             }
                         };
-                        log.log(json!({"ev": "mic", "device": name}));
+                        // Record the session (16 kHz mono) next to the log so live runs can be replayed
+                        // offline: `ls-replay logs/run-….wav`. Header is flushed every second so the
+                        // file stays valid even if the app is killed.
+                        let wav_path = log.path.with_extension("wav");
+                        let mut wav = hound::WavWriter::create(&wav_path, hound::WavSpec {
+                            channels: 1, sample_rate: SR as u32, bits_per_sample: 16, sample_format: hound::SampleFormat::Int,
+                        }).ok();
+                        log.log(json!({"ev": "mic", "device": name, "recording": wav.as_ref().map(|_| wav_path.display().to_string())}));
                         let _ = tx.send(Msg::Status(json!({"type": "mic", "device": name})));
                         let _ = tx.send(Msg::AudioStart(log.now_ms()));
+                        let mut since_flush = 0usize;
                         while !stop.load(Ordering::Relaxed) {
                             if let Ok(block) = arx.recv_timeout(Duration::from_millis(100)) {
+                                if let Some(w) = wav.as_mut() {
+                                    for &x in &block {
+                                        let _ = w.write_sample((x.clamp(-1.0, 1.0) * 32767.0) as i16);
+                                    }
+                                    since_flush += block.len();
+                                    if since_flush >= SR {
+                                        let _ = w.flush();
+                                        since_flush = 0;
+                                    }
+                                }
                                 emit(ch.push(&block)?);
                             }
+                        }
+                        if let Some(w) = wav {
+                            let _ = w.finalize();
                         }
                     }
                 }

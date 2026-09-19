@@ -163,7 +163,15 @@ fn main() -> anyhow::Result<()> {
             });
             Ok(())
         })
-        .run(tauri::generate_context!())?;
+        .build(tauri::generate_context!())?
+        .run(|_, ev| {
+            // Skip C++ static destructors on quit: ggml's Metal device destructor aborts (exit 134)
+            // while the Whisper context on the hearing thread is still alive. Logs are flushed per
+            // line and the session WAV header every second, so nothing is lost.
+            if let tauri::RunEvent::Exit = ev {
+                unsafe { libc::_exit(0) }
+            }
+        });
     Ok(())
 }
 

@@ -1,6 +1,6 @@
 //! Track D: the fast query model (design doc §7.2). Turns prev + curr (+ what is on screen) into
 //! 1–3 short visual noun phrases. Remote: an OpenRouter chat model with JSON output and a hard
-//! 700 ms timeout. Fallback: local noun-phrase extraction, so this branch never blocks.
+//! 900 ms timeout (700 ms timed out on 28% of calls in the 09-19 live test). Fallback: local noun-phrase extraction, so this branch never blocks.
 
 use ls_contracts::{Displayed, QueryResult};
 use serde::Deserialize;
@@ -36,7 +36,7 @@ impl QueryClient {
             http,
             api_key: api_key.filter(|k| !k.trim().is_empty()),
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
-            timeout: Duration::from_millis(700),
+            timeout: Duration::from_millis(900),
             vocab,
         }
     }
