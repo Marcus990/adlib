@@ -48,10 +48,11 @@ They no longer decide anything when Jev is answering.
 
 | Visual | Who decides | When it's considered | Hard rules in code |
 |---|---|---|---|
-| Photo | **Jev** decides *whether* ("is the talk about something picturable that isn't already on screen?", sees the whole board); the **phrase model** or the **named-subject shortcut** decides *what*; **image search** finds it | Every transcript update (~0.6 s) | Match score ≥ 0.52; Jev confidence ≥ 0.45 new / 0.4 swap / 0.7 clear; an unfinished phrase with Jev < 0.6 needs a second agreeing update; ≥ 1.5 s between new photos |
-| Chart, diagram, layout, highlight | **Canvas agent** (Claude Haiku 4.5, tool calls) | **Every finished phrase (≥ 3 words)**, plus early mid-sentence on the trigger words below | Chart values must be spoken numbers (or already on the board); a new set of numbers or a bar → pie switch makes a *new* chart; same-layout redraw replaces the diagram in focus; ≤ 4 tiles, ≤ 8 nodes/points |
-| Clear the board | Canvas agent | as above | Only if your newest words contain a *section* phrase; one clear per 6 s |
-| Remove one tile | Canvas agent | as above | Only if your newest words contain a *removal* phrase |
+| Photo | **Jev** routes (`photo` / `photo_update`); the **phrase model** or the **named-subject shortcut** decides *what*; **image search** finds it in the library | Every transcript update (~0.6 s) | Library match ≥ 0.52 (MobileCLIP) / label gate (asset card); Jev ≥ 0.45 new, 0.4 swap; an unfinished phrase with Jev < 0.6 needs a second agreeing update; ≥ 1.5 s between new photos |
+| Drawn picture | Same, when the library has nothing (or only a near-miss) | as above | Jev must be ≥ 0.8 sure the sentence wanted a photo; subject must still be in the transcript when the image lands (< 12 s); similar subjects are not redrawn within 25 s; logos/charts/vague subjects refused |
+| Chart, diagram | **Jev routes** (`chart` / `diagram`), the **canvas agent** draws it (gets `needs: chart|diagram`) | When Jev routes there | Chart values must be spoken numbers (or already on the board); a new set of numbers or a bar → pie switch makes a *new* chart; same-layout redraw replaces the diagram in focus; ≤ 4 tiles, ≤ 8 nodes/points |
+| Compare / zoom / point / remove | **Jev routes** (`board`), the canvas agent picks the op | When Jev routes there | Removing a tile still needs a removal phrase in your newest words |
+| Clear the board | **Jev routes** (`clear`), the canvas agent clears | When Jev routes there | Still needs a section phrase in your newest words; one clear per 6 s |
 
 Everything in the "who decides" column is a model judgement; everything in the last column and the lists
 below is **hardcoded** (English phrases in Rust).
@@ -94,6 +95,10 @@ can see, let me show you, check out, this is what…; make that, make it, switch
 the other one.
 
 ## Known limits
-- Clear and remove need the listed phrases; paraphrases ("let's park that", "OK, new topic") won't clear/remove.
-  Possible next step: ask Jev "is the presenter asking to change the board?" instead of matching words.
+- Jev routes the sentence, but clearing and removing still need one of the listed phrases as a final guard, so
+  paraphrases ("let's park that") route to `clear`/`board` and are then dropped. Removing that guard is a one-line
+  change once routing has been trusted for a few talks.
+- Nothing yet checks *how well the words were heard*: "parrots are nice" became a picture of Paris because the
+  phrase model invented a subject, and "how this painting works" was a mis-hearing of "pipeline". Whisper's
+  per-token confidence is now exposed (`transcribe_detailed`) but not yet used — TODO N1/N2/N3.
 - English only; accents and a noisy room raise transcription errors (sessions are recorded to `logs/*.wav` for tuning).
