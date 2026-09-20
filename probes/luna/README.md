@@ -68,3 +68,9 @@ was wrong. Exit code 1 if anything failed.
 
 Add new cases to the generator-free JSON directly; keep groups: `chart-edit`, `chart-guard`, `diagram-edit`,
 `board`, `photo`.
+
+## Groups added with the logo/icon change (2026-09-20)
+`ambient` (17 cases): technologies, companies and concepts that are only *mentioned* should get a logo or icon, and
+decoys must stay quiet (apple, "go over", swift, "cut me some slack", rust, filler, a foil, something already on the
+board). Also `diagram-guard-no-placeholder-steps`: "our pipeline has four steps" must not draw "Step 1…Step 4".
+Spoken checks: `fixtures/audio/ambient-symbols-talk.wav` + `scripts/e2e_symbols.py`.

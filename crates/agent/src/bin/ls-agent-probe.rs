@@ -361,11 +361,15 @@ fn check(expect: &Value, before: &Scene, after: &Scene, ops: &[Op]) -> Vec<Strin
                 }
             }
             "logo" => {
-                let name = want["name_contains"].as_str().unwrap_or_default().to_lowercase();
+                // one expectation, or a list of them (a sentence that names several brands)
+                let wants: Vec<&Value> = if want.is_array() { want.as_array().unwrap().iter().collect() } else { vec![want] };
                 let asked: Vec<(&str, bool)> = ops.iter().filter_map(|o| if let Op::ShowLogo { name, replace } = o { Some((name.as_str(), *replace)) } else { None }).collect();
-                let replace = want["replace"].as_bool();
-                if !asked.iter().any(|(n, r)| n.to_lowercase().contains(&name) && replace.is_none_or(|w| w == *r)) {
-                    bad.push(format!("logo: want show_logo containing {name:?}{} got {asked:?}", replace.map_or(String::new(), |w| format!(" with replace={w}"))));
+                for want in wants {
+                    let name = want["name_contains"].as_str().unwrap_or_default().to_lowercase();
+                    let replace = want["replace"].as_bool();
+                    if !asked.iter().any(|(n, r)| n.to_lowercase().contains(&name) && replace.is_none_or(|w| w == *r)) {
+                        bad.push(format!("logo: want show_logo containing {name:?}{} got {asked:?}", replace.map_or(String::new(), |w| format!(" with replace={w}"))));
+                    }
                 }
             }
             "icon" => {

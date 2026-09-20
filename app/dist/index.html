@@ -91,6 +91,13 @@
   .tile.logo .lg .word { font: 700 9vh/1.05 "Noteworthy", "Chalkboard SE", "Marker Felt", cursive; color: #2b2723; text-align: center; padding: 0 4vw; overflow-wrap: anywhere; }
   .tile.logo .lg .cap:empty, .tile.logo .lg .word:empty { display: none; }
   .tile.logo.full .lg img { max-width: 52%; max-height: 62%; }
+  /* Zoom (layout "hero"): the focused tile is the big one, and its picture grows too. A lone tile has no neighbours to
+     outgrow, so its picture scales up instead. */
+  .tile .fg { transition: scale 600ms cubic-bezier(.2,.8,.2,1); }
+  .tile.logo.zoom .lg img { max-width: 86%; max-height: 74%; }
+  .tile.logo.zoom.full .lg img { max-width: 72%; max-height: 76%; }
+  .tile.logo.zoom .lg .word { font-size: 12vh; }
+  .tile.full.zoom:not(.gfx):not(.logo) .fg { scale: 1.1; }
   body:not(.sketch) .tile.logo { background: radial-gradient(130% 120% at 12% 0%, #1b2436 0%, #0d121c 55%, #07090e 100%); box-shadow: 0 2.2vh 6vh rgba(0,0,0,0.65), inset 0 0 0 1px rgba(255,255,255,0.07); }
   body:not(.sketch) .tile.logo .lg .cap, body:not(.sketch) .tile.logo .lg .word { color: #f1f3f7; font-family: -apple-system, "SF Pro Display", "Helvetica Neue", sans-serif; }
   body.sketch .tile.logo { background: transparent; box-shadow: none; }
@@ -106,8 +113,9 @@
   body.sketch .tile.gfx { background: transparent; box-shadow: none; }
   body.sketch .pol { position: absolute; inset: 5%; background: #fffdf7; padding: 2.4% 2.4% 0 2.4%; box-sizing: border-box;
     box-shadow: 0 1.4vh 3.2vh rgba(70,48,18,0.28), 0 0.25vh 0.6vh rgba(70,48,18,0.22); transform: rotate(var(--rot, 0deg));
-    transition: transform 600ms cubic-bezier(.2,.8,.2,1); display: flex; flex-direction: column; }
+    transition: transform 600ms cubic-bezier(.2,.8,.2,1), scale 600ms cubic-bezier(.2,.8,.2,1); display: flex; flex-direction: column; }
   body.sketch .tile.full .pol { inset: 7vh 14vw; }
+  body.sketch .tile.full.zoom .pol { scale: 1.08; }
   body.sketch .pol .ph { position: relative; flex: 1; overflow: hidden; background: #ddd; }
   body.sketch .pol .ph img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: saturate(0.92) contrast(1.02) sepia(0.06); }
   body.sketch .pol .cap { height: 5.2vh; display: flex; align-items: center; justify-content: center; color: #2b2723;
@@ -260,6 +268,7 @@
         if (sig !== t.sig) { t.sig = sig; try { Sketch.render(t.div.querySelector('svg.g'), e, W, H, t.seen, n === 1, sketch ? 'sketch' : 'slate'); } catch (err) { fe('js_error', sc.chunk_id, null, 'gfx ' + err); } }
         t.div.classList.toggle('full', n === 1);
         t.div.classList.toggle('dim', sc.layout === 'hero' && !e.focus && n > 1);
+        t.div.classList.toggle('zoom', sc.layout === 'hero' && e.focus);
         t.div.style.zIndex = e.focus ? 2 : 1;
         setRect(t.div, e.rect);
         requestAnimationFrame(() => t.div.classList.add('on'));
@@ -280,6 +289,7 @@
         }
         t.div.classList.toggle('full', n === 1);
         t.div.classList.toggle('dim', sc.layout === 'hero' && !e.focus && n > 1);
+        t.div.classList.toggle('zoom', sc.layout === 'hero' && e.focus);
         t.div.style.zIndex = e.focus ? 2 : 1;
         setRect(t.div, e.rect);
         requestAnimationFrame(() => t.div.classList.add('on'));
@@ -299,6 +309,7 @@
       const ia = (fg.naturalWidth || 16) / (fg.naturalHeight || 9), ta = (e.rect.w * innerWidth) / (e.rect.h * innerHeight);
       t.div.classList.toggle('fit', !sketch && full && Math.abs(ia / ta - 1) > 0.15);
       t.div.classList.toggle('dim', sc.layout === 'hero' && !e.focus && n > 1);
+      t.div.classList.toggle('zoom', sc.layout === 'hero' && e.focus);
       t.div.style.zIndex = e.focus ? 2 : 1;
       setRect(t.div, e.rect);
       requestAnimationFrame(() => t.div.classList.add('on'));
@@ -310,13 +321,18 @@
       // Marker circle around a highlighted tile, hand-drawn arrows between tiles; only new marks draw in.
       const want = new Map();
       for (const a of sc.annotations) if (a.kind !== 'arrow') for (const id of a.targets) want.set(id, a);
+      const rectOf = Object.fromEntries(sc.elements.map(e => [e.id, e.rect]));
       for (const [id, t] of tiles) {
         const m = t.div.querySelector('svg.mark'); if (!m) continue;
-        const a = want.get(id), key = a ? a.id + (a.label || '') : '';
+        const a = want.get(id), r = rectOf[id];
+        // Sized from the tile's new rect: offsetWidth still reads the old size while the tile animates to its place (zoom,
+        // a new tile), which left the circle the wrong size. A resized tile re-fits the same circle without redrawing it in.
+        const W = r ? r.w * innerWidth * 1.08 : 0, H = r ? r.h * innerHeight * 1.08 : 0;
+        const what = a ? a.id + '|' + (a.label || '') : '';
+        const key = a ? what + '|' + Math.round(W) + 'x' + Math.round(H) : '';
         if (key !== t.mark) {
-          const W = t.div.offsetWidth * 1.08, H = t.div.offsetHeight * 1.08;
-          if (a) Sketch.circleAround(m, a.id, W, H, a.label, true); else m.innerHTML = '';
-          t.mark = key;
+          if (a) Sketch.circleAround(m, a.id, W, H, a.label, t.markWhat !== what); else m.innerHTML = '';
+          t.mark = key; t.markWhat = what;
         }
       }
       const byId = Object.fromEntries(sc.elements.map(e => [e.id, e]));

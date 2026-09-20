@@ -1,0 +1,26 @@
+# Words this talk uses that Whisper mangles. One term per line; lines starting with # are ignored.
+# NO COMMAS in comment lines: the loader splits on commas before it drops comments.
+# Read at startup as Whisper's initial prompt (Talk mentioning: ...) so keep it short:
+# only names the recognizer got wrong in real runs. TALK_TERMS in the environment overrides this file.
+#
+# From logs/run-1789886582 (2026-09-20)
+# Cognition was heard as co-edition / call ignition / recognition
+Cognition
+# Devin was heard as Devon
+Devin
+# Baseten was heard as base 10 / base sign
+Baseten
+# Claude was heard as Cloud / Clyde
+Claude
+# OpenAI CLIP was heard as AI clip
+OpenAI
+CLIP
+# Coding-problem names
+LeetCode
+Two Sum
+# Code review terms
+pull request
+PR
+# The live-designer model and the recognizer itself
+Luna
+Whisper

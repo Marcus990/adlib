@@ -21,9 +21,9 @@ Icons/logos/flags use text lookup (no embeddings) — see §3.
 
 | path | what |
 |---|---|
-| `images/000001.jpg …` | 15,000 JPEGs (q80, **longest side ≤ 1024 px**): 10,000 Open Images V7 + 5,000 COCO val2017 |
-| `manifest.json` | 15,000 entries `{id, filename, source_dataset, class_label?}`; row `i` ↔ `embeddings.npy[i]` |
-| `embeddings.npy` | float32 `(15000, 512)`, OpenAI `clip-vit-base-patch32`, **image tower only**, 128-byte npy header |
+| `images/000001.jpg …` | 39,476 JPEGs (q80, **longest side ≤ 1024 px**): 10,000 + 24,476 Open Images V7 + 5,000 COCO val2017 (ids 000001–015000 are the original set, 015001+ the 09-20 expansion, §10) |
+| `manifest.json` | 39,476 entries `{id, filename, source_dataset, class_label?}` (rows 15001+ also `oi_image_id`, `author`, `license`); row `i` ↔ `embeddings.npy[i]` |
+| `embeddings.npy` | float32 `(39476, 512)`, OpenAI `clip-vit-base-patch32`, **image tower only**, 128-byte npy header |
 | `icons/` | 13,438 transparent SVGs + `manifest.json` + `lookup.json` + `README.md` (§3) |
 
 Facts that matter (measured this session):
@@ -263,3 +263,27 @@ served through the existing `img://` protocol (`.svg` mime added) → drawn with
 card. Monochrome icons are re-inked for the theme (§5, the cheap part: `currentColor` string replace). **Not done:** icons
 inside diagram nodes (AS7; `Node.icon` is still an emoji field the model no longer fills), the light/dark sibling selection, and
 concept-icon recall beyond name/tags + the model's synonyms ("security" and "growth" match weakly; an embedding of icon names is the next step).
+
+
+## 10. Photo library expansion (2026-09-20)
+The card went from 15,000 photos / 445 distinct labels to **39,476 photos / 2,275 labels** (+24,476, ~3 GB; card now 5.3 GB
+used of 15). The old Open Images batch sampled the ~600 *detection* classes and came out lopsided ("Tree" 1,661; no basketball,
+owl or sunflower). The new rows are a class-balanced sample of Open Images V7 **image-level** labels: up to 12 photos for each of
+2,236 classes (every class with ≥ 8 hosted train photos; a few nudity-adjacent classes are denied, see `DENY`).
+Script: `assets-pipeline/expand_openimages_classes.py` (`plan` then `build`; append-only, resumable, nothing lands on the Mac's disk).
+Per class it fetches 30 candidates, embeds them with the same CLIP ViT-B/32 image tower as the rest of the card, ranks them by
+cosine to "a photo of a {class}", and keeps the best 12 that are not near-duplicates (cos > 0.93) of each other or of any photo
+already on the card. Original rows and vectors are untouched.
+- "Basketball (Ball)" has **no** photos in the hosted set (its positives are all in the non-hosted 9M), so "basketball" is served by
+  `Basketball (Sport)` (61 hosted → 12 kept, incl. a close-up of the ball and a kid holding one), `Basketball court` and `Basketball hoop`.
+  Owl (12), Sunflower (12), Globe, Soccer, Puffin, Hedgehog etc. now exist.
+- **Licensing:** every new photo is CC BY 2.0 (attribution required) and now has `author` + `license` in the manifest, so
+  attribution is possible for these rows (the original 15,000 still have none).
+- Checked: manifest and npy rows align (39,476 = 39,476), no missing files, ids unique; a CPU re-embed of saved JPEGs matches the
+  stored (MPS) vectors at cosine 0.987–0.999; `ls-assets` retrieves the right photos for "owl", "a sunflower in a field",
+  "basketball" (court/sport/hoop images), "soccer ball".
+- **Not done / caveats:** `Index::vocab(200)` (prompt + named-subject shortcut) still lists only the 200 most frequent labels, so
+  most new labels are not in the model prompt; the label gate sees them all, but `models/clip-vit-b32/label-vectors.json` (1,081 labels) is stale, so the next app start re-embeds the ~2,275 labels once (~20 ms each, under a minute).
+  Load is ~2.6× more rows (index read + search scale linearly; measure in release before a live run). The photos are still
+  casual ≤1024 px snapshots, not ≥1920 px stage-quality. OpenAI's own CLIP training set (WIT-400M) was never released, so
+  Open Images is the source; more breadth would come from Open Images' non-hosted 9M (Flickr URLs, link-rot risk) or another dataset.
