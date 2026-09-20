@@ -173,3 +173,20 @@ outright, or searching in parallel while Luna decides.
 
 Caveats: the talk is synthetic speech (macOS `say`), the old pipeline was run once, and the account is capped at 20
 requests/min for Luna, which the pipeline paces to (`AGENT_RPM`, default 18).
+
+---
+
+# Luna on OpenAI's own API (2026-09-20)
+
+`OPENAI_API_KEY` set → `POST https://api.openai.com/v1/chat/completions`, model `gpt-5.6-luna`. Request shape differs from
+OpenRouter (tested against the live API): `max_completion_tokens` not `max_tokens`; `reasoning_effort` must be `"none"`
+for function tools on this endpoint (`minimal` is not a value; the alternative is the Responses API); `reasoning` and
+`provider` are rejected as unknown parameters; `temperature` is accepted with reasoning off. Key limits: 500 req/min,
+500k tokens/min.
+
+| | OpenRouter (minimal reasoning) | OpenAI (reasoning off) |
+|---|---|---|
+| Luna probes, 42 cases x 3 | 125 / 126 | first run 123 / 126 (`board-annotate` 0/3: a focus instead of an annotation); after one prompt sentence: **126 / 126** |
+| agent latency per call | median 1.26 s, max 2.2 s | median 0.75-0.93 s, max 1.5-3.9 s |
+| spoken talk, 9 milestones | 9/9 (four runs) | 9/9 (one run: 30 Luna calls, 0 fallbacks, the chart grows live as each number is spoken) |
+| speech -> library photo | 2.4-2.7 s | 2.3 s |

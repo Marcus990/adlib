@@ -37,14 +37,17 @@ pub struct Config {
     pub gen_url: Option<String>,
     pub gen_size: Option<u32>,
     pub index_path: PathBuf,
+    /// OpenRouter key (`OPENROUTER_API_KEY`); Luna's fallback backend.
     pub api_key: Option<String>,
+    /// OpenAI key (`OPENAI_API_KEY`): Luna is called on OpenAI's own API when this is set.
+    pub openai_key: Option<String>,
     pub log_path: PathBuf,
     /// Generated images are kept here and reused on the next run (AS13).
     pub gen_dir: PathBuf,
     /// Lowest photo score a library match needs (`TAU`). The label gate does the real rejecting on the asset card.
     pub tau: f32,
-    /// Most agent calls per minute (`AGENT_RPM`, default 18): a new OpenRouter account is capped at 20/min for Luna.
-    pub agent_rpm: u32,
+    /// Most agent calls per minute (`AGENT_RPM`). Default: 30 on OpenAI, 18 on OpenRouter (a new account is capped at 20/min).
+    pub agent_rpm: Option<u32>,
     pub chunker: ChunkerConfig,
     /// Words the talk uses that Whisper mangles (TALK_TERMS / talk-terms.txt) — passed as its initial prompt.
     pub talk_terms: Vec<String>,
@@ -82,9 +85,10 @@ impl Config {
             clip_dir: p("CLIP_DIR", "models/mobileclip-s2"),
             index_path: p("INDEX", "dev-library/index.json"),
             api_key: env("OPENROUTER_API_KEY"),
+            openai_key: env("OPENAI_API_KEY"),
             log_path: root.join("logs").join(format!("run-{stamp}.jsonl")),
             tau,
-            agent_rpm: env("AGENT_RPM").and_then(|v| v.parse().ok()).unwrap_or(18),
+            agent_rpm: env("AGENT_RPM").and_then(|v| v.parse().ok()),
             chunker: {
                 let mut c = ChunkerConfig::default();
                 c.tick_ms = 600; // small.en p90 ≈ 640 ms per pass; a 500 ms tick would fall behind
@@ -170,7 +174,7 @@ impl Engine {
         }
         let searcher = Arc::new(searcher);
         let http = reqwest::Client::builder().pool_idle_timeout(Duration::from_secs(300)).tcp_keepalive(Duration::from_secs(30)).build()?;
-        let agent = CanvasAgent::new(http.clone(), cfg.api_key.clone(), cfg.canvas_model.clone());
+        let agent = CanvasAgent::new(http.clone(), cfg.api_key.clone(), cfg.canvas_model.clone()).with_openai(cfg.openai_key.clone());
         let gen = ImageGen::new(http, cfg.gen_key.clone(), cfg.gen_url.clone(), cfg.gen_size);
         Ok(Self { cfg, clip, searcher, cache, agent, gen, vocab })
     }
@@ -442,7 +446,8 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
     let mut last_speaking = String::new(); // the phrase in progress as of the last call
     let mut changes: VecDeque<Change> = VecDeque::new();
     // ---- when it is called ----
-    let min_gap = if engine.agent.has_remote() { Duration::from_millis(60_000 / cfg.agent_rpm.max(1) as u64) } else { Duration::ZERO };
+    let rpm = cfg.agent_rpm.unwrap_or_else(|| engine.agent.default_rpm());
+    let min_gap = if engine.agent.has_remote() { Duration::from_millis(60_000 / rpm.max(1) as u64) } else { Duration::ZERO };
     let mut agent_busy = false;
     let mut last_call: Option<Instant> = None;
     let mut call_no = 0u64;

@@ -35,7 +35,7 @@ A quick guide for presenters (top) and for whoever tunes it (bottom). Canvas mod
 
 ## How each decision is made
 
-**One decision-maker: Luna** (`openai/gpt-5.6-luna` through OpenRouter, `crates/agent`). Jev, the image-phrase model and
+**One decision-maker: Luna** (`gpt-5.6-luna` on OpenAI's own API, or through OpenRouter as `openai/gpt-5.6-luna`; `crates/agent`). Jev, the image-phrase model and
 the stage's hold/confirm rules are gone from the runtime path. Everything that changes the screen — a photo, a chart,
 a diagram, a correction, a removal, a layout change, a clear — is one Luna tool call.
 
@@ -57,7 +57,7 @@ It acts only on the newest words; earlier speech is context. Its answer is tool 
 | `remove(id)` · `clear_board` | Take a tile away; clear the screen. |
 
 **When Luna is called:** whenever it is idle, at least 3 new words have arrived (partial phrases count), and the
-rate cap allows (`AGENT_RPM`, default 18/min; a new OpenRouter account is limited to 20/min for this model).
+rate cap allows (`AGENT_RPM`: 30/min on OpenAI; 18/min on OpenRouter, where a new account is limited to 20/min).
 Sentences that arrive while it is busy are merged into the next call, not dropped. After the audio ends, the last
 words get a final call.
 
@@ -81,6 +81,17 @@ words get a final call.
 
 Every refused op, every model failure and every "nothing to do" is in `logs/run-*.jsonl` (`ev: "agent"`, fields
 `ops`, `applied`, `refused`, `no_action`, `error`).
+
+## Backends: the two APIs are not the same shape
+The same tools, prompt and parsing go to either; only the request differs (`CanvasAgent::request_body`, unit-tested):
+
+| | OpenAI (`OPENAI_API_KEY`) | OpenRouter (`OPENROUTER_API_KEY`) |
+|---|---|---|
+| model id | `gpt-5.6-luna` | `openai/gpt-5.6-luna` |
+| token limit | `max_completion_tokens` (`max_tokens` is rejected) | `max_tokens` |
+| reasoning | `reasoning_effort: "none"`. Function tools on chat completions require it (`minimal` is not a value for this model; the alternative is the Responses API) | `reasoning: {effort: "minimal"}` |
+| routing | none (a `provider` block is rejected) | `provider: {sort: "latency"}` |
+| latency measured | 0.8–1.5 s per call, median ~0.95 s | 1.4–2.25 s, median ~1.9 s |
 
 ## Offline fallback (no key, or Luna unreachable)
 A model call gets one retry (a timeout, a 429 or a 5xx), then the rules answer: `rule_ops`

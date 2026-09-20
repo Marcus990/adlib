@@ -3,17 +3,33 @@
 //! calls (show a photo, draw or patch a chart or diagram, remove, arrange, clear) or `no_action`. Ops go through
 //! [`ground`] (spoken numbers only, quoted authority for destructive ops) before the canvas applies them.
 //! No key / error / timeout → offline cue rules.
+//!
+//! Two backends, same tools and parsing: OpenAI's own API when `OPENAI_API_KEY` is set (no middleman, higher
+//! rate limits), OpenRouter otherwise. Their request shapes differ, see [`CanvasAgent::request_body`].
 
 use ls_canvas::{rule_ops, AnnotationKind, ChartKind, DiagramLayout, EdgeSpec, ElementKind, Layout, NodeSpec, Op, Point, Scene};
 use serde_json::{json, Value};
 use std::time::Duration;
 
-/// GPT-5.6 Luna (user's choice, 09-19). Reasoning is set to minimal — this call is a small tool decision,
-/// not a puzzle. Alternatives: `CANVAS_MODEL=anthropic/claude-haiku-4.5`, `google/gemini-2.5-flash`.
+/// GPT-5.6 Luna (user's choice, 09-19), named the OpenRouter way. OpenAI's own API calls it `gpt-5.6-luna`
+/// (the `openai/` prefix is dropped). Reasoning is off/minimal: this call is a small tool decision, not a puzzle.
+/// Alternatives on OpenRouter: `CANVAS_MODEL=anthropic/claude-haiku-4.5`, `google/gemini-2.5-flash`.
 pub const DEFAULT_MODEL: &str = "openai/gpt-5.6-luna";
 
 fn base() -> String {
     std::env::var("OPENROUTER_BASE_URL").unwrap_or_else(|_| "https://openrouter.ai".into())
+}
+
+/// OpenAI base URL; override with `OPENAI_BASE_URL` (e.g. a local mock).
+fn openai_base() -> String {
+    std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://api.openai.com".into())
+}
+
+/// Which service a call goes to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provider {
+    OpenAi,
+    OpenRouter,
 }
 
 /// Transcript budget in characters (~10k tokens). Older sentences past it are dropped from the front.
@@ -36,7 +52,7 @@ WHAT THE PRESENTER WANTS → WHAT TO CALL
 - REMOVE PART of a chart or diagram: "drop February", "take March out", "skip the test step" → remove_point / remove_node.
 - RENAME or RESTYLE: "call this chart monthly signups", "show that as a line chart" → set_chart. "call the second step compile" → update_node.
 - REMOVE A WHOLE TILE: "take the eagle away", "get rid of the chart" → remove.
-- LAYOUT: compare two things → arrange compare; zoom in on one → focus that tile, then arrange hero; everything together → arrange grid; draw attention to something on a tile → annotate highlight; link two tiles → annotate arrow.
+- LAYOUT: compare two things → arrange compare; zoom in on one → focus that tile, then arrange hero; everything together → arrange grid; draw attention to something on a tile ("pay attention to the owl", "notice the eyes", "look at this part") → annotate highlight on that tile (an annotation, not just a focus: focus is for "zoom in" and "let's talk about this one"); link two tiles → annotate arrow.
 - CLEAR: "let's move on", "next topic", "new section", "start fresh", "clear the screen" → clear_board (skip it if the board is already empty). "Move on" as a figure of speech ("many people move on from Java") is not a command.
 
 PHOTOS (show_photo)
@@ -247,7 +263,10 @@ pub fn user_message(input: &AgentInput) -> String {
 #[derive(Clone)]
 pub struct CanvasAgent {
     http: reqwest::Client,
+    /// OpenRouter key.
     api_key: Option<String>,
+    /// OpenAI key; when present it wins (`CANVAS_PROVIDER=openrouter` overrides that).
+    openai_key: Option<String>,
     pub model: String,
     /// First attempt; a timeout or a 429/5xx gets one more, shorter, attempt (`CANVAS_TIMEOUT_MS`, default 6000).
     timeout: Duration,
@@ -258,20 +277,53 @@ impl CanvasAgent {
         Self {
             http,
             api_key: api_key.filter(|k| !k.trim().is_empty()),
+            openai_key: None,
             model: model.unwrap_or_else(|| DEFAULT_MODEL.into()),
             timeout: Duration::from_millis(std::env::var("CANVAS_TIMEOUT_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(6000)),
         }
     }
 
+    /// Use OpenAI's own API with this key (when it is a non-empty string).
+    pub fn with_openai(mut self, key: Option<String>) -> Self {
+        self.openai_key = key.filter(|k| !k.trim().is_empty());
+        self
+    }
+
+    /// The backend a call goes to, or `None` when no key is set (offline rules only).
+    pub fn provider(&self) -> Option<Provider> {
+        let forced = std::env::var("CANVAS_PROVIDER").map(|v| v.to_lowercase()).unwrap_or_default();
+        match (self.openai_key.is_some(), self.api_key.is_some()) {
+            (true, _) if forced != "openrouter" => Some(Provider::OpenAi),
+            (_, true) => Some(Provider::OpenRouter),
+            (true, false) => Some(Provider::OpenAi),
+            _ => None,
+        }
+    }
+
     pub fn has_remote(&self) -> bool {
-        self.api_key.is_some()
+        self.provider().is_some()
+    }
+
+    /// Calls per minute the backend allows for this account (a new OpenRouter account is capped at 20/min for
+    /// Luna; the OpenAI key measured 500/min and 500k tokens/min, and each call carries the whole transcript).
+    pub fn default_rpm(&self) -> u32 {
+        if self.provider() == Some(Provider::OpenAi) { 30 } else { 18 }
+    }
+
+    /// The model id as the backend spells it.
+    pub fn wire_model(&self) -> String {
+        match self.provider() {
+            Some(Provider::OpenAi) => self.model.strip_prefix("openai/").unwrap_or(&self.model).to_string(),
+            _ if self.model.contains('/') => self.model.clone(),
+            _ => format!("openai/{}", self.model),
+        }
     }
 
     /// Ops for the current board given what was just said. Never fails: a model error falls back to the offline cue rules.
     pub async fn propose(&self, input: &AgentInput<'_>) -> Proposal {
         let newest = input.newest_text();
         let mut error = None;
-        if self.api_key.is_some() {
+        if self.has_remote() {
             for attempt in 0..2 {
                 let budget = if attempt == 0 { self.timeout } else { self.timeout * 2 / 3 };
                 match tokio::time::timeout(budget, self.call_raw(input)).await {
@@ -298,34 +350,49 @@ impl CanvasAgent {
         Proposal { ops: rule_ops(&newest, input.scene), source: Source::Rules, dropped: vec![], error }
     }
 
+    /// The chat-completions request. The two backends disagree about the model's parameters:
+    /// - **OpenAI** (`gpt-5.6-luna`): `max_completion_tokens` (not `max_tokens`); `reasoning_effort` is a top-level
+    ///   string and function tools are only accepted with `"none"` (`minimal` is not a value for this model; the
+    ///   alternative is the Responses API); no `reasoning` object and no `provider` block (both are rejected as
+    ///   unknown parameters); `temperature` is fine with reasoning off.
+    /// - **OpenRouter**: `max_tokens`, a `reasoning: {effort}` object, and `provider: {sort: latency}` routing.
     pub fn request_body(&self, input: &AgentInput<'_>) -> Value {
+        let model = self.wire_model();
         let mut body = json!({
-            "model": self.model,
+            "model": model,
             "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user_message(input)}],
             "tools": tools(),
             "tool_choice": "required",
             "temperature": 0,
-            "max_tokens": 700,
-            "provider": {"sort": "latency"}
         });
-        // Thinking models (Gemini 2.5 Flash, …) are ~2× slower with reasoning on; this call needs none.
-        if self.model.starts_with("openai/gpt-5") || self.model.contains("gpt-oss") {
-            body["reasoning"] = json!({"effort": "minimal"});
-        } else if !self.model.starts_with("anthropic/") {
-            body["reasoning"] = json!({"enabled": false});
+        match self.provider() {
+            Some(Provider::OpenAi) => {
+                body["max_completion_tokens"] = json!(700);
+                if model.starts_with("gpt-5") {
+                    body["reasoning_effort"] = json!("none");
+                }
+            }
+            _ => {
+                body["max_tokens"] = json!(700);
+                body["provider"] = json!({"sort": "latency"});
+                // Thinking models (Gemini 2.5 Flash, …) are ~2× slower with reasoning on; this call needs none.
+                if model.starts_with("openai/gpt-5") || model.contains("gpt-oss") {
+                    body["reasoning"] = json!({"effort": "minimal"});
+                } else if !model.starts_with("anthropic/") {
+                    body["reasoning"] = json!({"enabled": false});
+                }
+            }
         }
         body
     }
 
     /// The provider's raw JSON reply: no timeout, no parsing. For latency and token probes.
     pub async fn call_raw(&self, input: &AgentInput<'_>) -> anyhow::Result<String> {
-        let resp = self
-            .http
-            .post(format!("{}/api/v1/chat/completions", base()))
-            .bearer_auth(self.api_key.as_deref().unwrap_or_default())
-            .json(&self.request_body(input))
-            .send()
-            .await?;
+        let (url, key) = match self.provider() {
+            Some(Provider::OpenAi) => (format!("{}/v1/chat/completions", openai_base()), self.openai_key.as_deref()),
+            _ => (format!("{}/api/v1/chat/completions", base()), self.api_key.as_deref()),
+        };
+        let resp = self.http.post(url).bearer_auth(key.unwrap_or_default()).json(&self.request_body(input)).send().await?;
         let status = resp.status();
         let text = resp.text().await?;
         if !status.is_success() {
@@ -704,6 +771,36 @@ mod tests {
         assert!(user.contains("[0:00] Revenue was ten million") && user.contains(&format!("\"id\":\"{id}\"")));
         assert!(user.contains("Said since your last call:\n[0:10] Then fifteen million in March."), "only sentences from new_from on");
         assert!(user.contains("Being spoken now (may be unfinished): actually March was eighteen"));
+    }
+
+    #[test]
+    fn openai_and_openrouter_get_the_request_shape_each_one_accepts() {
+        let c = Canvas::new();
+        let tr = sentences(&["hello"]);
+        let inp = input(c.scene(), &tr, 0, "");
+        // OpenAI: bare model id, max_completion_tokens, reasoning_effort "none"; no `reasoning` / `provider` / `max_tokens`
+        let oa = CanvasAgent::new(reqwest::Client::new(), None, None).with_openai(Some("k".into()));
+        assert_eq!(oa.provider(), Some(Provider::OpenAi));
+        let b = oa.request_body(&inp);
+        assert_eq!(b["model"], "gpt-5.6-luna");
+        assert_eq!((b["max_completion_tokens"].as_i64(), b["reasoning_effort"].as_str(), b["temperature"].as_i64()), (Some(700), Some("none"), Some(0)));
+        for rejected in ["max_tokens", "reasoning", "provider"] {
+            assert!(b.get(rejected).is_none(), "OpenAI rejects `{rejected}`");
+        }
+        assert_eq!(b["tool_choice"], "required");
+        assert_eq!(oa.default_rpm(), 30);
+        // OpenRouter: prefixed model id, max_tokens, reasoning object, provider routing
+        let or = CanvasAgent::new(reqwest::Client::new(), Some("k".into()), Some("gpt-5.6-luna".into()));
+        assert_eq!(or.provider(), Some(Provider::OpenRouter));
+        let b = or.request_body(&inp);
+        assert_eq!(b["model"], "openai/gpt-5.6-luna");
+        assert_eq!((b["max_tokens"].as_i64(), b["reasoning"]["effort"].as_str()), (Some(700), Some("minimal")));
+        assert!(b.get("provider").is_some() && b.get("max_completion_tokens").is_none() && b.get("reasoning_effort").is_none());
+        assert_eq!(or.default_rpm(), 18);
+        // both keys: OpenAI wins; no key: offline
+        let both = CanvasAgent::new(reqwest::Client::new(), Some("r".into()), None).with_openai(Some("o".into()));
+        assert_eq!(both.provider(), Some(Provider::OpenAi));
+        assert_eq!(CanvasAgent::new(reqwest::Client::new(), None, None).with_openai(Some("  ".into())).provider(), None);
     }
 
     #[test]

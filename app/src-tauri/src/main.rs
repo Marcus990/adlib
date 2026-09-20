@@ -110,7 +110,7 @@ fn place_on_display(w: &tauri::WebviewWindow, want: &str) {
 fn main() -> anyhow::Result<()> {
     let root = root().canonicalize()?;
     let cfg = Config::from_env(&root);
-    let remote = cfg.api_key.is_some();
+    let remote = cfg.api_key.is_some() || cfg.openai_key.is_some();
     let mode = "canvas";
     let log = Logger::create(&cfg.log_path)?;
     eprintln!("log: {}  remote: {}", cfg.log_path.display(), remote);
