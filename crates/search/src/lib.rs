@@ -232,10 +232,11 @@ impl Searcher {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
         if !labels.iter().all(|l| vectors.contains_key(l)) {
-            vectors = labels
-                .iter()
-                .map(|l| Ok((l.clone(), enc.embed_text(&self.query_text(l))?)))
-                .collect::<Result<_>>()?;
+            for label in &labels {
+                if !vectors.contains_key(label) {
+                    vectors.insert(label.clone(), enc.embed_text(&self.query_text(label))?);
+                }
+            }
             if let Some(d) = cache.parent() {
                 let _ = std::fs::create_dir_all(d);
             }
@@ -262,7 +263,17 @@ impl Searcher {
         idx.sort_by(|a, b| scores[*b].partial_cmp(&scores[*a]).unwrap_or(std::cmp::Ordering::Equal));
         // Walk down the ranking to the best photo the gate allows (no gate → the top hit).
         if let Some(g) = &self.gate {
-            idx.retain(|i| g.allows(&self.index.entries[*i].caption, scores[*i], q, phrase));
+            // An explicit label (including a person's name in a local library) is more precise than
+            // CLIP's semantic affinity: "James" can be close enough to the generic label "man" to
+            // pass the gate, but must select the photo labelled James.
+            let named: Vec<usize> = idx.iter().copied()
+                .filter(|i| names(phrase, self.index.entries[*i].caption.trim()))
+                .collect();
+            if named.is_empty() {
+                idx.retain(|i| g.allows(&self.index.entries[*i].caption, scores[*i], q, phrase));
+            } else {
+                idx = named;
+            }
         }
         let first = *idx.first()?;
         let e = &self.index.entries[first];
@@ -465,6 +476,24 @@ mod tests {
         assert_eq!(s.score_vec(&[1.0, 0.0]), vec![0.5, 1.0]);
         let h = s.hit_for("x", &[1.0, 0.0]).unwrap();
         assert_eq!((h.id.as_str(), h.runner_up.unwrap().0.as_str()), ("b", "a"));
+    }
+
+    #[test]
+    fn exact_named_label_beats_a_generic_semantic_match() {
+        let idx = Index {
+            model: MODEL_NAME.into(),
+            root: "/tmp".into(),
+            entries: vec![
+                entry("man", vec![1.0, 0.0], vec![]),
+                entry("james", vec![0.2, 0.0], vec![]),
+            ],
+        };
+        let s = Searcher {
+            index: idx,
+            template: Some("a photo of {}".into()),
+            gate: Some(LabelGate { vectors: HashMap::new(), min_affinity: 0.92, unlabelled_min: f32::INFINITY }),
+        };
+        assert_eq!(s.hit_for("James", &[1.0, 0.0]).unwrap().id, "james");
     }
 
     #[test]

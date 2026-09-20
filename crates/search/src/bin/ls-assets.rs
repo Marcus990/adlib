@@ -1,5 +1,5 @@
 //! Query Marcus's asset card from the CLI — for calibration (handoff AS3/AS5) and spot checks.
-//!   ls-assets <assets-dir> <clip-text-dir> "a phrase" ["another"]
+//!   ls-assets <assets-dir> <clip-text-dir> [--gated] "a phrase" ["another"]
 //! Prints the top 5 photos per phrase with cosine scores, plus timings.
 use anyhow::Result;
 use ls_search::{assets, Searcher, TextEncoder};
@@ -9,8 +9,13 @@ use std::time::Instant;
 fn main() -> Result<()> {
     let a: Vec<String> = std::env::args().collect();
     if a.len() < 4 {
-        eprintln!("usage: ls-assets <assets-dir> <clip-text-dir> <phrase> [phrase…]");
+        eprintln!("usage: ls-assets <assets-dir> <clip-text-dir> [--gated] <phrase> [phrase…]");
         std::process::exit(2);
+    }
+    let gated = a.get(3).is_some_and(|arg| arg == "--gated");
+    let phrase_start = if gated { 4 } else { 3 };
+    if a.len() <= phrase_start {
+        anyhow::bail!("supply at least one phrase");
     }
     let t = Instant::now();
     let clip = assets::ClipText::load(Path::new(&a[2]))?;
@@ -20,13 +25,27 @@ fn main() -> Result<()> {
     let (n, load_index_ms) = (index.entries.len(), t.elapsed());
     let labelled = index.entries.iter().filter(|e| !e.caption.is_empty()).count();
     println!("model {:?}  index {n} photos ({labelled} labelled) in {load_index_ms:?}  (model load {load_model:?})", load_model);
-    let s = Searcher::new(index);
+    let s = if gated {
+        Searcher::new(index).with_label_gate(&clip, &Path::new(&a[2]).join("label-vectors.json"), 0.92, 0.31)?
+    } else {
+        Searcher::new(index)
+    };
     let _ = clip.embed_text("warm up");
-    for phrase in &a[3..] {
+    for phrase in &a[phrase_start..] {
         let t = Instant::now();
         let q = clip.embed_text(&s.query_text(phrase))?;
         let embed = t.elapsed();
         let t = Instant::now();
+        if gated {
+            let hit = s.hit_for(phrase, &q);
+            let search = t.elapsed();
+            println!("\n{phrase:?}  (embed {embed:?}, gated search {search:?})");
+            match hit {
+                Some(hit) => println!("   {:.4}  {:<10} {:<22} {}", hit.score, hit.id, hit.caption, s.index.entries.iter().find(|e| e.id == hit.id).map(|e| e.file.as_str()).unwrap_or("")),
+                None => println!("   no permitted photo"),
+            }
+            continue;
+        }
         let scores = s.score_vec(&q);
         let search = t.elapsed();
         let mut idx: Vec<usize> = (0..scores.len()).collect();
