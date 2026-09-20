@@ -1,5 +1,6 @@
 //! Add locally supplied JPEGs to an OpenAI CLIP ViT-B/32 asset card.
 //! Usage: ls-assets-add <assets-dir> <clip-dir> <jpeg> <label> [<jpeg> <label> ...]
+//!        ls-assets-add <assets-dir> <clip-dir> --replace <id> <jpeg> [<id> <jpeg> ...]
 //!
 //! Source files must already be JPEGs. This keeps HEIC conversion outside the card and preserves
 //! the card convention of a compact, self-contained `images/` directory.
@@ -43,8 +44,10 @@ fn write_npy(path: &Path, rows: &[Vec<f32>]) -> Result<()> {
 
 fn main() -> Result<()> {
     let a: Vec<String> = std::env::args().collect();
-    if a.len() < 6 || (a.len() - 3) % 2 != 0 {
-        anyhow::bail!("usage: ls-assets-add <assets-dir> <clip-dir> <jpeg> <label> [<jpeg> <label> ...]");
+    let replacing = a.get(3).is_some_and(|arg| arg == "--replace");
+    let first_pair = if replacing { 4 } else { 3 };
+    if a.len() < first_pair + 2 || (a.len() - first_pair) % 2 != 0 {
+        anyhow::bail!("usage: ls-assets-add <assets-dir> <clip-dir> <jpeg> <label> [<jpeg> <label> ...]\n       ls-assets-add <assets-dir> <clip-dir> --replace <id> <jpeg> [<id> <jpeg> ...]");
     }
     let (dir, clip_dir) = (Path::new(&a[1]), Path::new(&a[2]));
     let manifest_path = dir.join("manifest.json");
@@ -61,15 +64,30 @@ fn main() -> Result<()> {
 
     let images = dir.join("images");
     let mut pending: Vec<(PathBuf, PathBuf)> = vec![];
-    for (offset, pair) in a[3..].chunks_exact(2).enumerate() {
-        let source = Path::new(&pair[0]);
+    for (offset, pair) in a[first_pair..].chunks_exact(2).enumerate() {
+        let (id, source, dest) = if replacing {
+            let id = &pair[0];
+            let item = manifest.iter().position(|e| e.get("id").and_then(Value::as_str) == Some(id))
+                .with_context(|| format!("no asset-card entry {id}"))?;
+            let filename = manifest[item].get("filename").and_then(Value::as_str).context("manifest entry has no filename")?;
+            (id.clone(), Path::new(&pair[1]), images.join(filename))
+        } else {
+            let id = format!("{:06}", start + offset as u32);
+            let filename = format!("{id}.jpg");
+            let dest = images.join(&filename);
+            anyhow::ensure!(!dest.exists(), "{} already exists", dest.display());
+            (id, Path::new(&pair[0]), dest)
+        };
         anyhow::ensure!(source.extension().is_some_and(|e| e.eq_ignore_ascii_case("jpg") || e.eq_ignore_ascii_case("jpeg")), "{} is not a JPEG", source.display());
-        let id = format!("{:06}", start + offset as u32);
-        let filename = format!("{id}.jpg");
-        let dest = images.join(&filename);
-        anyhow::ensure!(!dest.exists(), "{} already exists", dest.display());
-        rows.push(embed(source, &vision, &proj, &dev)?);
-        manifest.push(json!({"id": id, "filename": filename, "source_dataset": "local", "class_label": pair[1]}));
+        let embedding = embed(source, &vision, &proj, &dev)?;
+        if replacing {
+            let item = manifest.iter().position(|e| e.get("id").and_then(Value::as_str) == Some(&id)).unwrap();
+            rows[item] = embedding;
+        } else {
+            let filename = dest.file_name().and_then(|x| x.to_str()).context("destination has no filename")?;
+            rows.push(embedding);
+            manifest.push(json!({"id": id, "filename": filename, "source_dataset": "local", "class_label": pair[1]}));
+        }
         pending.push((source.to_path_buf(), dest));
     }
 
@@ -80,7 +98,7 @@ fn main() -> Result<()> {
     for (source, dest) in &pending { std::fs::copy(source, dest).with_context(|| format!("copying {}", source.display()))?; }
     std::fs::rename(&npy_next, dir.join("embeddings.npy"))?;
     std::fs::rename(&manifest_next, &manifest_path)?;
-    println!("Added {} photo(s); library now has {} rows.", pending.len(), rows.len());
+    println!("{} {} photo(s); library now has {} rows.", if replacing { "Replaced" } else { "Added" }, pending.len(), rows.len());
     for (_, dest) in pending { println!("  {}", dest.display()); }
     Ok(())
 }
