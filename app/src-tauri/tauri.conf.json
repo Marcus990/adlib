@@ -15,16 +15,19 @@
         "url": "index.html",
         "width": 1280,
         "height": 720,
+        "visible": false,
         "backgroundColor": "#0b0d12",
         "titleBarStyle": "Overlay",
         "hiddenTitle": true
       },
       {
         "label": "debug",
-        "title": "Live Slides \u2014 debug",
+        "title": "Live Slides Control",
         "url": "debug.html",
-        "width": 620,
-        "height": 760,
+        "width": 760,
+        "height": 780,
+        "minWidth": 680,
+        "minHeight": 680,
         "x": 40,
         "y": 40
       }

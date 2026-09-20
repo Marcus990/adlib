@@ -1,117 +1,93 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Live Slides — debug</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Slides Control</title>
 <style>
-  :root { --bg: #0e1015; --panel: #171a21; --line: #242833; --dim: #7d8594; --text: #d9dde5;
-          --ok: #5fd4a8; --warn: #f0b95b; --bad: #ef6b6b; --blue: #7fb4f5; }
-  * { box-sizing: border-box; }
-  body { margin: 0; font: 12.5px/1.45 ui-monospace, Menlo, monospace; background: var(--bg); color: var(--text); }
-  header { position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--line); z-index: 1; }
-  .strip { display: flex; gap: 14px; align-items: center; padding: 8px 12px; flex-wrap: wrap; }
-  .pill { padding: 2px 8px; border-radius: 99px; background: #222733; white-space: nowrap; }
-  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; background: var(--dim); }
-  .dot.loading { background: var(--warn); } .dot.listening { background: var(--ok); } .dot.error { background: var(--bad); } .dot.ended { background: var(--blue); }
-  .stat b { color: #fff; font-weight: 600; }
-  .now { display: flex; gap: 10px; padding: 0 12px 10px; align-items: center; }
-  #thumb { width: 96px; height: 60px; border-radius: 6px; object-fit: cover; background: #222733; flex: none; }
-  #thumbcap { color: var(--dim); }
-  #curr { padding: 8px 12px 10px; color: #fff; font-size: 14px; min-height: 3.2em; border-top: 1px solid var(--line); }
-  #err { display: none; padding: 8px 12px; background: #3a1d20; color: #ffb3b3; border-top: 1px solid var(--line); }
-  #tools { padding: 6px 12px; border-top: 1px solid var(--line); color: var(--dim); }
-  #tools label { cursor: pointer; user-select: none; }
-  #log { padding: 4px 12px 12px; }
-  .row { border-bottom: 1px solid #1b1f28; padding: 3px 0; white-space: pre-wrap; }
-  .render { color: var(--ok); } .pending { color: var(--warn); } .gap { color: #c9a0f5; } .final { color: var(--dim); }
-  .decide { color: var(--warn); opacity: .85; } .search { color: var(--blue); opacity: .85; } .errrow { color: var(--bad); }
-  .t { color: #555c69; margin-right: 6px; }
+  :root {
+    --sky:#c9f2f1; --pine:#174f4a; --cream:#fff9ea; --paper:#fffdf6;
+    --red:#a43831; --red-dark:#762923; --orange:#e39a45; --green:#2f8a69;
+    --ink:#153e3a; --muted:#56736f; --line:rgba(21,78,73,.18);
+    --shadow:0 14px 40px rgba(23,79,74,.16),0 2px 0 rgba(23,79,74,.08);
+  }
+  *{box-sizing:border-box} html,body{min-height:100%}
+  body{margin:0;color:var(--ink);background:linear-gradient(180deg,#def9f8 0%,var(--sky) 45%,#aadfda 100%);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Avenir Next","Segoe UI",sans-serif;overflow-x:hidden}
+  body::before,body::after{content:"";position:fixed;pointer-events:none;z-index:-2}
+  body::before{left:-8%;right:-8%;bottom:-2px;height:31vh;background:linear-gradient(140deg,transparent 0 12%,rgba(33,112,102,.48) 12.2% 31%,transparent 31.2%) 0 100%/38% 100% repeat-x,linear-gradient(40deg,transparent 0 18%,rgba(23,79,74,.48) 18.2% 43%,transparent 43.2%) 0 100%/44% 90% repeat-x,linear-gradient(180deg,rgba(63,139,121,.12),rgba(23,79,74,.28));clip-path:polygon(0 44%,8% 28%,15% 49%,23% 18%,31% 51%,40% 27%,49% 52%,59% 22%,67% 48%,78% 16%,87% 46%,94% 29%,100% 45%,100% 100%,0 100%)}
+  body::after{left:0;right:0;top:0;height:30vh;opacity:.48;background:radial-gradient(ellipse at 12% 30%,rgba(255,255,255,.9) 0 8%,transparent 8.5%),radial-gradient(ellipse at 20% 20%,rgba(255,255,255,.8) 0 7%,transparent 7.5%),radial-gradient(ellipse at 82% 19%,rgba(255,255,255,.75) 0 8%,transparent 8.5%),radial-gradient(ellipse at 91% 28%,rgba(255,255,255,.85) 0 6%,transparent 6.5%)}
+  button,select,input{font:inherit} button{color:inherit}.app{width:min(100%,850px);margin:0 auto;padding:22px 24px 34px}
+  .topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px}.brand{display:flex;align-items:center;gap:12px}
+  .mark{width:45px;height:45px;display:grid;place-items:center;border-radius:50%;color:var(--cream);background:var(--pine);box-shadow:inset 0 0 0 3px rgba(255,255,255,.18),var(--shadow);transform:rotate(-4deg)}
+  .brand h1{margin:0;color:var(--red);font-size:28px;line-height:1;letter-spacing:-.7px}.brand p{margin:4px 0 0;color:var(--pine);font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+  .phase{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border:1.5px solid var(--line);border-radius:99px;background:rgba(255,253,246,.72);color:var(--pine);font-weight:750;box-shadow:0 3px 12px rgba(23,79,74,.08)}
+  .dot{width:9px;height:9px;border-radius:50%;background:#809a96}.dot.loading,.dot.stopping{background:var(--orange);animation:pulse 1.2s ease-in-out infinite}.dot.listening{background:#2ba56f;box-shadow:0 0 0 4px rgba(43,165,111,.15)}.dot.error{background:#d44a42}.dot.ended{background:#438f91}@keyframes pulse{50%{opacity:.38;transform:scale(.76)}}
+  .card{position:relative;overflow:hidden;margin-bottom:16px;padding:22px;border:1.5px solid rgba(21,78,73,.2);border-radius:22px;background:rgba(255,253,246,.94);box-shadow:var(--shadow)}
+  .card::after{content:"";position:absolute;width:110px;height:30px;right:-26px;top:16px;background:rgba(227,154,69,.18);transform:rotate(38deg);pointer-events:none}
+  .card-head{display:flex;justify-content:space-between;gap:14px;margin-bottom:18px}.eyebrow{margin:0 0 4px;color:var(--red);font-size:11px;font-weight:850;letter-spacing:.11em;text-transform:uppercase}
+  h2{margin:0;color:var(--pine);font-size:22px;letter-spacing:-.35px}.sub{margin:4px 0 0;color:var(--muted);font-size:13px}.fields{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  label.field{display:block}.field>span,.legend{display:block;margin-bottom:6px;color:var(--pine);font-size:12px;font-weight:800}
+  select{width:100%;height:44px;padding:0 38px 0 12px;border:1.5px solid var(--line);border-radius:12px;color:var(--ink);background:var(--paper);outline:none}select:focus{border-color:var(--orange);box-shadow:0 0 0 3px rgba(227,154,69,.17)}
+  .seg{display:grid;grid-template-columns:1fr 1fr;gap:7px;padding:5px;border-radius:13px;background:rgba(23,79,74,.08)}.seg button{border:0;border-radius:9px;padding:7px 10px;background:transparent;font-weight:750;cursor:pointer}.seg button.on{color:var(--cream);background:var(--pine);box-shadow:0 2px 8px rgba(23,79,74,.22)}
+  .checkline{display:flex!important;align-items:center;gap:10px;height:44px;padding:0 12px;border:1.5px solid var(--line);border-radius:12px;background:var(--paper)}.checkline input{width:18px;height:18px;accent-color:var(--red)}
+  .trail{display:flex;align-items:center;gap:7px;margin-top:16px;color:var(--muted);font-size:12px}.trail .line{flex:1;height:2px;border-top:2px dashed rgba(164,56,49,.28)}
+  .ready{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.tag{padding:5px 9px;border-radius:99px;color:var(--pine);background:rgba(47,138,105,.11);font-size:11px;font-weight:750}.tag.warn{color:#844f1a;background:rgba(227,154,69,.18)}
+  .primary,.danger,.secondary{border-radius:12px;padding:11px 16px;font-weight:850;cursor:pointer;transition:transform .15s,box-shadow .15s,opacity .15s}.primary{border:2px solid var(--red-dark);color:#fff8e9;background:linear-gradient(180deg,#b84a3e,var(--red));box-shadow:4px 4px 0 var(--orange)}.primary:hover{transform:translate(-1px,-1px);box-shadow:6px 6px 0 var(--orange)}.primary:disabled{cursor:wait;opacity:.52;transform:none;box-shadow:3px 3px 0 rgba(227,154,69,.55)}
+  .danger{border:1.5px solid rgba(164,56,49,.38);color:var(--red);background:#fff5e9}.secondary{border:1.5px solid var(--line);color:var(--pine);background:var(--paper)}.secondary.on{color:var(--cream);background:var(--pine)}
+  .start-row{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:18px}.start-note{color:var(--muted);font-size:12px;max-width:380px}#live{display:none}
+  .live-grid{display:grid;grid-template-columns:1.35fr .65fr;gap:14px}.transcript{min-height:105px;padding:15px;border-radius:15px;background:#edf8f3;border:1.5px solid rgba(47,138,105,.18)}.transcript .label{color:var(--green);font-size:10px;font-weight:850;letter-spacing:.1em;text-transform:uppercase}#curr{margin-top:7px;color:var(--ink);font-size:17px;font-weight:650}#curr:empty::after{content:"Waiting for speech…";color:#78908c;font-weight:500}
+  .stats{display:grid;grid-template-columns:1fr 1fr;gap:8px}.stat{padding:12px;border-radius:14px;background:rgba(23,79,74,.07)}.stat span{display:block;color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em}.stat b{display:block;margin-top:3px;color:var(--pine);font-size:18px}
+  .controls{display:flex;gap:9px;margin-top:14px}.controls button{flex:1}#err{display:none;margin-top:12px;padding:11px 13px;border-radius:12px;color:#8d2f28;background:#ffe5dc;border:1px solid rgba(164,56,49,.2);font-size:12px}
+  .activity{margin-top:14px}.activity-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}.activity-head span{font-size:12px;font-weight:850;color:var(--pine)}.activity-head label{color:var(--muted);font-size:11px}#log{max-height:165px;overflow:auto;border-top:1px dashed var(--line)}
+  .row{display:flex;gap:9px;padding:8px 2px;border-bottom:1px solid rgba(21,78,73,.08);color:var(--muted);font-size:12px}.row .t{flex:none;color:#8da19d;font-variant-numeric:tabular-nums}.row.render{color:var(--green);font-weight:750}.row.gap,.row.pending{color:#986025}.row.errrow{color:var(--red)}
+  .footer{margin-top:13px;text-align:center;color:rgba(21,62,58,.62);font-size:11px;font-weight:650}@media(max-width:700px){.app{padding:16px}.topbar{align-items:flex-start}.fields,.live-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
-<header>
-  <div class="strip">
-    <span class="pill"><span class="dot loading" id="dot"></span><span id="phase">loading models…</span></span>
-    <span class="pill" id="source">—</span>
-    <span class="pill" id="remote">—</span>
-    <span class="stat">changes <b id="nchg">0</b></span>
-    <span class="stat">last <b id="last">—</b></span>
-    <span class="stat">p50 <b id="p50">—</b></span>
-    <span class="stat">kept <b id="nkeep">0</b></span>
-  </div>
-  <div class="now"><img id="thumb" alt=""><span id="thumbcap">nothing on screen yet</span></div>
-  <div id="err"></div>
-  <div id="curr"></div>
-  <div id="tools"><label><input type="checkbox" id="verbose"> show every decision &amp; search (verbose)</label></div>
-</header>
-<div id="log"></div>
+<main class="app">
+  <header class="topbar">
+    <div class="brand"><div class="mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 32 32" fill="none"><path d="M16 3 20 13 29 16 20 19 16 29 12 19 3 16 12 13 16 3Z" fill="currentColor"/><circle cx="16" cy="16" r="3.5" fill="#e39a45"/></svg></div><div><h1>Live Slides</h1><p>Your talk, mapped live</p></div></div>
+    <div class="phase"><span class="dot" id="dot"></span><span id="phase">Ready to set up</span></div>
+  </header>
+  <section class="card" id="setup">
+    <div class="card-head"><div><p class="eyebrow">Base camp</p><h2>Set up your presentation</h2><p class="sub">Pick where we listen and where the visuals appear.</p></div></div>
+    <div class="fields">
+      <label class="field"><span>Microphone</span><select id="microphone"><option value="">Finding microphones…</option></select></label>
+      <label class="field"><span>Presentation display</span><select id="display"><option value="">Finding displays…</option></select></label>
+      <div class="field"><span class="legend">Visual style</span><div class="seg" id="themes"><button type="button" data-theme="sketch" class="on">Sketchbook</button><button type="button" data-theme="slate">Dark stage</button></div></div>
+      <label class="field"><span>Stage window</span><span class="checkline"><input id="fullscreen" type="checkbox" checked> Start fullscreen</span></label>
+    </div>
+    <div class="ready"><span class="tag" id="modelTag">Checking Luna…</span><span class="tag">Local Whisper</span><span class="tag">Session recording on</span></div>
+    <div class="trail"><span>listen</span><span class="line"></span><span>understand</span><span class="line"></span><span>show</span></div>
+    <div class="start-row"><span class="start-note">Your stage stays hidden until you start. Settings are remembered on this Mac.</span><button class="primary" id="start">Start presentation&nbsp; →</button></div>
+  </section>
+  <section class="card" id="live">
+    <div class="card-head"><div><p class="eyebrow">On the trail</p><h2 id="liveTitle">Presentation in progress</h2><p class="sub" id="source">Preparing your microphone and models…</p></div></div>
+    <div class="live-grid"><div class="transcript"><span class="label">Hearing now</span><div id="curr"></div></div><div class="stats"><div class="stat"><span>Changes</span><b id="nchg">0</b></div><div class="stat"><span>Last</span><b id="last">—</b></div><div class="stat"><span>Median</span><b id="p50">—</b></div><div class="stat"><span>Kept</span><b id="nkeep">0</b></div></div></div>
+    <div id="err"></div>
+    <div class="controls"><button class="secondary" id="blank">Blank stage</button><button class="danger" id="end">End presentation</button></div>
+    <div class="activity"><div class="activity-head"><span>Recent activity</span><label><input type="checkbox" id="verbose"> show technical details</label></div><div id="log"></div></div>
+  </section>
+  <div class="footer">Built for fast ideas, live audiences, and one very busy weekend.</div>
+</main>
 <script>
-  // Operator view. Latency = speech (end of the audio that triggered it) → render event.
-  const { listen } = window.__TAURI__.event;
-  const { invoke } = window.__TAURI__.core;
-  const $ = id => document.getElementById(id);
-  const t0 = performance.now();
-  const lats = [];
-  let nchg = 0, nkeep = 0;
-  const SRC = { Jev: 'Jev', LlmFallback: 'LLM fallback', Heuristic: 'local rule' };
-
-  const stamp = () => ((performance.now() - t0) / 1000).toFixed(1).padStart(6) + 's';
-  function add(cls, text, verboseOnly) {
-    if (verboseOnly && !$('verbose').checked) return;
-    const d = document.createElement('div'); d.className = 'row ' + cls;
-    const t = document.createElement('span'); t.className = 't'; t.textContent = stamp();
-    d.appendChild(t); d.appendChild(document.createTextNode(text));
-    $('log').prepend(d); while ($('log').children.length > 300) $('log').lastChild.remove();
-  }
-
-  function applyState(s) {
-    const phase = s.phase || 'loading';
-    $('dot').className = 'dot ' + phase;
-    $('phase').textContent = { loading: 'loading models…', listening: 'listening', ended: 'talk ended', error: 'error' }[phase] || phase;
-    if (s.source) $('source').textContent = s.source;
-    $('remote').textContent = s.remote ? 'hosted models: on' : 'hosted models: off (local fallbacks)';
-    $('err').style.display = s.error ? 'block' : 'none';
-    $('err').textContent = s.error ? 'ERROR: ' + s.error : '';
-  }
-
-  function median(v) { const s = [...v].sort((a, b) => a - b); return s.length ? s[Math.floor((s.length - 1) / 2)] : null; }
-
-  listen('state', e => applyState(e.payload));
-  invoke('app_state').then(applyState).catch(() => {});
-
-  listen('status', e => {
-    const s = e.payload;
-    switch (s.type) {
-      case 'chunk':
-        $('curr').textContent = s.text;
-        if (s.final) add('final', '▪ ' + s.text);
-        break;
-      case 'agent': {
-        const did = (s.applied || []).concat((s.photos || []).map(p => 'show_photo ' + p));
-        const why = (s.no_action && s.no_action.length) ? ' — nothing: ' + s.no_action.join('; ') : '';
-        const bad = (s.refused && s.refused.length) ? '  ✗ ' + s.refused.join('; ') : '';
-        add('decide', `#${s.chunk_id} Luna${s.source === 'Rules' ? ' (offline rules)' : ''} ${s.ms} ms: ${did.length ? did.join(', ') : 'no change'}${why}${bad}`, !did.length);
-        break;
-      }
-      case 'outcome':
-        if (s.outcome === 'rendered') {
-          nchg++; $('nchg').textContent = nchg;
-          if (s.latency_ms != null) { lats.push(s.latency_ms); $('last').textContent = s.latency_ms + ' ms'; $('p50').textContent = median(lats) + ' ms'; }
-          if (s.image_id) { $('thumb').src = 'img://localhost/' + s.image_id; $('thumbcap').textContent = s.image_id; }
-          else { $('thumb').removeAttribute('src'); $('thumbcap').textContent = '(cleared)'; }
-          add('render', `#${s.chunk_id} ▶ ${s.image_id ?? 'clear'}${s.latency_ms != null ? '  (' + s.latency_ms + ' ms)' : ''}`);
-        } else if (s.outcome === 'pending') add('pending', `#${s.chunk_id} ⏸ held (minimum on-screen time)`);
-        else if (s.outcome === 'library_gap') add('gap', `#${s.chunk_id} ∅ change wanted, no image good enough`);
-        else { nkeep++; $('nkeep').textContent = nkeep; add('', `#${s.chunk_id} ${s.outcome}`, true); }
-        break;
-      case 'error':
-        add('errrow', 'ERROR ' + s.error);
-        break;
-      case 'summary':
-        add('render', `SUMMARY changes=${s.summary.renders} p50=${s.p50} ms p95=${s.p95} ms`);
-        break;
-    }
-  });
+  // Browser preview for visual QA; Tauri supplies the real commands in the app.
+  if(!window.__TAURI__){const handlers={};window.__TAURI__={event:{listen:(n,cb)=>{handlers[n]=cb;return Promise.resolve()}},core:{invoke:cmd=>Promise.resolve(cmd==='list_microphones'?['MacBook Air Microphone','AirPods']:cmd==='list_displays'?[{id:'0',name:'Built-in Display',primary:true},{id:'1',name:'Projector',primary:false}]:cmd==='app_state'?{phase:'idle',remote:true,theme:'sketch'}:null)}}}
+  const {listen}=window.__TAURI__.event,{invoke}=window.__TAURI__.core,$=id=>document.getElementById(id),t0=performance.now(),lats=[];
+  let nchg=0,nkeep=0,blank=false,theme=localStorage.getItem('ls-theme')||'sketch';
+  const SRC={OpenAi:'Luna',OpenRouter:'Luna',Model:'Luna',Rules:'local fallback'};
+  const stamp=()=>((performance.now()-t0)/1000).toFixed(1).padStart(5)+'s';
+  function add(cls,text,verboseOnly=false){if(verboseOnly&&!$('verbose').checked)return;const row=document.createElement('div');row.className='row '+cls;row.innerHTML=`<span class="t">${stamp()}</span><span></span>`;row.lastElementChild.textContent=text;$('log').prepend(row);while($('log').children.length>80)$('log').lastChild.remove()}
+  function median(v){const s=[...v].sort((a,b)=>a-b);return s.length?s[Math.floor((s.length-1)/2)]:null}
+  function selectTheme(next){theme=next;localStorage.setItem('ls-theme',next);document.querySelectorAll('#themes button').forEach(b=>b.classList.toggle('on',b.dataset.theme===next))}
+  selectTheme(theme);$('themes').addEventListener('click',e=>e.target.dataset.theme&&selectTheme(e.target.dataset.theme));
+  function option(select,value,text){const o=document.createElement('option');o.value=value;o.textContent=text;select.appendChild(o)}
+  async function loadChoices(){const savedMic=localStorage.getItem('ls-microphone')||'',savedDisplay=localStorage.getItem('ls-display')||'';const[mics,displays]=await Promise.all([invoke('list_microphones').catch(()=>[]),invoke('list_displays').catch(()=>[])]);$('microphone').innerHTML='';option($('microphone'),'','Automatic');mics.forEach(m=>option($('microphone'),m,m));if([...$('microphone').options].some(o=>o.value===savedMic))$('microphone').value=savedMic;$('display').innerHTML='';displays.forEach(d=>option($('display'),d.id,d.name+(d.primary?' (this display)':'')));if([...$('display').options].some(o=>o.value===savedDisplay))$('display').value=savedDisplay;if(!displays.length)option($('display'),'','Current display')}
+  function applyState(s){const phase=s.phase||'idle',labels={idle:'Ready to set up',loading:'Packing the models…',listening:'Listening live',stopping:'Wrapping up…',ended:'Presentation ended',error:'Needs attention'};$('dot').className='dot '+phase;$('phase').textContent=labels[phase]||phase;const active=phase!=='idle';$('setup').style.display=active?'none':'block';$('live').style.display=active?'block':'none';$('source').textContent=s.source||'Preparing your microphone and models…';$('modelTag').textContent=s.remote?'Luna ready':'Luna key missing';$('modelTag').classList.toggle('warn',!s.remote);$('err').style.display=s.error?'block':'none';$('err').textContent=s.error||'';blank=!!s.blank;$('blank').classList.toggle('on',blank);$('blank').textContent=blank?'Show stage':'Blank stage';$('liveTitle').textContent=phase==='loading'?'Getting everything ready':phase==='stopping'?'Ending presentation':phase==='ended'?'Presentation complete':phase==='error'?'Presentation needs attention':'Presentation in progress';$('end').disabled=['stopping','ended'].includes(phase)}
+  $('start').addEventListener('click',async()=>{const settings={microphone:$('microphone').value,display:$('display').value,fullscreen:$('fullscreen').checked,theme};localStorage.setItem('ls-microphone',settings.microphone);localStorage.setItem('ls-display',settings.display);$('start').disabled=true;$('start').textContent='Starting…';try{await invoke('start_session',{settings})}catch(e){$('start').disabled=false;$('start').textContent='Start presentation →';add('errrow',String(e))}});
+  $('blank').addEventListener('click',()=>invoke('set_blank',{blank:!blank}));$('end').addEventListener('click',()=>invoke('end_session'));
+  listen('state',e=>applyState(e.payload));invoke('app_state').then(applyState);loadChoices();
+  listen('status',e=>{const s=e.payload;switch(s.type){case'chunk':$('curr').textContent=s.text;if(s.final)add('','Heard: “'+s.text+'”');break;case'agent':{const applied=Array.isArray(s.applied)?s.applied:[],photos=Array.isArray(s.photos)?s.photos:[],changes=[...applied,...photos.map(p=>'photo: '+p)],notes=[...(s.no_action||[]),...(s.refused||[])];if(changes.length)add('render',`${SRC[s.source]||s.source} updated ${changes.join(', ')} (${s.ms} ms)`);else{nkeep++;$('nkeep').textContent=nkeep;add('',`${SRC[s.source]||s.source} made no change${notes.length?': '+notes.join('; '):''} (${s.ms} ms)`,true)}break}case'generated':add('render',`Created a new image for “${s.subject}”`);break;case'outcome':if(s.outcome==='rendered'){nchg++;$('nchg').textContent=nchg;if(s.latency_ms!=null){lats.push(s.latency_ms);$('last').textContent=s.latency_ms+'ms';$('p50').textContent=median(lats)+'ms'}add('render',s.image_id?`Showed ${s.image_id}`:'Updated the stage')}else if(s.outcome==='library_gap')add('gap','Could not find a good photo');else{nkeep++;$('nkeep').textContent=nkeep;add('',s.outcome,true)}break;case'error':add('errrow',s.error);break;case'summary':add('render',`Finished with ${s.summary.renders} visual changes`);break}});
 </script>
 </body>
 </html>

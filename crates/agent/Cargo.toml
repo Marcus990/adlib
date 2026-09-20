@@ -7,5 +7,7 @@ edition = "2021"
 ls-canvas = { path = "../canvas" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
 serde_json = "1"
-tokio = { version = "1", features = ["time", "macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["time", "macros", "rt-multi-thread", "sync", "net"] }
 anyhow = "1"
+futures-util = "0.3"
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
