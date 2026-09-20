@@ -92,6 +92,7 @@ LOGOS AND ICONS (show_logo, show_icon) come from a library searched by NAME, not
 
 CHARTS — only from numbers the presenter actually says; never invent or estimate data.
 - bar: values over time or across groups (the default whenever more numbers may follow); line: a trend over 3+ times; pie: shares of a whole; stat: exactly one number that stands alone.
+- A large standalone magnitude is chart data even inside a narrative claim. For one number with a currency, percent, or scale word such as thousand, million or billion, use `draw_chart` with `kind: stat` rather than showing the amount only in text. Example: “McDonald’s lost over one hundred million dollars” → one `$100M` loss stat. Keep the surrounding explanation in text when it is useful.
 - Numbers arrive one at a time. If they are listing or comparing values ("last year… the year before…"), use bar from the FIRST number: a bar chart with one value draws as one big number and grows into bars as more arrive. A stat becomes bars by itself when a second value is added.
 - Plain numbers in `value`: "fifteen thousand" → 15000, "60 percent" → 60 with unit "%". If a chart is kept in millions and they say "eighteen million", the value is 18: match the scale the chart already uses.
 - Never add an "Other", "Rest" or "Not X" remainder; a pie may sum to less than 100.
@@ -166,7 +167,7 @@ pub fn tools() -> Value {
                 "alternatives": {"type": "array", "items": {"type": "string"}, "description": "2–4 other words such an icon could be named by, especially the plain object: teamwork → users, group, people"},
                 "mode": {"type": "string", "enum": ["add", "replace"], "description": "add (default): a new tile. replace: swap the logo/icon just shown for a better one (the newest words name it more exactly)"}}),
             json!(["concept"])),
-        tool("draw_chart", "Add a NEW chart built from numbers the presenter said. Not for correcting or extending a chart already on the board.",
+        tool("draw_chart", "Add a NEW chart built from numbers the presenter said. Use a stat for one large standalone amount such as a $100 million loss; use bars when values are compared or may grow into a series. Not for correcting or extending a chart already on the board.",
             json!({"kind": kind.clone(), "title": {"type": "string", "description": "≤ 6 words"}, "unit": {"type": "string", "description": "e.g. %, $, users, km"},
                 "points": {"type": "array", "items": point, "description": "in the order spoken (chronological for time)"}}),
             json!(["kind", "points"])),

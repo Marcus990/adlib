@@ -1,5 +1,17 @@
 [
  {
+  "id": "chart-large-headline-is-stat",
+  "group": "chart-headline",
+  "board": [],
+  "history": ["Here is the situation."],
+  "newest": "McDonald's lost over one hundred million dollars.",
+  "expect": {
+   "elements": 1,
+   "charts": {"e1": {"kind": "stat", "values": [100]}},
+   "no_photo": true
+  }
+ },
+ {
   "id": "chart-correct-explicit",
   "group": "chart-edit",
   "board": [

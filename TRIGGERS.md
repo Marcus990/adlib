@@ -11,7 +11,7 @@ A quick guide for presenters (top) and for whoever tunes it (bottom). Canvas mod
 | A company logo | "Let's put up the Google logo." / "a logo of the company called Google" / "let's make this presentation about Google" | From the logo library, by name. A brand that isn't in the library gets a plain card with its name (never a drawn logo). |
 | An icon or a flag | "an icon for teamwork", "a database icon", "the flag of Canada" | From the icon library, by name and tags. If nothing fits, a plain card with the word. |
 | Two photos together | "…a red rose and a white rose side by side." | |
-| A chart | Say the numbers: "two hundred users… five hundred… fifteen hundred", "fifty percent are students…" | Only numbers you actually say get charted. |
+| A chart | Say the numbers: "two hundred users… five hundred… fifteen hundred", "fifty percent are students…", "we lost one hundred million dollars" | A single large currency, percent, thousand, million or billion figure becomes a headline stat; only numbers you actually say get charted. |
 | Fix a number | "Sorry, actually it was six hundred." / "Let's correct March from seventy to eighty." / "Make that ninety." | Fixes that one value; the rest of the chart stays. If you name no month, it is the one you just talked about. |
 | Add a number | "And in April we hit ninety five." | Adds to the chart already on screen. |
 | Take one bar / step out | "Drop February." / "Let's take the test step out." | |
