@@ -607,6 +607,77 @@
     });
   }
 
+  // ---------- structured text ----------
+  function renderText(svg, el, card, W, H, seen, f) {
+    const blocks = (card && card.blocks) || [];
+    if (!blocks.length) return;
+    const pad = Math.max(f * 1.7, Math.min(W, H) * 0.06), maxW = W - 2 * pad, maxH = H - 2 * pad;
+    const multiplier = b => b.kind === 'heading' ? (b.level === 2 ? 1.4 : 2.05) : 1;
+    const weight = b => b.kind === 'heading' ? 700 : (b.kind === 'bullet' ? 600 : 400);
+    let base = Math.min(f * 1.2, maxW / 12), layout;
+    const build = size => {
+      let total = 0;
+      const rows = blocks.map((b, i) => {
+        const sz = size * multiplier(b), indent = b.kind === 'bullet' ? f * (b.level ? 2.2 : 1.25) : 0;
+        let lines = TextFit.wrap(b.text, maxW - indent, sz, weight(b), HAND);
+        const cap = b.kind === 'heading' ? 3 : (b.kind === 'paragraph' ? 5 : 3);
+        if (lines.length > cap) {
+          lines = lines.slice(0, cap);
+          lines[cap - 1] = TextFit.ellipsize(lines[cap - 1] + '…', maxW - indent, sz, weight(b), HAND);
+        }
+        const lh = sz * (b.kind === 'heading' ? 1.3 : 1.24), gap = i === blocks.length - 1 ? 0 : size * (b.kind === 'heading' ? 0.72 : 0.48);
+        total += lines.length * lh + gap;
+        return { b, lines, size: sz, lh, gap, indent, weight: weight(b) };
+      });
+      return { rows, total };
+    };
+    for (let i = 0; i < 30; i++) {
+      layout = build(base);
+      if (layout.total <= maxH) break;
+      base *= 0.92;
+    }
+    const titleOnly = blocks.length === 1 && blocks[0].kind === 'heading';
+    let y = pad + (maxH - layout.total) / 2;
+    for (const row of layout.rows) {
+      const key = `text:${row.b.id}:${row.b.text}:${(row.b.emphasis || []).join('|')}`, isNew = !seen.has(key);
+      seen.add(key);
+      const x = titleOnly ? W / 2 : pad + row.indent;
+      const source = String(row.b.text), sourceLower = source.toLowerCase();
+      let cursor = 0;
+      const spans = row.lines.map(line => {
+        const plain = line.replace(/…$/, '').trimEnd(), at = sourceLower.indexOf(plain.toLowerCase(), cursor);
+        const start = at < 0 ? cursor : at;
+        cursor = start + plain.length;
+        return { start, end: start + plain.length };
+      });
+      row.lines.forEach((line, li) => {
+        const cy = y + row.lh * (li + 0.5), anchor = titleOnly ? 'middle' : 'start';
+        for (const phrase of row.b.emphasis || []) {
+          const from = sourceLower.indexOf(String(phrase).toLowerCase());
+          if (from >= 0) {
+            const to = from + String(phrase).length, span = spans[li];
+            let a = Math.max(from, span.start) - span.start, b = Math.min(to, span.end) - span.start;
+            while (a < b && /\s/.test(line[a])) a++;
+            while (b > a && /\s/.test(line[b - 1])) b--;
+            if (a >= b) continue;
+            const before = line.slice(0, a), hit = line.slice(a, b);
+            const lineW = tw(line, row.size, row.weight), left = titleOnly ? x - lineW / 2 : x;
+            const sx = left + tw(before, row.size, row.weight), ex = sx + tw(hit, row.size, row.weight);
+            const r = rng(key + ':' + li + ':' + phrase);
+            const uy = cy + row.size * 0.62;
+            pen(svg, lineD(r, sx, uy, ex, uy, row.size * 0.08), MARK[2], Math.max(2, row.size * 0.16), isNew, li * 100, 350, { opacity: 0.8 });
+          }
+        }
+        write(svg, line, x, cy, row.size, { 'text-anchor': anchor, 'font-weight': row.weight }, isNew, li * 90);
+      });
+      if (row.b.kind === 'bullet') {
+        const r = rng(key + ':bullet'), cy = y + row.lh * 0.5, bx = pad + (row.b.level ? f * 1.05 : f * 0.35);
+        pen(svg, ellipseD(r, bx, cy, Math.max(3, base * 0.13), Math.max(3, base * 0.13), 0.08), MARK[0], Math.max(1.5, base * 0.11), isNew, 0, 220);
+      }
+      y += row.lines.length * row.lh + row.gap;
+    }
+  }
+
   // ---------- annotations (used by index.html) ----------
   function circleAround(svg, key, W, H, label, isNew) {
     svg.innerHTML = '';
@@ -629,6 +700,7 @@
       const f = Math.max(12, Math.min(W, H * 1.6) * (full ? 0.03 : 0.026));
       if (el.diagram) renderDiagram(svg, el, el.diagram, W, H, seen, f);
       else if (el.chart) renderChart(svg, el, el.chart, W, H, seen, f);
+      else if (el.text) renderText(svg, el, el.text, W, H, seen, f);
     },
     circleAround, arrowBetween, rng, fmt,
   };

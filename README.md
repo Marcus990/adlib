@@ -1,13 +1,14 @@
 # Live Slides — 48-hour proof of concept
 
-A presenter talks; the screen shows one full-bleed image from a local library that matches what is
-being said, changing on its own. Design doc: see PLAN.md (link). State of the build: PROGRESS.md / TODO.md.
+A presenter talks; the screen builds a live visual board of photos, logos, charts, diagrams and structured
+text, changing on its own. Design details: see CANVAS.md and TRIGGERS.md.
 
 ```
-mic → VAD + Whisper (local) → transcript → Luna (OpenAI API, or OpenRouter) → board ops / show_photo
+mic → VAD + Whisper (local) → transcript → Luna (OpenAI API, or OpenRouter) → board ops
                                   Luna sees the whole transcript, the board, and what it changed recently
                        show_photo → CLIP search of the photo library (local) → or draw it → Tauri render
                        show_logo / show_icon → name lookup in the logo & icon library (local, no embeddings) → or a name card
+                       draw_text / patch text block → semantic heading, paragraph and bullet renderer
 ```
 
 ## One-time setup (8 GB Mac: run heavy steps one at a time)
