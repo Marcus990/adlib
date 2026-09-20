@@ -609,16 +609,7 @@
 
   // ---------- structured text ----------
   function renderText(svg, el, card, W, H, seen, f) {
-    // `text` is context for Luna and later edits; `emphasis` is the actual screen copy. Keeping that
-    // distinction here prevents full transcript-like sentences from leaking onto the presentation.
-    const blocks = ((card && card.blocks) || []).flatMap(b => {
-      const source = String(b.text), lower = source.toLowerCase();
-      const phrases = (b.emphasis || [])
-        .filter(p => p && lower.includes(String(p).toLowerCase()))
-        .sort((a, z) => lower.indexOf(String(a).toLowerCase()) - lower.indexOf(String(z).toLowerCase()));
-      if (!phrases.length) return [];
-      return [{ ...b, text: phrases.join(' '), emphasis: phrases }];
-    });
+    const blocks = (card && card.blocks) || [];
     if (!blocks.length) return;
     const pad = Math.max(f * 1.7, Math.min(W, H) * 0.06), maxW = W - 2 * pad, maxH = H - 2 * pad;
     const multiplier = b => b.kind === 'heading' ? (b.level === 2 ? 1.4 : 2.05) : 1;

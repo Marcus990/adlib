@@ -56,8 +56,8 @@ Offline rules (no key): "compare/versus/side by side" → compare; "focus on/thi
   sent only the changed point used to wipe the rest of the chart.
 - The board holds at most one text tile. A new `draw_text` replaces that tile in place; text never accumulates beside
   older text. The tile holds up to eight semantic blocks: `heading`, `paragraph` and `bullet`, with stable ids (`b1`…)
-  for list extensions and corrections. Every block carries 1–2 exact `emphasis` phrases; those phrases are the only
-  words the renderer shows and underlines. A closing such as “Thank you” is an ordinary heading block. Text tools only
+  for list extensions and corrections. Every block carries 1–2 exact `emphasis` phrases; the renderer shows the full
+  concise block and underlines those phrases. A closing such as “Thank you” is an ordinary heading block. Text tools only
   apply after finished speech, so a partial ASR phrase cannot become visible copy.
 - Canvas rules: omitted edges = chain (flow/timeline), chain + closing edge (cycle), spokes (hub); a redraw
   sharing ≥ half the nodes of a diagram on the board replaces it in place; same chart title → replace data;

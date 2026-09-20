@@ -21,7 +21,7 @@ A quick guide for presenters (top) and for whoever tunes it (bottom). Canvas mod
 | A loop | "…and it all runs in a loop." | Turns the process into a cycle. |
 | Parts of a whole | "The system is made up of three parts: the ears, the brain and the canvas." | |
 | A timeline | "In 2019 we… In 2021 we… In 2023…" | |
-| Structured text | "There are three lessons. First, start with users. Second, measure the outcome." | One text tile maximum. New text replaces old text, and only the selected key phrases appear underlined. Ordinary narration does not become text. |
+| Structured text | "There are three lessons. First, start with users. Second, measure the outcome." | One text tile maximum. New text replaces old text; the full concise wording appears with selected key phrases underlined. Ordinary narration does not become text. |
 | Fix text | "Actually, make the second point measure the real outcome." | Updates that block without redrawing the card. |
 | Compare / zoom / point | "Let's compare them side by side." "Zoom in on the owl." "Notice the eyes." | |
 | Remove a picture | "Take the eagle away." / "Get rid of the chart." | Name the thing. |
@@ -82,7 +82,7 @@ words get a final call.
   is gone, it is refused and logged. A `clear_board` clears only the tiles Luna saw.
 - **Visible text waits for a finished sentence.** Luna still sees partial speech and can react quickly with other tools,
   but draw/add/update text calls from a partial-only turn are refused. `draw_text` replaces the existing text tile.
-  Every block needs 1–2 exact emphasis phrases; only those phrases render, and a block without one is refused.
+  Every block needs 1–2 exact emphasis phrases; the full block renders with those phrases underlined, and a block without one is refused.
 - Canvas limits: ≤ 4 tiles, ≤ 3 annotations, ≤ 8 nodes and ≤ 8 points; a stat with a second value becomes bars; a
   redraw sharing half its nodes with a diagram on the board replaces it in place.
 - **Logos and icons never go to image generation.** They are looked up in `LS_ASSETS/icons` (`crates/search/src/icons.rs`, a port
