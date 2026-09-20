@@ -2221,7 +2221,9 @@
     ],
     "Azure": "azure",
     "Google": "google"
-   }
+   },
+   "no_symbol": true,
+   "no_photo": true
   }
  },
  {
@@ -2344,5 +2346,18 @@
     "what": "show_logo Google"
    }
   ]
+ },
+ {
+  "id": "logo-guard-company-with-figures",
+  "group": "symbol",
+  "board": [],
+  "history": [
+   "Let's compare the cloud providers."
+  ],
+  "newest": "Amazon Web Services has thirty two percent of the market.",
+  "expect": {
+   "no_symbol": true,
+   "no_photo": true
+  }
  }
 ]

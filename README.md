@@ -50,16 +50,21 @@ With no mic named, the app prefers AirPods, then the MacBook mic, and never a vi
   `python3 scripts/e2e_check.py logs/run-….jsonl` (nine board milestones, in order).
 - Agent probes (no audio): `cargo run -p ls-agent --bin ls-agent-probe -- --runs 3` (see probes/luna/README.md).
 - Headless (no UI) replay with a summary: `./target/release/ls-replay talk.wav`
-- Every run writes `logs/run-<epoch>.jsonl`: chunk (asr/vad ms, lag), agent_call / agent (Luna's ops, what applied,
-  what was refused and why, `no_action` reasons, ms), photo_search (subject, best + score), generated, render
+- Every run writes `logs/run-<epoch>.jsonl`: chunk (asr/vad ms, lag), agent_call / agent (Luna's ops, transport,
+  first WebSocket event and total ms, what applied, what was refused and why, `no_action` reasons), photo_search (subject, best + score), generated, render
   (speech→render ms), scene (the board after each change), frontend_ack (decode + receive→paint ms).
 
 ## Tuning knobs
 - `OPENAI_API_KEY` / `OPENROUTER_API_KEY` — Luna's backend: OpenAI's own API when its key is set, else OpenRouter
   (`CANVAS_PROVIDER=openrouter` forces OpenRouter). `CANVAS_MODEL` (default `gpt-5.6-luna`; on OpenRouter it is
-  `openai/gpt-5.6-luna`, the prefix is added or dropped for you). `CANVAS_TIMEOUT_MS` (6000): one retry, shorter, on a
-  timeout / 429 / 5xx, then the offline rules. `AGENT_RPM` — calls per minute: 30 on OpenAI (the key measured
-  500 requests and 500k tokens a minute, and every call carries the whole transcript), 18 on OpenRouter (a new
+  `openai/gpt-5.6-luna`, the prefix is added or dropped for you). OpenAI calls use the standard service tier by
+  default and log the tier returned; `CANVAS_SERVICE_TIER=fast` opts into Fast mode. `CANVAS_TRANSPORT=websocket` enables OpenAI's
+  persistent Responses connection: startup prepares the prompt and tools without generating, later turns send
+  incremental speech and canvas outcomes, and any socket failure retries over HTTP. HTTP remains the default until
+  this path matches the established full probe baseline.
+  `CANVAS_TIMEOUT_MS` (6000): one retry, shorter, on a
+  timeout / 429 / 5xx, then the offline rules. `AGENT_RPM` — calls per minute: 500 on OpenAI (the measured maximum;
+  the account also allows 500k tokens a minute, and HTTP calls carry the whole transcript), 18 on OpenRouter (a new
   account is capped at 20/min for Luna).
 - `LS_ASSETS` (asset card root, e.g. `/Volumes/NO NAME/assets`) — Marcus's 15k-photo library (OpenAI CLIP ViT-B/32
   embeddings) and, in `icons/`, 13k logos, icons and flags searched by name (see ASSETS_HANDOFF.md). Unset = the local MobileCLIP index (`INDEX`, `CLIP_DIR`).

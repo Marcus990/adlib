@@ -49,7 +49,7 @@ pub struct Config {
     pub theme: String,
     /// Lowest photo score a library match needs (`TAU`). The label gate does the real rejecting on the asset card.
     pub tau: f32,
-    /// Most agent calls per minute (`AGENT_RPM`). Default: 30 on OpenAI, 18 on OpenRouter (a new account is capped at 20/min).
+    /// Most agent calls per minute (`AGENT_RPM`). Default: the measured 500 max on OpenAI, 18 on OpenRouter.
     pub agent_rpm: Option<u32>,
     pub chunker: ChunkerConfig,
     /// Words the talk uses that Whisper mangles (TALK_TERMS / talk-terms.txt) — passed as its initial prompt.
@@ -192,7 +192,7 @@ impl Engine {
         Ok(Self { cfg, clip, searcher, cache, agent, gen, vocab, icons })
     }
 
-    /// Warm-up: CLIP text path, image prefetch, the image-generation deployment.
+    /// Warm-up: CLIP text path, image prefetch, Luna's Responses socket, and the image-generation deployment.
     pub async fn warm_up(&self, log: &Logger) {
         let t = Instant::now();
         let _ = self.clip.embed_text("warm up");
@@ -203,7 +203,11 @@ impl Engine {
             let g = self.gen.clone();
             tokio::spawn(async move { g.warm_up().await });
         }
-        log.log(json!({"ev": "warm_up", "ms": t.elapsed().as_millis() as u64, "prefetched": n, "remote": self.agent.has_remote(), "symbols": self.icons.is_some()}));
+        let luna_ws = match self.agent.warm_up().await {
+            Ok(ms) => json!({"enabled": ms.is_some(), "ms": ms}),
+            Err(e) => json!({"enabled": true, "error": format!("{e:#}")}),
+        };
+        log.log(json!({"ev": "warm_up", "ms": t.elapsed().as_millis() as u64, "prefetched": n, "remote": self.agent.has_remote(), "symbols": self.icons.is_some(), "luna_ws": luna_ws}));
     }
 }
 
@@ -412,7 +416,8 @@ fn attach_pictures(engine: &Engine, canvas: &Canvas, ops: &mut [Op], log: &Logge
             }
             Op::AddPoint { id, label, icon, logo, .. } => {
                 let join = has_pictures(id, false);
-                *icon = if join { url(icons.picture_for(logo.as_deref(), None, label, false)) } else { None };
+                // Joining a chart whose other points carry logos, the point's own name is the brand when the model gave no hint.
+                *icon = if join { url(icons.picture_for(logo.as_deref().or(Some(label.as_str())), None, label, false)) } else { None };
                 log.log(json!({"ev": "pictures", "op": "add_point", "label": label, "logo": logo, "chart_has_pictures": join, "found": icon.is_some()}));
                 *logo = None;
             }
@@ -620,7 +625,8 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                     Msg::Status(v) => sink.status(&v),
                     Msg::Chunk(c, tm, wall) => {
                         summary.chunks += 1;
-                        log.log(json!({"ev": "chunk", "chunk": c, "audio_ms": tm.audio_ms, "vad_ms": tm.vad_ms.round(),
+                        log.log(json!({"ev": "chunk", "chunk": c, "audio_ms": tm.audio_ms,
+                            "speech_rms": (tm.speech_rms * 1000.0).round() / 1000.0, "vad_ms": tm.vad_ms.round(),
                             "asr_ms": tm.asr_ms.round(), "emitted_ms": wall, "asr_lag_ms": wall.saturating_sub(audio_t0 + c.t_end_ms)}));
                         sink.status(&json!({"type": "chunk", "text": c.text, "final": c.is_final}));
                         last_chunk_id = c.id;
@@ -641,7 +647,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                         if proposal.source == ls_agent::Source::Rules {
                             summary.agent_fallbacks += 1;
                         }
-                        let ls_agent::Proposal { mut ops, source, mut dropped, error } = proposal;
+                        let ls_agent::Proposal { mut ops, source, mut dropped, error, transport, first_event_ms, service_tier } = proposal;
                         // One clear per section cue: the partial and the final of "let's move on…" both asked
                         // to clear, wiping a photo that had just appeared (09-19).
                         if last_clear.is_some_and(|t: Instant| t.elapsed() < Duration::from_secs(6)) && ops.iter().any(|o| matches!(o, Op::ClearBoard { .. })) {
@@ -663,11 +669,16 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                         if names.iter().any(|n| n.starts_with("clear_board")) {
                             last_clear = Some(Instant::now());
                         }
+                        let mut acknowledged = names.clone();
+                        acknowledged.extend(photos.iter().map(|(subject, _)| format!("show_photo {subject}: search queued")));
+                        acknowledged.extend(logos.iter().map(|(name, _)| format!("show_logo {name}: placed (or a name card if not in the library)")));
+                        acknowledged.extend(icons.iter().map(|(q, _)| format!("show_icon {}: placed (or a name card if nothing fits)", q[0])));
+                        engine.agent.acknowledge(&acknowledged, &refused, canvas.scene()).await;
                         summary.ops_applied += names.len();
                         summary.ops_refused += refused.len();
-                        log.log(json!({"ev": "agent", "call": call, "chunk_id": chunk_id, "source": format!("{source:?}"), "ms": ms, "error": error,
+                        log.log(json!({"ev": "agent", "call": call, "chunk_id": chunk_id, "source": format!("{source:?}"), "transport": format!("{transport:?}"), "service_tier": service_tier, "first_event_ms": first_event_ms, "ms": ms, "error": error,
                             "ops": ops, "applied": names, "refused": refused, "no_action": no_action}));
-                        sink.status(&json!({"type": "agent", "call": call, "chunk_id": chunk_id, "source": format!("{source:?}"), "ms": ms,
+                        sink.status(&json!({"type": "agent", "call": call, "chunk_id": chunk_id, "source": format!("{source:?}"), "transport": format!("{transport:?}"), "service_tier": service_tier, "first_event_ms": first_event_ms, "ms": ms,
                             "ops": ops.len(), "applied": names, "refused": refused, "no_action": no_action,
                             "photos": photos.iter().map(|p| p.0.clone()).chain(logos.iter().map(|n| format!("logo {}", n.0))).chain(icons.iter().map(|q| format!("icon {}", q.0[0]))).collect::<Vec<_>>()}));
                         for n in names {
