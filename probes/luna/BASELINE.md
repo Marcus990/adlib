@@ -190,3 +190,56 @@ for function tools on this endpoint (`minimal` is not a value; the alternative i
 | agent latency per call | median 1.26 s, max 2.2 s | median 0.75-0.93 s, max 1.5-3.9 s |
 | spoken talk, 9 milestones | 9/9 (four runs) | 9/9 (one run: 30 Luna calls, 0 fallbacks, the chart grows live as each number is spoken) |
 | speech -> library photo | 2.4-2.7 s | 2.3 s |
+
+
+---
+
+# Logos, icons and flags (branch `logos-and-icons`, 2026-09-20)
+
+**The bug:** "a logo of the company called Google" generated a junk picture. Cause (from the live run's log): Luna's only photo
+tool is the CLIP search, which cannot find a logo, so `show_photo("Google")` missed and fell through to image generation
+(`google.jpg`); and when the presenter said "logo" Luna answered `no_action` ("logos are not photographable"), because the
+prompt told it not to show logos and it had no tool for them. Nothing in Rust loaded `icons/`.
+
+**The fix:** `show_logo(name)` and `show_icon(concept, alternatives)`, name lookup ported to Rust (63/63 queries identical to the
+Python reference), a `logo` tile, a name card on a miss, and no generation for symbols ever.
+
+| check | result |
+|---|---|
+| Luna probes, 54 cases x 3 (12 new symbol cases: explicit, "a logo of the company called Google", subject of the talk, unknown brand, passing mentions, icons, flags, photo stays a photo) | **162 / 162**, median 0.78 s |
+| spoken logo talk (`fixtures/audio/luna-logo-talk.wav`, `e2e_check.py --talk logo`) | **6 / 6**: Google and Microsoft logos from the library, "teamwork" -> `lucide:users` via the model's synonyms, `flag of Canada`, "Hooli" -> plain name card, clear |
+| spoken edit talk (regression) | 9 / 9 |
+| rendering (headless Chrome, real `index.html`, both themes) | logo, icon, flag and name card all draw; the dark theme uses a re-inked copy of monochrome icons |
+
+Two things found on the way. (1) The lookup's own rule auto-picked a lone weak fuzzy hit: "Hooli" showed the **Hoodie** logo; logos
+now need an exact name or a fuzzy match >= 0.85. (2) My first prompt for the new tools made an unrelated chart case flaky (11/12,
+then 5/15): Luna called the newest sentence "already spoken earlier" because each new sentence appeared twice in the message
+(end of the transcript, and under "Newest words"). Listing it once fixed that case (15/15) and is now the format.
+
+
+---
+
+# Text fitting, icons in diagrams and charts, technical diagrams (2026-09-20)
+
+**Before (rendering, headless Chrome, the real web view).** Long node labels overflowed their boxes ("Authentication" spilled past the edge;
+"Authentication and…" and "Kafka event…" were cut off), edge labels ran through boxes and arrows, edges crossed nodes, bar-chart axis labels sat on
+the baseline, line-chart values collided with the line, pie labels left the tile. Cause: text width was *guessed* as `maxWidth / (fontSize x 0.5)`,
+but the handwriting font is wider, and text was never shrunk.
+
+**After.** Real measurement (`textfit.js`), shrink-before-split, one text scale per diagram, layered layout with crossing reduction and
+vertical relaxation, curved edges with labels placed in the gaps, a pie legend, axis labels sized to their slot, halos. `scripts/preview_scene.py`
+checks 7 hard cases x 2 themes: **14 / 14 render with no text outside its box, no overlaps, no split words** (before: overflow in 5 of 5 sketch
+cases). Icons draw in nodes, chart axes and pie legends in both themes.
+
+| check | result |
+|---|---|
+| Luna probes, 65 cases x 3 (new: 8 technical-diagram cases with edge and icon expectations, 3 symbol-refinement cases) | **195 / 195**, median 1.0 s per call |
+| spoken architecture talk (`fixtures/audio/luna-tech-talk.wav`, `e2e_check.py --talk tech`) | **5 / 5 in two runs**: 7-8 nodes, 6-7 edges, a picture on every node (logos for Postgres, Redis, Kafka; icons for the rest), a 3-point chart with a logo on each point |
+| spoken logo talk (regression) | 6 / 6 in three runs; in one run Luna used `replace` to turn a generic flag into Canada's flag |
+| spoken edit talk (regression) | 9 / 9 |
+
+Found on the way. (1) **Icons showed as a broken image in the app**: `main.rs` had its own copy of the mime function that served SVG as
+`image/jpeg`; fixed by using the shared one (test in `crates/search`, and reproduced in Chrome: the same SVG labelled jpeg shows the broken-image
+icon). (2) Luna sometimes used a generic icon for a named product (Spark, Snowflake, Grafana); the prompt now says a named product ALWAYS takes a logo
+(0/3 -> 6/6). (3) Acting on an unfinished phrase ("the flag…") left the wrong symbol up; `show_logo` / `show_icon` now have `replace`.
+(4) A concurrent live session's log was newer than mine and `ls -t` picked it; the e2e runs now read the log path the replay tool prints.

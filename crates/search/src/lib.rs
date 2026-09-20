@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use tokenizers::Tokenizer;
 
 pub mod assets;
+pub mod icons;
 
 pub const MODEL_NAME: &str = "mobileclip-v1-s2";
 pub const DIM: usize = 512;
@@ -401,7 +402,32 @@ impl ImageCache {
 
     pub fn mime_of(id_or_path: &str) -> &'static str {
         let l = id_or_path.to_lowercase();
-        if l.ends_with(".png") { "image/png" } else if l.ends_with(".webp") { "image/webp" } else { "image/jpeg" }
+        if l.ends_with(".png") { "image/png" } else if l.ends_with(".webp") { "image/webp" } else if l.ends_with(".svg") { "image/svg+xml" } else { "image/jpeg" }
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    /// What the app's `img://` handler does for a symbol tile: look the id up in the cache, send the bytes with `mime_of(id)`.
+    /// A logo served as `image/jpeg` shows as a broken image in the webview (the app once had its own copy of this
+    /// function that did not know SVG).
+    #[test]
+    fn a_registered_svg_is_served_with_the_svg_mime_type() {
+        let dir = std::env::temp_dir().join(format!("ls-cache-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("google-icon.svg");
+        std::fs::write(&file, "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'/>").unwrap();
+        let cache = ImageCache::new(&Index { model: String::new(), root: dir.to_string_lossy().into(), entries: vec![] }, 1 << 20);
+        cache.add("logos-google-icon.svg", file);
+        let bytes = cache.get("logos-google-icon.svg").expect("registered ids are served");
+        assert!(bytes.starts_with(b"<svg"));
+        assert_eq!(ImageCache::mime_of("logos-google-icon.svg"), "image/svg+xml");
+        assert_eq!(ImageCache::mime_of("LOGOS-X.SVG"), "image/svg+xml");
+        assert_eq!(ImageCache::mime_of("gen-owl.png"), "image/png");
+        assert_eq!(ImageCache::mime_of("007916"), "image/jpeg", "library photos have no extension and are JPEG");
+        assert!(cache.get("unknown.svg").is_none());
     }
 }
 

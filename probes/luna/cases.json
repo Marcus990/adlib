@@ -1739,5 +1739,625 @@
   "expect": {
    "no_photo": true
   }
+ },
+ {
+  "id": "logo-explicit",
+  "group": "symbol",
+  "board": [],
+  "history": [],
+  "newest": "Let's put up the Google logo.",
+  "expect": {
+   "logo": {
+    "name_contains": "google"
+   },
+   "no_photo": true
+  }
+ },
+ {
+  "id": "logo-a-logo-of-the-company",
+  "group": "symbol",
+  "board": [],
+  "history": [],
+  "newest": "Here's a logo of the company called Google.",
+  "expect": {
+   "logo": {
+    "name_contains": "google"
+   },
+   "no_photo": true
+  }
+ },
+ {
+  "id": "logo-subject-of-the-talk",
+  "group": "symbol",
+  "board": [],
+  "history": [],
+  "newest": "Let's make this presentation about a company called Google.",
+  "expect": {
+   "logo": {
+    "name_contains": "google"
+   },
+   "no_photo": true
+  }
+ },
+ {
+  "id": "logo-second-brand",
+  "group": "symbol",
+  "board": [
+   {
+    "photo": "eagle"
+   }
+  ],
+  "history": [
+   "Here is an eagle."
+  ],
+  "newest": "Now the Microsoft logo.",
+  "expect": {
+   "logo": {
+    "name_contains": "microsoft"
+   },
+   "no_photo": true,
+   "present": [
+    "e1"
+   ]
+  }
+ },
+ {
+  "id": "logo-brand-not-in-the-library",
+  "group": "symbol",
+  "board": [],
+  "history": [],
+  "newest": "And here is the Hooli logo.",
+  "expect": {
+   "logo": {
+    "name_contains": "hooli"
+   },
+   "no_photo": true
+  }
+ },
+ {
+  "id": "logo-guard-passing-mention",
+  "group": "symbol",
+  "board": [],
+  "history": [
+   "We looked at a lot of options."
+  ],
+  "newest": "Google announced record results last week.",
+  "expect": {
+   "no_symbol": true,
+   "no_photo": true,
+   "no_change": true
+  }
+ },
+ {
+  "id": "logo-guard-comparison",
+  "group": "symbol",
+  "board": [],
+  "history": [],
+  "newest": "This is much faster than what Microsoft ships.",
+  "expect": {
+   "no_symbol": true,
+   "no_photo": true,
+   "no_change": true
+  }
+ },
+ {
+  "id": "icon-explicit",
+  "group": "symbol",
+  "board": [],
+  "history": [],
+  "newest": "Put up an icon for teamwork.",
+  "expect": {
+   "icon": {
+    "concept_contains": "teamwork",
+    "min_alternatives": 1
+   },
+   "no_photo": true
+  }
+ },
+ {
+  "id": "icon-database",
+  "group": "symbol",
+  "board": [],
+  "history": [],
+  "newest": "Show a database icon.",
+  "expect": {
+   "icon": {
+    "concept_contains": "database"
+   },
+   "no_photo": true
+  }
+ },
+ {
+  "id": "icon-flag",
+  "group": "symbol",
+  "board": [],
+  "history": [],
+  "newest": "Here is the flag of Canada.",
+  "expect": {
+   "icon": {
+    "concept_contains": "canada"
+   },
+   "no_photo": true
+  }
+ },
+ {
+  "id": "icon-security-concept",
+  "group": "symbol",
+  "board": [],
+  "history": [
+   "Now let's talk about protecting user data."
+  ],
+  "newest": "We need an icon that says security.",
+  "expect": {
+   "icon": {
+    "concept_contains": "security",
+    "min_alternatives": 1
+   }
+  }
+ },
+ {
+  "id": "symbol-guard-photo-stays-a-photo",
+  "group": "symbol",
+  "board": [],
+  "history": [],
+  "newest": "Here's what a golden eagle looks like.",
+  "expect": {
+   "photo": {
+    "subject_contains": "eagle",
+    "mode": "add"
+   },
+   "no_symbol": true
+  }
+ },
+ {
+  "id": "tech-request-path",
+  "group": "tech-diagram",
+  "board": [],
+  "history": [],
+  "newest": "So the browser calls our API gateway, which routes to the auth service and the orders service, and the orders service writes to Postgres and publishes events to Kafka.",
+  "expect": {
+   "elements": 1,
+   "diagrams": {
+    "e1": {
+     "nodes_include": [
+      "gateway",
+      "auth",
+      "orders",
+      "Postgres",
+      "Kafka"
+     ],
+     "edges_include": [
+      [
+       "gateway",
+       "auth"
+      ],
+      [
+       "gateway",
+       "orders"
+      ],
+      [
+       "orders",
+       "Postgres"
+      ],
+      [
+       "orders",
+       "Kafka"
+      ]
+     ],
+     "edge_count_min": 5
+    }
+   },
+   "hints": {
+    "Postgres": {
+     "logo": "postgres"
+    },
+    "Kafka": {
+     "logo": "kafka"
+    },
+    "Browser": {
+     "icon_any": [
+      "globe",
+      "monitor",
+      "laptop",
+      "app-window"
+     ]
+    },
+    "gateway": {
+     "icon_any": [
+      "network",
+      "router",
+      "webhook",
+      "server",
+      "shield"
+     ]
+    }
+   },
+   "icons_valid": true,
+   "icon_coverage": 0.7
+  }
+ },
+ {
+  "id": "tech-brand-stack",
+  "group": "tech-diagram",
+  "board": [],
+  "history": [],
+  "newest": "Our stack is React on the front end, a Node.js API in the middle, and MongoDB for storage.",
+  "expect": {
+   "elements": 1,
+   "diagrams": {
+    "e1": {
+     "nodes_include": [
+      "React",
+      "Node",
+      "Mongo"
+     ],
+     "edges_include": [
+      [
+       "React",
+       "Node"
+      ],
+      [
+       "Node",
+       "Mongo"
+      ]
+     ]
+    }
+   },
+   "hints": {
+    "React": {
+     "logo": "react"
+    },
+    "Node": {
+     "logo": "node"
+    },
+    "Mongo": {
+     "logo": "mongo"
+    }
+   },
+   "icons_valid": true
+  }
+ },
+ {
+  "id": "tech-data-pipeline",
+  "group": "tech-diagram",
+  "board": [],
+  "history": [],
+  "newest": "Events flow from Kafka into Spark, Spark writes to Snowflake, and Grafana reads from Snowflake.",
+  "expect": {
+   "elements": 1,
+   "diagrams": {
+    "e1": {
+     "nodes_include": [
+      "Kafka",
+      "Spark",
+      "Snowflake",
+      "Grafana"
+     ],
+     "edges_include": [
+      [
+       "Kafka",
+       "Spark"
+      ],
+      [
+       "Spark",
+       "Snowflake"
+      ]
+     ],
+     "edges_between": [
+      [
+       "Grafana",
+       "Snowflake"
+      ]
+     ]
+    }
+   },
+   "hints": {
+    "Kafka": {
+     "logo": "kafka"
+    },
+    "Snowflake": {
+     "logo": "snowflake"
+    },
+    "Grafana": {
+     "logo": "grafana"
+    }
+   },
+   "icons_valid": true
+  }
+ },
+ {
+  "id": "tech-fan-in",
+  "group": "tech-diagram",
+  "board": [],
+  "history": [],
+  "newest": "Both the mobile app and the web app call the same backend API.",
+  "expect": {
+   "elements": 1,
+   "diagrams": {
+    "e1": {
+     "nodes_include": [
+      "mobile",
+      "web",
+      "API"
+     ],
+     "edges_include": [
+      [
+       "mobile",
+       "API"
+      ],
+      [
+       "web",
+       "API"
+      ]
+     ]
+    }
+   },
+   "hints": {
+    "mobile": {
+     "icon_any": [
+      "smartphone",
+      "tablet",
+      "phone"
+     ]
+    },
+    "web": {
+     "icon_any": [
+      "globe",
+      "monitor",
+      "laptop",
+      "app-window"
+     ]
+    }
+   },
+   "icons_valid": true
+  }
+ },
+ {
+  "id": "tech-extend-with-cache",
+  "group": "tech-diagram",
+  "board": [
+   {
+    "op": {
+     "op": "draw_diagram",
+     "layout": "flow",
+     "title": "Request path",
+     "nodes": [
+      {
+       "label": "Browser"
+      },
+      {
+       "label": "API"
+      },
+      {
+       "label": "Postgres"
+      }
+     ],
+     "edges": [
+      {
+       "from": "Browser",
+       "to": "API"
+      },
+      {
+       "from": "API",
+       "to": "Postgres"
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Browser calls the API and the API reads Postgres."
+  ],
+  "newest": "And the API also talks to Redis for caching.",
+  "expect": {
+   "elements": 1,
+   "diagrams": {
+    "e1": {
+     "nodes_include": [
+      "Browser",
+      "API",
+      "Postgres",
+      "Redis"
+     ],
+     "edges_include": [
+      [
+       "API",
+       "Redis"
+      ]
+     ],
+     "node_count": 4
+    }
+   },
+   "hints": {
+    "Redis": {
+     "logo": "redis"
+    }
+   },
+   "icons_valid": true
+  }
+ },
+ {
+  "id": "tech-labelled-edges",
+  "group": "tech-diagram",
+  "board": [],
+  "history": [],
+  "newest": "The client sends a token to the gateway, the gateway forwards the request to the orders service, and the orders service returns the response.",
+  "expect": {
+   "elements": 1,
+   "diagrams": {
+    "e1": {
+     "nodes_include": [
+      "client",
+      "gateway",
+      "orders"
+     ],
+     "edges_include": [
+      [
+       "client",
+       "gateway"
+      ],
+      [
+       "gateway",
+       "orders"
+      ]
+     ]
+    }
+   },
+   "icons_valid": true
+  }
+ },
+ {
+  "id": "chart-brand-logos",
+  "group": "tech-diagram",
+  "board": [],
+  "history": [],
+  "newest": "Amazon Web Services has thirty two percent of the cloud market, Azure has twenty three percent, and Google Cloud has eleven percent.",
+  "expect": {
+   "elements": 1,
+   "point_logos": {
+    "Amazon": [
+     "aws",
+     "amazon"
+    ],
+    "Azure": "azure",
+    "Google": "google"
+   },
+   "no_symbol": true,
+   "no_photo": true
+  }
+ },
+ {
+  "id": "diagram-process-no-forced-icons",
+  "group": "tech-diagram",
+  "board": [],
+  "history": [],
+  "newest": "First we plan the work, then we build it, then we test it, and finally we ship it.",
+  "expect": {
+   "elements": 1,
+   "diagrams": {
+    "e1": {
+     "nodes_include": [
+      "plan",
+      "build",
+      "test",
+      "ship"
+     ],
+     "edges_include": [
+      [
+       "plan",
+       "build"
+      ],
+      [
+       "build",
+       "test"
+      ],
+      [
+       "test",
+       "ship"
+      ]
+     ]
+    }
+   },
+   "icons_valid": true
+  }
+ },
+ {
+  "id": "icon-refine-cut-off-flag",
+  "group": "symbol",
+  "board": [
+   {
+    "logo": {
+     "asset": "lucide:flag",
+     "caption": "Flag"
+    }
+   }
+  ],
+  "history": [
+   "Here is the flag."
+  ],
+  "newest": "Here is the flag of Canada.",
+  "expect": {
+   "icon": {
+    "concept_contains": "canada",
+    "replace": true
+   },
+   "elements": 1
+  },
+  "changes": [
+   {
+    "at_s": 4,
+    "what": "show_icon Flag"
+   }
+  ]
+ },
+ {
+  "id": "logo-refine-cut-off-brand",
+  "group": "symbol",
+  "board": [
+   {
+    "logo": {
+     "asset": "",
+     "caption": "Micro"
+    }
+   }
+  ],
+  "history": [
+   "Now the Micro"
+  ],
+  "newest": "Now the Microsoft logo.",
+  "expect": {
+   "logo": {
+    "name_contains": "microsoft",
+    "replace": true
+   },
+   "elements": 1
+  },
+  "changes": [
+   {
+    "at_s": 4,
+    "what": "show_logo Micro (name card: not in the library)"
+   }
+  ]
+ },
+ {
+  "id": "logo-guard-no-replace-when-new-brand",
+  "group": "symbol",
+  "board": [
+   {
+    "logo": {
+     "asset": "logos:google-icon",
+     "caption": "Google"
+    }
+   }
+  ],
+  "history": [
+   "Here is the Google logo."
+  ],
+  "newest": "And next, the Slack logo.",
+  "expect": {
+   "logo": {
+    "name_contains": "slack",
+    "replace": false
+   }
+  },
+  "changes": [
+   {
+    "at_s": 4,
+    "what": "show_logo Google"
+   }
+  ]
+ },
+ {
+  "id": "logo-guard-company-with-figures",
+  "group": "symbol",
+  "board": [],
+  "history": [
+   "Let's compare the cloud providers."
+  ],
+  "newest": "Amazon Web Services has thirty two percent of the market.",
+  "expect": {
+   "no_symbol": true,
+   "no_photo": true
+  }
  }
 ]

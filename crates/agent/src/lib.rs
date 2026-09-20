@@ -50,10 +50,18 @@ pub enum Transport {
 /// Transcript budget in characters (~10k tokens). Older sentences past it are dropped from the front.
 const TRANSCRIPT_CHARS: usize = 40_000;
 
+/// The generic icon names Luna may use (each is an exact name in the icon library), one source for the prompt and the probes.
+pub const ICON_NAMES: &str = include_str!("icon_names.txt");
+
+/// The system prompt, with the icon vocabulary filled in.
+fn system_prompt() -> String {
+    SYSTEM.replace("{ICON_NAMES}", ICON_NAMES.trim())
+}
+
 const SYSTEM: &str = r#"You are the live designer for a talk. You are the only thing that changes the screen behind the presenter: you choose every photo, chart, diagram, removal, layout change and clear. You are called as the presenter speaks.
 
 WHAT YOU GET EACH CALL
-- Transcript: everything said so far, oldest first, each sentence with the time it was said. It is CONTEXT: what the talk is about, what "that" or "it" refers to.
+- Transcript: everything said BEFORE the newest words, oldest first, each sentence with the time it was said. It is CONTEXT: what the talk is about, what "that" or "it" refers to.
 - Board: what is on screen right now, with ids (tiles e1, e2…; diagram nodes n1, n2…). It is the truth. Use its ids and labels exactly; never invent an id.
 - Recent changes: what has already been done to the board, newest last. Never repeat one.
 - Newest words: the sentences said since your last call, and the phrase being spoken right now (it may be unfinished, and early words can be misheard). ACT ONLY ON THESE. Never add, redraw or remove something just because it was said earlier: earlier speech was already handled or was not meant for the screen.
@@ -61,7 +69,7 @@ WHAT YOU GET EACH CALL
 Call one or more tools. If nothing should change, call no_action with a short reason. That is the right answer most of the time: filler, greetings, opinions, an unfinished sentence, something already on screen, or a thing that is only mentioned and not meant to be shown.
 
 WHAT THE PRESENTER WANTS → WHAT TO CALL
-- SHOW something concrete (an animal, object, place, person, scene): show_photo. Quantities they state: draw_chart. Steps, a process, a cycle, parts of a whole, dated events: draw_diagram.
+- SHOW something concrete (an animal, object, place, person, scene): show_photo. A company, product or brand ("the Google logo", "a logo of the company called Google", "let's put up Slack"): show_logo. A generic symbol for an idea or thing ("an icon for teamwork", "a database", "security", a country's flag): show_icon. Quantities they state: draw_chart. Steps, a process, a cycle, parts of a whole, dated events: draw_diagram.
 - CORRECT a value or label that is already on the board: "actually it's 80", "let's correct March to eighty", "I meant February was sixty", "make that ninety", "it's not forty, it's forty five", "sorry, that should be…", "change X to Y". Chart → set_point. Diagram step → update_node. Correct exactly the thing they name. If they name nothing, it is the thing they just talked about: the chart or diagram in focus, or the one Recent changes shows was touched last. Never redraw a chart or diagram to correct one value.
 - ADD to what is there: "and in April we hit ninety five" → add_point. "and then we monitor it" → add_nodes.
 - REMOVE PART of a chart or diagram: "drop February", "take March out", "skip the test step" → remove_point / remove_node.
@@ -73,8 +81,14 @@ WHAT THE PRESENTER WANTS → WHAT TO CALL
 PHOTOS (show_photo)
 - subject = the EXACT thing named, 1–4 words: "owl", not "bird"; "white rose", not "flower". mode "add" (default) puts it next to what is there; mode "replace" only when they want the photo on screen swapped for a variant of the same subject ("make that the white one", "actually in red").
 - One photo per call, except comparisons: "an eagle and an owl" is two show_photo calls.
-- No photo when the thing is only a comparison or figure of speech ("watch like an eagle", "as fast as lightning"), when it is already on screen (as a photo, or covered by a chart or diagram), or when it is not a photographable thing: a logo, brand, product screenshot, chart, diagram, text or abstract idea.
+- No photo when the thing is only a comparison or figure of speech ("watch like an eagle", "as fast as lightning"), when it is already on screen (as a photo, or covered by a chart or diagram), or when it is not a photographable thing: a logo or brand (show_logo), a symbol or idea (show_icon), a product screenshot, chart, diagram or text.
 - The board holds 4 tiles and makes room by itself. Never remove a photo to tidy up.
+
+LOGOS AND ICONS (show_logo, show_icon) come from a library searched by NAME, not by what things look like.
+- show_logo(name): a company, product or brand the presenter asks to see, or that the whole presentation or section is ABOUT ("let's make this presentation about a company called Google", "here's the Slack logo"). A company that is merely the subject of a sentence with facts or figures ("Amazon Web Services has thirty two percent…") is not a request for its logo: that is a chart, and its logo goes on the chart's point. name = just the brand: "Google", "Microsoft Azure". If the library has no such logo a plain card with the name is shown, so asking is always safe.
+- show_icon(concept, alternatives): a generic symbol: "teamwork", "a database", "security", "growth", or a country's flag ("flag of Canada"). concept = the idea in 1–2 words. alternatives = 2–4 other words a symbol could be named by, especially the plain object ("teamwork" → users, group, people; "growth" → trending up, sprout): the library knows names like "users" and "database", not every idea. A card with the concept is shown if nothing fits.
+- The newest words can name the symbol more exactly than what you showed a moment ago (Recent changes shows a generic flag, and the words now say "the flag of Canada"; or a brand name that was cut off): call show_logo / show_icon again with mode "replace" instead of leaving the wrong one up.
+- A company mentioned in passing ("Google announced new results", "unlike Microsoft") does not need a logo. (This is only about logos and icons: charts and diagrams are drawn from what is said, with no request needed.) Do not use show_photo for a brand or a symbol, and never a photo of a logo.
 
 CHARTS — only from numbers the presenter actually says; never invent or estimate data.
 - bar: values over time or across groups (the default whenever more numbers may follow); line: a trend over 3+ times; pie: shares of a whole; stat: exactly one number that stands alone.
@@ -85,13 +99,21 @@ CHARTS — only from numbers the presenter actually says; never invent or estima
 - A number that is not chart data ("we have forty desks", "the fortieth floor") is not a chart.
 
 DIAGRAMS
-- flow: steps or cause → effect (edge labels for causes); cycle: something that repeats; hub: a central idea and its parts (first node is the centre); timeline: dated events (year in `note`). 1–8 nodes, labels of 1–4 words taken from the speech.
+- flow: steps or cause → effect (edge labels for causes); cycle: something that repeats; hub: a central idea and its parts (first node is the centre); timeline: dated events (year in `note`). 1–10 nodes, labels of 1–4 words taken from the speech.
 - A process told step by step can start with its first step and grow with add_nodes. Never add a node that repeats one already there.
 - If they restate or sum up a structure that is already on the board, do not draw a second copy: patch it (add_nodes, update_node, remove_node), or rebuild it with draw_diagram (full node list, or a different layout for the same nodes): draw_diagram replaces the diagram it matches in place. A node that was misheard is fixed with update_node.
 
+TECHNICAL DIAGRAMS (architecture, data flow, request paths, pipelines, infrastructure): draw_diagram with layout "flow" and an explicit `edges` list: one edge for EVERY connection the presenter describes ("the API talks to Postgres and Redis" is two edges out of the API), each with a 1–3 word label of what travels or happens ("writes", "publishes events", "token") when they say it. Node labels are the component names as said ("API gateway", "Orders service", "Postgres"). Draw the whole path in one diagram and grow it with add_nodes (with their edges) as more components are described.
+
+ICONS ON NODES AND CHART POINTS. A node or point can carry a small picture, found in a library by exact name, so use exactly these words.
+- `logo`: any node that is a NAMED product, technology or company: "Postgres", "Kafka", "Spark", "Snowflake", "Grafana", "Redis", "Docker", "React", "Node.js", "AWS S3", "Stripe", "GitHub" (also when the label adds a word: "Node.js API" is Node.js). A named product ALWAYS takes `logo`, never a generic icon, even if a generic icon would also fit. Never `logo` for a generic thing (a browser, an API gateway, a cache, a queue).
+- `icon`: for everything else, ONE name from this list, the closest fit; leave it out when none fits (a wrong picture is worse than none): {ICON_NAMES}
+- In technical diagrams give every node a logo or an icon: client → globe, monitor or smartphone; gateway or load balancer → network or router; service → server; queue → list-ordered; cache → database-zap; database → database; storage → hard-drive; users → users; auth → lock or key; event stream → workflow; monitoring → activity; container → container. Use the same icon for the same kind of thing throughout, so the diagram reads consistently.
+- Diagrams of process steps, people or ideas get icons only when they add meaning. On charts use `logo` only when the bars or slices are companies or products (cloud providers, databases); no icons on other charts.
+
 REMOVING AND CLEARING are the only irreversible actions, so remove, clear_board, remove_point and remove_node each need a `quote`: the exact words, copied from the newest words, in which the presenter asks for it. If you cannot quote such words, they did not ask, so do not call it. A command in the newest words is always obeyed, even if a similar one was given a moment ago: a repeated command means it has not happened yet. Clearing is cheap, the board rebuilds itself from the next sentence.
 
-Limits: 4 tiles, 3 annotations, 8 nodes per diagram, 8 points per chart. If an op names an id or label that does not exist it is silently refused, so copy them exactly from the board."#;
+Limits: 4 tiles, 3 annotations, 10 nodes per diagram, 8 points per chart. If an op names an id or label that does not exist it is silently refused, so copy them exactly from the board."#;
 
 pub fn tools() -> Value {
     let id = |what: &str| json!({"type": "string", "description": format!("id of the {what} on the board, e.g. e3")});
@@ -99,13 +121,16 @@ pub fn tools() -> Value {
     let quote = json!({"type": "string", "description": "the exact words, copied from the newest words, in which the presenter asks for this"});
     let kind = json!({"type": "string", "enum": ["bar", "line", "pie", "stat"],
         "description": "bar: compare values, and the default whenever more numbers may follow; line: trend over 3+ times; pie: shares of a whole; stat: exactly one number, standing alone"});
+    let icon_hint = json!({"type": "string", "description": "optional: ONE generic icon name from the list in the instructions (database, server, globe…); leave out if none fits"});
+    let logo_hint = json!({"type": "string", "description": "optional: the product or company this IS (Postgres, Kafka, AWS S3); leave out if it is not a specific product"});
     let node = json!({"type": "object", "properties": {
         "label": {"type": "string", "description": "1–4 words"},
+        "logo": logo_hint.clone(), "icon": icon_hint.clone(),
         "note": {"type": "string", "description": "optional: a year or ≤ 3-word detail"}}, "required": ["label"]});
     let edge = json!({"type": "object", "properties": {
         "from": {"type": "string", "description": "node label"}, "to": {"type": "string", "description": "node label"},
         "label": {"type": "string", "description": "optional ≤ 3 words, e.g. 'causes'"}}, "required": ["from", "to"]});
-    let point = json!({"type": "object", "properties": {"label": {"type": "string"}, "value": {"type": "number"}}, "required": ["label", "value"]});
+    let point = json!({"type": "object", "properties": {"label": {"type": "string"}, "value": {"type": "number"}, "logo": logo_hint.clone()}, "required": ["label", "value"]});
     let tool = |name: &str, description: &str, properties: Value, required: Value| {
         json!({"type": "function", "function": {"name": name, "description": description,
             "parameters": {"type": "object", "properties": properties, "required": required}}})
@@ -117,6 +142,13 @@ pub fn tools() -> Value {
             json!({"subject": {"type": "string", "description": "the exact thing to show, 1–4 words: 'owl', 'white rose', 'golden gate bridge'"},
                 "mode": {"type": "string", "enum": ["add", "replace"], "description": "add (default): next to what is there. replace: swap the photo in focus for a variant of the same subject"}}),
             json!(["subject"])),
+        tool("show_logo", "Put a company / product logo on the board, looked up by name in the logo library. If there is no such logo a plain name card is shown instead.",
+            json!({"name": {"type": "string", "description": "just the brand: 'Google', 'Microsoft Azure', 'Baseten'"}, "mode": {"type": "string", "enum": ["add", "replace"], "description": "add (default): a new tile. replace: swap the logo/icon just shown for a better one (the newest words name it more exactly)"}}), json!(["name"])),
+        tool("show_icon", "Put a generic icon (or a country flag) on the board, looked up by name and tags in the icon library. If nothing fits a plain card with the concept is shown.",
+            json!({"concept": {"type": "string", "description": "the idea in 1–2 words: 'teamwork', 'database', 'security', 'flag of Canada'"},
+                "alternatives": {"type": "array", "items": {"type": "string"}, "description": "2–4 other words such an icon could be named by, especially the plain object: teamwork → users, group, people"},
+                "mode": {"type": "string", "enum": ["add", "replace"], "description": "add (default): a new tile. replace: swap the logo/icon just shown for a better one (the newest words name it more exactly)"}}),
+            json!(["concept"])),
         tool("draw_chart", "Add a NEW chart built from numbers the presenter said. Not for correcting or extending a chart already on the board.",
             json!({"kind": kind.clone(), "title": {"type": "string", "description": "≤ 6 words"}, "unit": {"type": "string", "description": "e.g. %, $, users, km"},
                 "points": {"type": "array", "items": point, "description": "in the order spoken (chronological for time)"}}),
@@ -125,7 +157,7 @@ pub fn tools() -> Value {
             json!({"id": id("chart"), "label": {"type": "string", "description": "the point's label as on the board (or what the presenter calls it)"}, "value": {"type": "number"}}),
             json!(["id", "label", "value"])),
         tool("add_point", "ADD a new point to a chart that is already on the board ('and in April we hit 95'). A stat becomes bars once it has two.",
-            json!({"id": id("chart"), "label": {"type": "string"}, "value": {"type": "number"}}), json!(["id", "label", "value"])),
+            json!({"id": id("chart"), "label": {"type": "string"}, "value": {"type": "number"}, "logo": logo_hint}), json!(["id", "label", "value"])),
         tool("remove_point", "Take one point off a chart ('drop February', 'take March out'). Needs the presenter's words as `quote`.",
             json!({"id": id("chart"), "label": {"type": "string"}, "quote": quote.clone()}), json!(["id", "label", "quote"])),
         tool("set_chart", "Change a chart's kind, title or unit without touching its data ('show that as a line chart', 'call this chart monthly signups').",
@@ -134,8 +166,8 @@ pub fn tools() -> Value {
             json!({"layout": {"type": "string", "enum": ["flow", "cycle", "hub", "timeline"],
                     "description": "flow: steps / cause→effect left to right; cycle: steps that repeat; hub: first node is the centre, others are its parts; timeline: dated events (put the date in note)"},
                 "title": {"type": "string", "description": "≤ 6 words"},
-                "nodes": {"type": "array", "items": node.clone(), "description": "1–8 nodes in order"},
-                "edges": {"type": "array", "items": edge.clone(), "description": "optional; omit for a simple chain (flow/cycle/timeline) or spokes (hub)"}}),
+                "nodes": {"type": "array", "items": node.clone(), "description": "1–10 nodes in order"},
+                "edges": {"type": "array", "items": edge.clone(), "description": "one per connection described (fan-out, fan-in, labelled); omit only for a plain chain (flow/cycle/timeline) or spokes (hub)"}}),
             json!(["layout", "nodes"])),
         tool("add_nodes", "Add nodes (and optional edges) to a diagram already on the board: the presenter keeps describing the same structure.",
             json!({"id": id("diagram"), "nodes": {"type": "array", "items": node}, "edges": {"type": "array", "items": edge.clone()}}), json!(["id", "nodes"])),
@@ -233,6 +265,7 @@ pub fn board_json(scene: &Scene) -> Value {
         .iter()
         .map(|e| match e.kind {
             ElementKind::Image => json!({"id": e.id, "photo": e.caption, "focus": e.focus}),
+            ElementKind::Logo => json!({"id": e.id, "logo": e.caption, "name_card_only": e.image_id.is_empty(), "focus": e.focus}),
             ElementKind::Diagram => {
                 let d = e.diagram.as_ref();
                 let label = |id: &str| d.and_then(|d| d.nodes.iter().find(|n| n.id == id)).map(|n| n.label.clone()).unwrap_or_else(|| id.to_string());
@@ -254,18 +287,20 @@ pub fn board_json(scene: &Scene) -> Value {
 /// The user message. Order matters for provider prompt caching: the transcript only ever grows at its end, so
 /// everything before "Board" is a stable prefix across calls; what changes every call comes last.
 pub fn user_message(input: &AgentInput) -> String {
-    let mut lines: Vec<String> = input.transcript.iter().map(|s| format!("[{}] {}", clock(s.at_s), s.text.trim())).collect();
+    // Only what was said BEFORE the new words: those are listed once, under "Newest words". Showing them in both
+    // places made "earlier speech" ambiguous (the model called the newest sentence "already spoken earlier").
+    let mut lines: Vec<String> = input.transcript.iter().take(input.new_from).map(|s| format!("[{}] {}", clock(s.at_s), s.text.trim())).collect();
     let mut omitted = 0;
     let mut size: usize = lines.iter().map(|l| l.len() + 1).sum();
     while size > TRANSCRIPT_CHARS && lines.len() > 1 {
         size -= lines.remove(0).len() + 1;
         omitted += 1;
     }
-    let mut out = String::from("## Transcript so far (oldest first)\n");
+    let mut out = String::from("## Transcript before the newest words (oldest first)\n");
     if omitted > 0 {
         out += &format!("({omitted} earlier sentences omitted)\n");
     }
-    out += &if lines.is_empty() { "(nothing said yet)\n".to_string() } else { lines.join("\n") + "\n" };
+    out += &if lines.is_empty() { "(nothing said before the newest words)\n".to_string() } else { lines.join("\n") + "\n" };
     out += &format!("\n## Board\n{}\n", board_json(input.scene));
     out += "\n## Recent changes (newest last)\n";
     out += &if input.changes.is_empty() {
@@ -499,7 +534,7 @@ impl CanvasAgent {
         let model = self.wire_model();
         let mut body = json!({
             "model": model,
-            "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user_message(input)}],
+            "messages": [{"role": "system", "content": system_prompt()}, {"role": "user", "content": user_message(input)}],
             "tools": tools(),
             "tool_choice": "required",
             "temperature": 0,
@@ -570,7 +605,7 @@ impl CanvasAgent {
             "store": false,
             "generate": false,
             "input": [],
-            "instructions": SYSTEM,
+            "instructions": system_prompt(),
             "tools": response_tools(),
             "reasoning": {"effort": "none"},
             "temperature": 0,
@@ -608,7 +643,7 @@ impl CanvasAgent {
             "model": self.wire_model(),
             "store": false,
             "previous_response_id": previous,
-            "instructions": SYSTEM,
+            "instructions": system_prompt(),
             "input": items,
             "tools": response_tools(),
             "tool_choice": "required",
@@ -772,6 +807,8 @@ pub fn ground(ops: Vec<Op>, scene: &Scene, transcript: &str, newest: &str) -> (V
                 }
             }
             Op::ShowPhoto { ref subject, .. } if subject.trim().is_empty() => dropped.push("show_photo: empty subject".into()),
+            Op::ShowLogo { ref name, .. } if name.trim().is_empty() => dropped.push("show_logo: empty name".into()),
+            Op::ShowIcon { ref concept, .. } if concept.trim().is_empty() => dropped.push("show_icon: empty concept".into()),
             other => out.push(other),
         }
     }
@@ -871,6 +908,12 @@ pub fn parse_tool_calls(body: &str) -> Vec<Op> {
             Some(match name {
                 "no_action" => Op::NoAction { reason: s("reason").unwrap_or_default() },
                 "show_photo" => Op::ShowPhoto { subject: s("subject")?, replace: s("mode").as_deref() == Some("replace") },
+                "show_logo" => Op::ShowLogo { name: s("name")?, replace: s("mode").as_deref() == Some("replace") },
+                "show_icon" => Op::ShowIcon {
+                    concept: s("concept")?,
+                    alternatives: args["alternatives"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
+                    replace: s("mode").as_deref() == Some("replace"),
+                },
                 "focus" => Op::Focus { id: s("id")? },
                 "remove" => Op::Remove { id: s("id")?, quote: opt("quote") },
                 "arrange" => Op::Arrange {
@@ -913,7 +956,7 @@ pub fn parse_tool_calls(body: &str) -> Vec<Op> {
                 "remove_edge" => Op::RemoveEdge { id: s("id")?, from: text("from")?, to: text("to")? },
                 "draw_chart" => Op::DrawChart { kind: chart_kind(&s("kind")?)?, title: opt("title"), unit: opt("unit"), points: points(&args["points"]) },
                 "set_point" => Op::SetPoint { id: s("id")?, label: text("label")?, value: number(&args["value"])? },
-                "add_point" => Op::AddPoint { id: s("id")?, label: text("label")?, value: number(&args["value"])? },
+                "add_point" => Op::AddPoint { id: s("id")?, label: text("label")?, value: number(&args["value"])?, icon: opt("icon"), logo: opt("logo") },
                 "remove_point" => Op::RemovePoint { id: s("id")?, label: text("label")?, quote: opt("quote") },
                 "set_chart" => Op::SetChart { id: s("id")?, kind: s("kind").and_then(|k| chart_kind(&k)), title: opt("title"), unit: s("unit") },
                 _ => return None,
@@ -938,10 +981,11 @@ fn nodes(v: &Value) -> Vec<NodeSpec> {
         .map(|a| {
             a.iter()
                 .filter_map(|n| match n {
-                    Value::String(l) => Some(NodeSpec { label: l.clone(), icon: None, note: None }),
+                    Value::String(l) => Some(NodeSpec { label: l.clone(), icon: None, logo: None, note: None }),
                     Value::Object(_) => Some(NodeSpec {
                         label: n["label"].as_str()?.to_string(),
-                        icon: None,
+                        icon: n["icon"].as_str().map(|i| i.trim().to_string()).filter(|i| !i.is_empty()),
+                        logo: n["logo"].as_str().map(|i| i.trim().to_string()).filter(|i| !i.is_empty()),
                         note: n["note"].as_str().map(String::from).or_else(|| n["note"].as_i64().map(|y| y.to_string())),
                     }),
                     _ => None,
@@ -974,10 +1018,12 @@ fn points(v: &Value) -> Vec<Point> {
         .map(|a| {
             a.iter()
                 .filter_map(|p| match p {
-                    Value::Array(x) if x.len() >= 2 => Some(Point { label: x[0].as_str().map(String::from).unwrap_or_else(|| x[0].to_string()), value: number(&x[1])? }),
+                    Value::Array(x) if x.len() >= 2 => Some(Point { label: x[0].as_str().map(String::from).unwrap_or_else(|| x[0].to_string()), value: number(&x[1])?, icon: None, logo: None }),
                     Value::Object(_) => Some(Point {
                         label: p["label"].as_str().map(String::from).unwrap_or_else(|| p["label"].to_string()),
                         value: number(&p["value"])?,
+                        icon: p["icon"].as_str().map(|i| i.trim().to_string()).filter(|i| !i.is_empty()),
+                        logo: p["logo"].as_str().map(|i| i.trim().to_string()).filter(|i| !i.is_empty()),
                     }),
                     _ => None,
                 })
@@ -999,7 +1045,7 @@ mod tests {
     }
     fn chart_scene() -> (Canvas, String) {
         let mut c = Canvas::new();
-        let pts = |v: &[(&str, f64)]| v.iter().map(|(l, x)| Point { label: l.to_string(), value: *x }).collect::<Vec<_>>();
+        let pts = |v: &[(&str, f64)]| v.iter().map(|(l, x)| Point { label: l.to_string(), value: *x, icon: None, logo: None }).collect::<Vec<_>>();
         let s = c.apply(0, &[Op::DrawChart { kind: ChartKind::Bar, title: Some("Revenue".into()), unit: Some("$M".into()), points: pts(&[("Jan", 10.0), ("Mar", 15.0)]) }], 1).unwrap();
         let id = s.elements[0].id.clone();
         (c, id)
@@ -1067,19 +1113,27 @@ mod tests {
                 call("remove", r#"{"id":"e3","quote":"  "}"#),
                 call("clear_board", r#"{"quote":"let's move on"}"#),
                 call("no_action", r#"{"reason":"filler"}"#),
+                call("show_logo", r#"{"name":"Google"}"#),
+                call("show_icon", r#"{"concept":"teamwork","alternatives":["users","group",7]}"#),
+                call("show_icon", r#"{"concept":"database"}"#),
+                call("show_icon", r#"{"concept":"flag of Canada","mode":"replace"}"#),
             ]
             .join(",")
         );
         let ops = parse_tool_calls(&body);
-        assert_eq!(ops.len(), 11, "{ops:?}");
+        assert_eq!(ops.len(), 15, "{ops:?}");
+        assert_eq!(ops[14], Op::ShowIcon { concept: "flag of Canada".into(), alternatives: vec![], replace: true });
         assert_eq!(ops[0], Op::SetPoint { id: "e1".into(), label: "Mar".into(), value: 80.0 });
-        assert_eq!(ops[1], Op::AddPoint { id: "e1".into(), label: "2026".into(), value: 95.0 });
+        assert_eq!(ops[1], Op::AddPoint { id: "e1".into(), label: "2026".into(), value: 95.0, icon: None, logo: None });
         assert!(matches!(&ops[2], Op::RemovePoint { quote: Some(q), .. } if q == "drop January"));
         assert!(matches!(&ops[3], Op::SetChart { kind: Some(ChartKind::Line), title: Some(t), .. } if t == "Signups"));
         assert_eq!(ops[6], Op::ShowPhoto { subject: "white rose".into(), replace: true });
         assert_eq!(ops[7], Op::ShowPhoto { subject: "owl".into(), replace: false });
         assert!(matches!(&ops[8], Op::Remove { quote: None, .. }), "a blank quote is no quote");
         assert!(matches!(&ops[10], Op::NoAction { reason } if reason == "filler"));
+        assert_eq!(ops[11], Op::ShowLogo { name: "Google".into(), replace: false });
+        assert_eq!(ops[12], Op::ShowIcon { concept: "teamwork".into(), alternatives: vec!["users".into(), "group".into()], replace: false }, "non-strings are skipped");
+        assert_eq!(ops[13], Op::ShowIcon { concept: "database".into(), alternatives: vec![], replace: false });
     }
 
     #[test]
@@ -1091,7 +1145,7 @@ mod tests {
         assert_eq!(v["model"], DEFAULT_MODEL);
         assert_eq!(v["tool_choice"], "required", "nothing-to-do is an explicit no_action, not silence");
         let names: Vec<&str> = v["tools"].as_array().unwrap().iter().map(|t| t["function"]["name"].as_str().unwrap()).collect();
-        for n in ["no_action", "show_photo", "set_point", "add_point", "remove_point", "set_chart", "update_node", "remove_node", "add_nodes", "clear_board", "remove"] {
+        for n in ["no_action", "show_photo", "show_logo", "show_icon", "set_point", "add_point", "remove_point", "set_chart", "update_node", "remove_node", "add_nodes", "clear_board", "remove"] {
             assert!(names.contains(&n), "{n} missing from {names:?}");
         }
         assert!(!names.contains(&"update_chart") && !names.contains(&"extend_diagram"));
@@ -1101,6 +1155,8 @@ mod tests {
         assert!(at("## Transcript") < at("## Board") && at("## Board") < at("## Recent changes") && at("## Recent changes") < at("## Newest words"));
         assert!(user.contains("[0:00] Revenue was ten million") && user.contains(&format!("\"id\":\"{id}\"")));
         assert!(user.contains("Said since your last call:\n[0:10] Then fifteen million in March."), "only sentences from new_from on");
+        let before = &user[..at("## Board")];
+        assert!(!before.contains("Then fifteen million"), "a new sentence is listed once, under the newest words: {before}");
         assert!(user.contains("Being spoken now (may be unfinished): actually March was eighteen"));
 
         let incremental = incremental_user_message(&input(c.scene(), &tr, 1, "actually March was eighteen"));
@@ -1184,7 +1240,7 @@ mod tests {
         let (kept, dropped) = ground(vec![set(99.0)], c.scene(), "", "Sorry, March revenue was eighteen million.");
         assert!(kept.is_empty() && dropped[0].contains("never said"), "{dropped:?}");
         // invented remainders are still dropped from a new chart
-        let pie = Op::DrawChart { kind: ChartKind::Pie, title: None, unit: Some("%".into()), points: vec![Point { label: "Stoned".into(), value: 60.0 }, Point { label: "Not stoned".into(), value: 40.0 }] };
+        let pie = Op::DrawChart { kind: ChartKind::Pie, title: None, unit: Some("%".into()), points: vec![Point { label: "Stoned".into(), value: 60.0, icon: None, logo: None }, Point { label: "Not stoned".into(), value: 40.0, icon: None, logo: None }] };
         let (kept, dropped) = ground(vec![pie], c.scene(), "", "About 60% of them are stoned.");
         match &kept[0] {
             Op::DrawChart { points, .. } => assert_eq!(points.len(), 1),

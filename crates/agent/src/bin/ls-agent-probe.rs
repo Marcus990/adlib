@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 const KEYS: &[&str] = &[
-    "elements", "present", "absent", "cleared", "no_change", "layout", "focus", "annotated", "charts", "diagrams", "photo", "no_photo",
+    "elements", "present", "absent", "cleared", "no_change", "layout", "focus", "annotated", "charts", "diagrams", "photo", "no_photo", "logo", "icon", "no_symbol", "hints", "icons_valid", "point_logos", "icon_coverage",
 ];
 
 #[derive(Clone)]
@@ -30,6 +30,8 @@ struct Case {
     group: String,
     board: Vec<Value>,
     history: Vec<String>,
+    /// What was already done to the board (the "recent changes" list): `[{"at_s": 12, "what": "show_icon flag"}]`.
+    changes: Vec<Change>,
     newest: String,
     expect: Value,
     pending: Option<String>,
@@ -100,6 +102,7 @@ fn load_cases(path: &Path) -> anyhow::Result<Vec<Case>> {
         out.push(Case {
             group: s("group").unwrap_or_else(|| "ungrouped".into()),
             board: c["board"].as_array().cloned().unwrap_or_default(),
+            changes: c["changes"].as_array().map(|a| a.iter().map(|x| Change { at_s: x["at_s"].as_u64().unwrap_or(0), what: x["what"].as_str().unwrap_or_default().to_string() }).collect()).unwrap_or_default(),
             history: c["history"].as_array().map(|h| h.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
             newest: s("newest").ok_or_else(|| anyhow::anyhow!("case {id}: no `newest`"))?,
             expect: c["expect"].clone(),
@@ -116,6 +119,9 @@ fn build_canvas(case: &Case) -> anyhow::Result<Canvas> {
     for (i, step) in case.board.iter().enumerate() {
         if let Some(p) = step["photo"].as_str() {
             canvas.render(p, p, "img://probe", 0);
+        } else if step.get("logo").is_some() {
+            // a symbol tile already on the board: {"logo": {"asset": "lucide:flag", "caption": "Flag"}} (asset "" = a name card)
+            canvas.render_logo(step["logo"]["asset"].as_str().unwrap_or_default(), step["logo"]["caption"].as_str().unwrap_or_default(), "img://probe", 0);
         } else if step.get("op").is_some() {
             let op: Op = serde_json::from_value(step["op"].clone()).map_err(|e| anyhow::anyhow!("case {} board[{i}]: {e}", case.id))?;
             let v = canvas.scene().version;
@@ -207,6 +213,27 @@ fn check_diagram(id: &str, want: &Value, after: &Scene, bad: &mut Vec<String>) {
             bad.push(format!("{id} node count: want {n} got {} [{shown}]", d.nodes.len()));
         }
     }
+    // edges: [["gateway", "auth"], …] — an edge from a node whose label contains the first to one containing the second
+    let label_of = |id: &str| d.nodes.iter().find(|n| n.id == id).map(|n| n.label.to_lowercase()).unwrap_or_default();
+    for pair in want["edges_include"].as_array().into_iter().flatten() {
+        let (a, b) = (pair[0].as_str().unwrap_or_default().to_lowercase(), pair[1].as_str().unwrap_or_default().to_lowercase());
+        if !d.edges.iter().any(|e| label_of(&e.from).contains(&a) && label_of(&e.to).contains(&b)) {
+            let have = d.edges.iter().map(|e| format!("{}→{}", label_of(&e.from), label_of(&e.to))).collect::<Vec<_>>().join(", ");
+            bad.push(format!("{id}: want an edge {a:?} → {b:?}, edges are [{have}]"));
+        }
+    }
+    // either direction: the model may draw a "reads from" as data flow
+    for pair in want["edges_between"].as_array().into_iter().flatten() {
+        let (a, b) = (pair[0].as_str().unwrap_or_default().to_lowercase(), pair[1].as_str().unwrap_or_default().to_lowercase());
+        if !d.edges.iter().any(|e| (label_of(&e.from).contains(&a) && label_of(&e.to).contains(&b)) || (label_of(&e.from).contains(&b) && label_of(&e.to).contains(&a))) {
+            bad.push(format!("{id}: want an edge between {a:?} and {b:?}"));
+        }
+    }
+    if let Some(n) = want["edge_count_min"].as_u64() {
+        if (d.edges.len() as u64) < n {
+            bad.push(format!("{id}: want ≥{n} edges, got {}", d.edges.len()));
+        }
+    }
     if let Some(l) = want["layout"].as_str() {
         if name_of(serde_json::to_value(d.layout)) != l {
             bad.push(format!("{id} diagram layout: want {l} got {}", name_of(serde_json::to_value(d.layout))));
@@ -266,6 +293,78 @@ fn check(expect: &Value, before: &Scene, after: &Scene, ops: &[Op]) -> Vec<Strin
                     bad.push(format!("photo: want {subject:?} ({}) got {asked:?}", if replace { "replace" } else { "add" }));
                 }
             }
+            "hints" | "icons_valid" | "icon_coverage" | "point_logos" => {
+                // what the model asked for on nodes and points (the pipeline resolves these; the probe checks the asking)
+                let nodes: Vec<&ls_canvas::NodeSpec> = ops.iter().flat_map(|o| match o { Op::DrawDiagram { nodes, .. } | Op::AddNodes { nodes, .. } => nodes.iter().collect::<Vec<_>>(), _ => vec![] }).collect();
+                let points: Vec<&ls_canvas::Point> = ops.iter().flat_map(|o| match o { Op::DrawChart { points, .. } => points.iter().collect::<Vec<_>>(), _ => vec![] }).collect();
+                let vocab: Vec<&str> = ls_agent::ICON_NAMES.split_whitespace().collect();
+                match key.as_str() {
+                    "hints" => {
+                        for (label, spec) in want.as_object().into_iter().flatten() {
+                            let Some(n) = nodes.iter().find(|n| n.label.to_lowercase().contains(&label.to_lowercase())) else { bad.push(format!("hints: no node like {label:?}")); continue };
+                            if let Some(l) = spec["logo"].as_str() {
+                                if !n.logo.as_deref().unwrap_or_default().to_lowercase().contains(&l.to_lowercase()) {
+                                    bad.push(format!("hints: {label:?} should carry logo {l:?}, has logo={:?} icon={:?}", n.logo, n.icon));
+                                }
+                            }
+                            if let Some(any) = spec["icon_any"].as_array() {
+                                let ok = n.icon.as_deref().is_some_and(|i| any.iter().any(|a| a.as_str() == Some(i)));
+                                if !ok {
+                                    bad.push(format!("hints: {label:?} should carry an icon among {any:?}, has icon={:?} logo={:?}", n.icon, n.logo));
+                                }
+                            }
+                        }
+                    }
+                    "icons_valid" => {
+                        for n in &nodes {
+                            if let Some(i) = n.icon.as_deref() {
+                                if !vocab.contains(&i) {
+                                    bad.push(format!("icon {i:?} on {:?} is not in the icon list", n.label));
+                                }
+                            }
+                        }
+                    }
+                    "icon_coverage" => {
+                        let min = want.as_f64().unwrap_or(0.0);
+                        let with = nodes.iter().filter(|n| n.icon.is_some() || n.logo.is_some()).count();
+                        if nodes.is_empty() || (with as f64) < min * nodes.len() as f64 {
+                            bad.push(format!("icon coverage: {with}/{} nodes have a logo or icon, want ≥{:.0}%", nodes.len(), min * 100.0));
+                        }
+                    }
+                    _ => {
+                        // brand: one name, or a list of acceptable names ("aws" or "amazon")
+                        for (label, brand) in want.as_object().into_iter().flatten() {
+                            let names: Vec<String> = match brand { serde_json::Value::Array(a) => a.iter().filter_map(|x| x.as_str().map(|x| x.to_lowercase())).collect(), b => vec![b.as_str().unwrap_or_default().to_lowercase()] };
+                            let ok = points.iter().find(|p| p.label.to_lowercase().contains(&label.to_lowercase())).is_some_and(|p| { let l = p.logo.as_deref().unwrap_or_default().to_lowercase(); names.iter().any(|n| l.contains(n)) });
+                            if !ok {
+                                bad.push(format!("point_logos: {label:?} should carry logo {brand:?}"));
+                            }
+                        }
+                    }
+                }
+            }
+            "logo" => {
+                let name = want["name_contains"].as_str().unwrap_or_default().to_lowercase();
+                let asked: Vec<(&str, bool)> = ops.iter().filter_map(|o| if let Op::ShowLogo { name, replace } = o { Some((name.as_str(), *replace)) } else { None }).collect();
+                let replace = want["replace"].as_bool();
+                if !asked.iter().any(|(n, r)| n.to_lowercase().contains(&name) && replace.is_none_or(|w| w == *r)) {
+                    bad.push(format!("logo: want show_logo containing {name:?}{} got {asked:?}", replace.map_or(String::new(), |w| format!(" with replace={w}"))));
+                }
+            }
+            "icon" => {
+                let concept = want["concept_contains"].as_str().unwrap_or_default().to_lowercase();
+                let asked: Vec<(&str, usize, bool)> = ops.iter().filter_map(|o| if let Op::ShowIcon { concept, alternatives, replace } = o { Some((concept.as_str(), alternatives.len(), *replace)) } else { None }).collect();
+                let min_alt = want["min_alternatives"].as_u64().unwrap_or(0) as usize;
+                let replace = want["replace"].as_bool();
+                if !asked.iter().any(|(c, a, r)| c.to_lowercase().contains(&concept) && *a >= min_alt && replace.is_none_or(|w| w == *r)) {
+                    bad.push(format!("icon: want show_icon containing {concept:?} with ≥{min_alt} synonyms{}, got {asked:?}", replace.map_or(String::new(), |w| format!(" and replace={w}"))));
+                }
+            }
+            "no_symbol" => {
+                if want.as_bool() == Some(true) && ops.iter().any(|o| matches!(o, Op::ShowLogo { .. } | Op::ShowIcon { .. })) {
+                    bad.push("no logo or icon should have been requested".into());
+                }
+            }
             "no_photo" => {
                 if want.as_bool() == Some(true) && ops.iter().any(|o| matches!(o, Op::ShowPhoto { .. })) {
                     bad.push("no photo should have been requested".into());
@@ -292,8 +391,8 @@ struct Outcome {
 
 /// The case as one agent call: the history and the newest sentence are finished sentences (5 s apart) and only
 /// the newest is "new since your last call", which is what the live pipeline sends when a final sentence lands.
-fn input_for<'a>(scene: &'a Scene, transcript: &'a [Sentence]) -> AgentInput<'a> {
-    AgentInput { scene, transcript, new_from: transcript.len() - 1, speaking_now: "", changes: &[], now_s: 5 * transcript.len() as u64 }
+fn input_for<'a>(scene: &'a Scene, transcript: &'a [Sentence], changes: &'a [Change]) -> AgentInput<'a> {
+    AgentInput { scene, transcript, new_from: transcript.len() - 1, speaking_now: "", changes, now_s: 5 * transcript.len() as u64 }
 }
 
 fn transcript_of(case: &Case) -> Vec<Sentence> {
@@ -305,7 +404,7 @@ async fn run_once(agent: &CanvasAgent, case: &Case) -> anyhow::Result<Outcome> {
     let before = canvas.scene().clone();
     let transcript = transcript_of(case);
     let t = Instant::now();
-    let p = agent.propose(&input_for(&before, &transcript)).await;
+    let p = agent.propose(&input_for(&before, &transcript, &case.changes)).await;
     let ms = t.elapsed().as_millis();
     let after = canvas.apply_seen(&before, &p.ops, 1).unwrap_or_else(|| before.clone());
     let notes = canvas.take_notes();
@@ -386,7 +485,7 @@ async fn run_ws_latency(agent: &CanvasAgent, turns: usize) -> anyhow::Result<()>
         kind: ChartKind::Bar,
         title: Some("Monthly signups".into()),
         unit: Some("signups".into()),
-        points: vec![Point { label: "March".into(), value: 70.0 }],
+        points: vec![Point { label: "March".into(), value: 70.0, icon: None, logo: None }],
     };
     let _ = canvas.apply(0, &[initial], 0);
     let mut transcript: Vec<Sentence> = vec![];
@@ -525,7 +624,7 @@ async fn main() -> anyhow::Result<()> {
                 let canvas = build_canvas(case)?;
                 let transcript = transcript_of(case);
                 let t = Instant::now();
-                let raw = agent.call_raw(&input_for(canvas.scene(), &transcript)).await;
+                let raw = agent.call_raw(&input_for(canvas.scene(), &transcript, &case.changes)).await;
                 let ms = t.elapsed().as_millis();
                 match raw.and_then(|r| Ok(serde_json::from_str::<Value>(&r)?)) {
                     Ok(v) => println!(

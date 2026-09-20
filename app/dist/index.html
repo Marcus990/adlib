@@ -77,12 +77,23 @@
   body:not(.sketch) #ann text { fill: #fff; font: 600 2.2vh -apple-system, sans-serif; paint-order: stroke; stroke: rgba(0,0,0,0.7); stroke-width: 0.5vh; }
   @keyframes draw { to { stroke-dashoffset: 0; } }
 
-  /* Diagram / chart tiles (graphics.js): vector on a deep slate card. */
+  /* Diagram / chart tiles (sketch.js, "slate" skin): clean vector on a deep slate card. */
   .tile.gfx { background: radial-gradient(130% 120% at 12% 0%, #1b2436 0%, #0d121c 55%, #07090e 100%);
               box-shadow: 0 2.2vh 6vh rgba(0,0,0,0.65), inset 0 0 0 1px rgba(255,255,255,0.07); }
   .tile.gfx.full { box-shadow: none; }
   .tile.gfx svg.g { position: absolute; inset: 0; width: 100%; height: 100%; }
   body:not(.sketch) .g text { font-family: -apple-system, "SF Pro Display", "Helvetica Neue", sans-serif; }
+
+  /* Logo / icon / flag tiles and plain name cards: the symbol on its own, no photo frame. */
+  .tile.logo .lg { position: absolute; inset: 6%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2.6vh; }
+  .tile.logo .lg img { position: static; inset: auto; width: auto; height: auto; max-width: 74%; max-height: 64%; object-fit: contain; flex: 0 1 auto; }
+  .tile.logo .lg .cap { font: 700 3.4vh/1.1 "Noteworthy", "Chalkboard SE", "Marker Felt", cursive; color: #2b2723; text-align: center; }
+  .tile.logo .lg .word { font: 700 9vh/1.05 "Noteworthy", "Chalkboard SE", "Marker Felt", cursive; color: #2b2723; text-align: center; padding: 0 4vw; overflow-wrap: anywhere; }
+  .tile.logo .lg .cap:empty, .tile.logo .lg .word:empty { display: none; }
+  .tile.logo.full .lg img { max-width: 52%; max-height: 62%; }
+  body:not(.sketch) .tile.logo { background: radial-gradient(130% 120% at 12% 0%, #1b2436 0%, #0d121c 55%, #07090e 100%); box-shadow: 0 2.2vh 6vh rgba(0,0,0,0.65), inset 0 0 0 1px rgba(255,255,255,0.07); }
+  body:not(.sketch) .tile.logo .lg .cap, body:not(.sketch) .tile.logo .lg .word { color: #f1f3f7; font-family: -apple-system, "SF Pro Display", "Helvetica Neue", sans-serif; }
+  body.sketch .tile.logo { background: transparent; box-shadow: none; }
 
   /* ---------- "Live sketch" theme (LS_THEME=sketch, default): warm paper, taped photos, hand-drawn graphics ---------- */
   body.sketch { --bg: #efe6d3; background: var(--bg); }
@@ -120,7 +131,7 @@
 <div id="idle"></div>
 <div id="grid"></div>
 <div id="blank"></div>
-<script src="graphics.js"></script>
+<script src="textfit.js"></script>
 <script src="sketch.js"></script>
 <script>
   // Browser preview (no Tauri): `python3 -m http.server -d app/dist` → push scenes with window.__scene(sc).
@@ -225,11 +236,13 @@
     for (const e of sc.elements) {
       let t = tiles.get(e.id);
       const gfx = e.kind === 'diagram' || e.kind === 'chart';
+      const logo = e.kind === 'logo';
       const sketch = theme === 'sketch';
       if (t && t.sketch !== sketch) { t.div.remove(); tiles.delete(e.id); t = null; }   // theme switched
       if (!t) {
-        const div = document.createElement('div'); div.className = gfx ? 'tile gfx' : 'tile';
-        if (gfx) div.innerHTML = '<svg class="g"></svg><svg class="mark"></svg><div class="ring"></div><div class="chip"></div>';
+        const div = document.createElement('div'); div.className = gfx ? 'tile gfx' : logo ? 'tile logo' : 'tile';
+        if (logo) div.innerHTML = '<div class="lg"><img class="fg"><div class="word"></div><div class="cap"></div></div><svg class="mark"></svg><div class="ring"></div><div class="chip"></div>';
+        else if (gfx) div.innerHTML = '<svg class="g"></svg><svg class="mark"></svg><div class="ring"></div><div class="chip"></div>';
         else if (sketch) {
           // A photo taped onto the page: tilt and tape angle are seeded by the element id (stable across renders).
           const r = Sketch.rng(e.id);
@@ -244,7 +257,27 @@
         // Drawn for the tile's final size; the SVG scales smoothly while the tile animates there.
         const W = e.rect.w * innerWidth, H = e.rect.h * innerHeight;
         const sig = JSON.stringify([e.diagram || e.chart, Math.round(W), Math.round(H)]);
-        if (sig !== t.sig) { t.sig = sig; try { (sketch ? Sketch : Gfx).render(t.div.querySelector('svg.g'), e, W, H, t.seen, n === 1); } catch (err) { fe('js_error', sc.chunk_id, null, 'gfx ' + err); } }
+        if (sig !== t.sig) { t.sig = sig; try { Sketch.render(t.div.querySelector('svg.g'), e, W, H, t.seen, n === 1, sketch ? 'sketch' : 'slate'); } catch (err) { fe('js_error', sc.chunk_id, null, 'gfx ' + err); } }
+        t.div.classList.toggle('full', n === 1);
+        t.div.classList.toggle('dim', sc.layout === 'hero' && !e.focus && n > 1);
+        t.div.style.zIndex = e.focus ? 2 : 1;
+        setRect(t.div, e.rect);
+        requestAnimationFrame(() => t.div.classList.add('on'));
+        continue;
+      }
+      if (logo) {
+        // The symbol's image (an <img> of the SVG) with its name under it, or just the name when the library had nothing.
+        const key = e.url + '|' + e.caption;
+        if (t.url !== key) {
+          const img = t.div.querySelector('.lg img'), word = t.div.querySelector('.word'), cap = t.div.querySelector('.cap');
+          if (e.url) {
+            const pre = new Image(); pre.src = e.url;
+            try { await pre.decode(); } catch (_) {}
+            img.src = e.url; img.style.display = ''; word.textContent = ''; cap.textContent = e.caption || '';
+          } else { img.removeAttribute('src'); img.style.display = 'none'; word.textContent = e.caption || ''; cap.textContent = ''; }
+          t.url = key;
+          if (e.focus && t.div.classList.contains('on')) { t.div.animate([{ filter: 'brightness(1.4)' }, { filter: 'none' }], { duration: 350 }); }
+        }
         t.div.classList.toggle('full', n === 1);
         t.div.classList.toggle('dim', sc.layout === 'hero' && !e.focus && n > 1);
         t.div.style.zIndex = e.focus ? 2 : 1;
