@@ -243,3 +243,37 @@ Found on the way. (1) **Icons showed as a broken image in the app**: `main.rs` h
 icon). (2) Luna sometimes used a generic icon for a named product (Spark, Snowflake, Grafana); the prompt now says a named product ALWAYS takes a logo
 (0/3 -> 6/6). (3) Acting on an unfinished phrase ("the flag…") left the wrong symbol up; `show_logo` / `show_icon` now have `replace`.
 (4) A concurrent live session's log was newer than mine and `ls -t` picked it; the e2e runs now read the log path the replay tool prints.
+
+---
+
+# The Responses WebSocket becomes the default (2026-09-20)
+
+`CANVAS_TRANSPORT=websocket` was built but never set — not in `.env`, not by `demo.sh` or `make_app.sh` — so every
+live run had used Chat Completions. Across the whole log history, `transport` was `ChatHttp` on all 93 calls that
+record it and `first_event_ms` was non-null 0 times. The gate is now inverted: WebSocket is the default on OpenAI
+and `CANVAS_TRANSPORT=http` opts out. HTTP remains the automatic fallback on any socket failure.
+
+| | HTTP | WebSocket |
+|---|---|---|
+| agent call p50 (3 replays of `luna-edit-talk.wav`, 120 calls each) | 1042 ms | **907 ms** |
+| p90 / max | 1292 / 4599 ms | 1378 / 2675 ms |
+| milestones | 9/9 x 3 runs | 9/9 x 3 runs, 0 fallbacks |
+| first event | not exposed | p50 174 ms |
+
+~135 ms (13%) at p50, a wash at p90. One call hit `rate_limit_exceeded` on the socket and fell back to HTTP
+cleanly, which is the fallback working as designed.
+
+Two things worth knowing before reading more into this. (1) The 66-case probe suite shows **no** difference
+(HTTP 984 ms vs WS 981 ms p50) because it opens a fresh socket per case and so never exercises chaining; only the
+replay, where `previous_response_id` keeps the transcript off the wire, shows the gain. Don't evaluate the
+transport with the suite. (2) The chained `--ws-latency 30` split is first event 176 ms, after-first 800 ms, so
+~80% of a call is output-token generation. Re-sending the prompt was never the bottleneck, which is why this is
+13% and not 50%. The real prize in the socket is that 174 ms first event: applying ops from the stream instead of
+waiting ~730 ms for the full body needs incremental tool-call parsing, which this change does not add.
+
+Not the bottleneck either way: in the same runs the CLIP photo search ranged 30 ms to 5772 ms for identical work,
+and `asr_lag_ms` reached p50 46.9 s on the worst run, against `asr_ms` p50 942 ms and a 600 ms tick. Both are CPU
+contention (no thread pool is bounded anywhere: tokio's 8 workers + candle's rayon default + whisper's 4 on an
+8-core M2). Standalone, that same CLIP search is 23 ms idle, 62 ms under 4 competing threads, 280 ms under 8.
+When the pipeline falls far enough behind, the 25 s photo dedup window expires and the same subject is searched
+twice, which feeds back into the contention.

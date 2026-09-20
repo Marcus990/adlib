@@ -84,20 +84,14 @@ words get a final call.
 - **Visible text waits for a finished sentence.** Luna still sees partial speech and can react quickly with other tools,
   but draw/add/update text calls from a partial-only turn are refused. `draw_text` replaces the existing text tile.
   Every block needs 1–2 exact emphasis phrases; the full block renders with those phrases underlined, and a block without one is refused.
-- Canvas limits: ≤ 4 tiles, a circle on every tile, ≤ 3 arrows, ≤ 8 nodes and ≤ 8 points; a stat with a second value becomes bars; a
+- Canvas limits: ≤ 4 tiles, ≤ 3 annotations, ≤ 8 nodes and ≤ 8 points; a stat with a second value becomes bars; a
   redraw sharing half its nodes with a diagram on the board replaces it in place.
 - **Logos and icons never go to image generation.** They are looked up in `LS_ASSETS/icons` (`crates/search/src/icons.rs`, a port
   of `assets-pipeline/icon_search.py`, 63/63 queries identical to the Python on the real card). Logos are strict: an exact
   name or alias, or a fuzzy match ≥ 0.85 (a typo of a long name). A lone weak lookalike is only a candidate: "Hooli" once
   matched the "Hoodie" logo, and a wrong logo is worse than a name card. Icons and flags accept a slightly looser match.
   A `show_photo` whose subject says "logo" or "icon" is rerouted to the symbol tools. Monochrome icons are re-inked for
-  the theme (`generated/symbols/`). **When a symbol appears is Luna's judgment, not a keyword rule** (changed 2026-09-20): a technology, company or
-  concept the talk is about gets its logo or icon whether or not the presenter asks ("we wrote the backend in Python" →
-  Python; "everything is written to a database first" → a database icon). She skips a name already on the board, a foil
-  or comparison ("faster than what Microsoft ships"), a word used in its ordinary sense ("an apple", "go over the
-  numbers"), and companies given figures (that is a chart, with logos on its bars). Several technologies named as one
-  stack are one diagram with a logo on each node, not separate tiles. A logo tile takes one of the 4 board slots, so a
-  talk that names many technologies pushes the oldest tile off; a strip of small chips is the next step if that hurts.
+  the theme (`generated/symbols/`). A passing mention of a company ("Google announced…") shows nothing.
 - **Photos:** a library match must clear the score floor `TAU` and, on the asset card, the label gate. A subject
   asked for twice within 25 s is one picture. A drawn picture is shown only if the subject is still in what was
   said (< 15 s old); logos, icons, charts, text and vague subjects are never drawn; drawn pictures are saved in
@@ -141,28 +135,17 @@ The same tools, prompt and parsing go to either; only the request differs (`Canv
 | | OpenAI (`OPENAI_API_KEY`) | OpenRouter (`OPENROUTER_API_KEY`) |
 |---|---|---|
 | model id | `gpt-5.6-luna` | `openai/gpt-5.6-luna` |
-| transport | a warmed, continued Responses WebSocket with HTTP fallback by default; `CANVAS_TRANSPORT=http` forces Chat Completions | Chat Completions |
+| transport | a warmed, continued Responses WebSocket by default, with automatic HTTP fallback; `CANVAS_TRANSPORT=http` opts out | Chat Completions |
 | token limit | `max_completion_tokens` (`max_tokens` is rejected) | `max_tokens` |
 | reasoning | `reasoning_effort: "none"`. Function tools on chat completions require it (`minimal` is not a value for this model; the alternative is the Responses API) | `reasoning: {effort: "minimal"}` |
 | routing | Standard tier by default; `CANVAS_SERVICE_TIER=fast` opts into Fast mode | `provider: {sort: "latency"}` |
 | latency measured | 0.8–1.5 s per call, median ~0.95 s | 1.4–2.25 s, median ~1.9 s |
 
-## Offline fallback (no key at all)
-With no key the rules answer: `rule_ops`
-([crates/canvas](crates/canvas/src/lib.rs)) maps "let's compare / side by side", "zoom in on X / focus on X" (the named tile, any tile count), "zoom out", "circle / highlight this
-or the X", "look at X", "notice", "leads to / connects to" to layout and annotation ops (never a clear, never on "just like" or
-"compared to", one arrow per pair), and a presenter cue ("here's…", "take a look at…", "picture
+## Offline fallback (no key, or Luna unreachable)
+A model call gets one retry (a timeout, a 429 or a 5xx), then the rules answer: `rule_ops`
+([crates/canvas](crates/canvas/src/lib.rs)) maps "compare / side by side", "focus on / zoom in", "notice / look at
+the", "let's move on / next topic" to layout ops, and a presenter cue ("here's…", "take a look at…", "picture
 this…", `CUES` in [crates/query](crates/query/src/lib.rs)) followed by a library subject shows that subject.
-When a configured model fails (timeout, 5xx, or a 429 after retries that honour "try again in …") nothing is
-applied: the failed call's sentences are offered again after a 1–8 s back-off.
-
-## Guards on what the model may do ([`ground`](crates/agent/src/lib.rs))
-- Removals and clears need a `quote` that is in the newest words. The phrase still being spoken counts: commands act on
-  the first pass that contains them, without waiting for the finished sentence (a "settled words" gate was tried on 09-20
-  and removed: it added 1–2 s to every command, and nothing it held back was wrong).
-- Chart values must be numbers the presenter said (or already on the board).
-- `set_point` must say it is a correction or name the quantity, and may not swap % for dollars.
-- `update_node` can retitle a diagram (`title`), and a diagram titled after a node follows that node's rename.
 
 ## Known limits
 - Speech → photo is about 2.7 s for a library photo and about 7 s for a drawn one (measured on the spoken test

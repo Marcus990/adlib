@@ -16,7 +16,7 @@ cargo run -p ls-agent --bin ls-agent-probe -- --ws-latency 30        # chained s
 Flags: `--cases <path>` `--runs N` (default 3; models are not deterministic) `--filter <substr of id>`
 `--group <name>` `--rpm N` `--verbose` `--ws-smoke` `--ws-latency N` `--model <id>` (else `CANVAS_MODEL`, else the default).
 OpenAI probes use a fresh Responses WebSocket per independent case; `--ws-smoke` deliberately keeps one chain
-for a chart creation followed by a correction. Set `CANVAS_TRANSPORT=websocket` to exercise the new path. OpenAI
+for a chart creation followed by a correction. Set `CANVAS_TRANSPORT=http` to compare against Chat Completions. OpenAI
 requests use the standard tier by default and verbose output shows the returned service tier.
 Set `CANVAS_SERVICE_TIER=fast` to run the same workload through Fast mode (`priority` in the response).
 

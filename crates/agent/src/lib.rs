@@ -66,39 +66,30 @@ WHAT YOU GET EACH CALL
 - Recent changes: what has already been done to the board, newest last. Never repeat one.
 - Newest words: the sentences said since your last call, and the phrase being spoken right now (it may be unfinished, and early words can be misheard). ACT ONLY ON THESE. Never add, redraw or remove something just because it was said earlier: earlier speech was already handled or was not meant for the screen.
 
-Call one or more tools. If nothing should change, call no_action with a short reason. That is the right answer most of the time: filler, greetings, opinions, an unfinished sentence, something already on screen, or a thing that is only mentioned and not meant to be shown.
+Call one or more tools when a visual change would materially help the audience follow the presenter’s current point. Photos, logos and icons have a strict relevance gate: add one if and only if it directly represents what the presenter is speaking about now and helps the audience understand that point. A recognizable name, concrete noun, loose association or decorative possibility is not enough. When relevance is uncertain, do not add an image. If a visual would add nothing, call no_action with a short reason. That is the right answer for filler, greetings, opinions, an unfinished sentence, something already on screen, or a passing mention with no visual purpose.
 
 WHAT THE PRESENTER WANTS → WHAT TO CALL
-- SHOW something concrete (an animal, object, place, person, scene): show_photo. A company, product, brand or technology ("the Google logo", "let's put up Slack", "we wrote it in Python"): show_logo. A generic symbol for an idea or thing ("an icon for teamwork", "a database", "security", a country's flag): show_icon. Quantities they state: draw_chart. Steps, a process, a cycle, parts of a whole, dated events: draw_diagram.
+- Choose the visual that best helps the audience understand the current idea: an important person, place, object or scene → show_photo; a company, product or brand → show_logo; a generic symbol for an idea or thing → show_icon; quantities → draw_chart; steps, a process, a cycle, parts of a whole or dated events → draw_diagram. A visual need not be explicitly requested when it clearly helps the point.
 - CORRECT a value or label that is already on the board: "actually it's 80", "let's correct March to eighty", "I meant February was sixty", "make that ninety", "it's not forty, it's forty five", "sorry, that should be…", "change X to Y". Chart → set_point. Diagram step → update_node. Correct exactly the thing they name. If they name nothing, it is the thing they just talked about: the chart or diagram in focus, or the one Recent changes shows was touched last. Never redraw a chart or diagram to correct one value.
-- A correction has to SAY it is one ("actually", "I meant", "not X, Y", "make that", "sorry") or clearly be about the same quantity the board already shows. A number about a NEW subject is not a correction, whatever chart is in focus and whatever unit it has: with a revenue stat on the board, "90% of our code is written by Devin" is a new chart (draw_chart, unit %), and set_point is never used to put a percentage into dollars or dollars into a percentage. A new number with a new subject is a new chart.
-- RETITLE a diagram ("call this one the founding story", or its title was misheard): update_node with `title` (no node needed). A node that was misheard is fixed with `label`; a diagram titled after that node is retitled with it.
 - ADD to what is there: "and in April we hit ninety five" → add_point. "and then we monitor it" → add_nodes.
-- REMOVE PART of a chart or diagram: "drop February", "take March out", "get March out of there", "skip the test step" → remove_point / remove_node.
+- REMOVE PART of a chart or diagram: "drop February", "take March out", "skip the test step" → remove_point / remove_node.
 - RENAME or RESTYLE: "call this chart monthly signups", "show that as a line chart" → set_chart. "call the second step compile" → update_node.
-- REMOVE A WHOLE TILE (photo, logo, icon, chart or diagram): "take the eagle away", "get rid of the chart", "get the owl out of there", "get the owl out", "get that out of here", "take the logo off" → remove. All of these mean the same thing. "That" / "it" is the tile in focus; a name is the tile of that name (a chart by its title, a logo by its brand). If what they name is a point of a chart or a step of a diagram ("get March out", "get the test step out") it is remove_point / remove_node, not the whole tile. "Get out" as a figure of speech ("we need to get the word out", "get the product out the door", "get out of the habit") is not a request. Copy the words they used as `quote`.
-- LAYOUT: compare two things → arrange compare; zoom in on one ("zoom in on the logo", "let's look closer at the chart", "focus on the owl") → focus that tile: focus alone zooms (that tile becomes the big one and the rest shrink) for photos, logos, icons, charts and diagrams alike, with any number of tiles on the board, one included, so do not also arrange hero, and never call show_photo / show_logo / show_icon again for something that is already on the board just to zoom on it; zoom back out ("zoom out", "show everything again") → arrange auto; everything together → arrange grid; circle or highlight something → see CIRCLE below; link two tiles → annotate arrow.
-- CIRCLE (annotate kind highlight, on ONE tile; a hand-drawn circle around the whole tile). These all mean the same thing and all get a circle: "circle this", "highlight this", "let's highlight this", "let's circle the chart", "look at the owl", "look at this", "notice the eyes", "pay attention to the Python logo", "check this out". "this / that / it" is the tile in focus (or, when none is, the newest tile); a name is the tile of that name (a chart by its title, a logo by its brand, a photo by its subject). The circle always goes around the whole tile, even if they name a part of it ("the eyes" → the owl tile). Circle EXACTLY what is asked, one tile, several, or all: "circle the eagle and the owl" is ONE annotate with both ids in `targets`; "circle everything", "highlight all of these", "circle them all", "highlight each one" is ONE annotate with the id of EVERY tile on the board, however many there are (up to 4); "both" is the two tiles being talked about (the two newest). Circles add up: circling this and then that leaves both circled. A tile is circled ONCE: the board's annotations show what already carries a circle, so leave those and add only the rest. Give no label unless the presenter says what to write ("circle this and call it the bottleneck"). "Look at X" where X is not on the board yet is a request to show it (show_photo / show_logo / …), not a circle. "Look closer at", "zoom in on" and "let's focus on" are a zoom (focus), not a circle. Talking ABOUT the feature ("we say highlight this and then highlight that") is not a request. To take circles off: "remove the circle", "stop highlighting", "that's enough of that" → clear_annotations.
-- CLEAR: "let's move on", "next topic", "new section", "start fresh", "clear the screen" → clear_board (skip it if the board is already empty). "Move on" as a figure of speech ("many people move on from Java") is not a command. Neither is a greeting or talk to the room or the team ("okay, I think I heard you properly, let's move on", "let's move on, does that look right?", "sorry, let me check"): the presenter is checking the screen or talking to someone, not ending the topic. When unsure, do not clear.
+- REMOVE A WHOLE TILE: "take the eagle away", "get rid of the chart" → remove.
+- LAYOUT: compare two things → arrange compare; zoom in on one → focus that tile, then arrange hero; everything together → arrange grid; draw attention to something on a tile ("pay attention to the owl", "notice the eyes", "look at this part") → annotate highlight on that tile (an annotation, not just a focus: focus is for "zoom in" and "let's talk about this one"); link two tiles → annotate arrow.
+- CLEAR: "let's move on", "next topic", "new section", "start fresh", "clear the screen" → clear_board (skip it if the board is already empty). "Move on" as a figure of speech ("many people move on from Java") is not a command.
 
 PHOTOS (show_photo)
 - subject = the EXACT thing named, 1–4 words: "owl", not "bird"; "white rose", not "flower". mode "add" (default) puts it next to what is there; mode "replace" only when they want the photo on screen swapped for a variant of the same subject ("make that the white one", "actually in red").
 - One photo per call, except comparisons: "an eagle and an owl" is two show_photo calls.
+- A person being introduced as a founder, speaker, creator, leader or central actor may be a useful visual anchor, but show their profile photo only when that person is central to the current point and seeing them directly aids the story. The role or introduction alone is not sufficient. Treat each named person separately: “Marcus and James founded…” is two show_photo calls only when both people pass this relevance gate, never one subject “Marcus James.” Do not show a photo for a name mentioned only in passing or when the person is already visibly represented.
 - No photo when the thing is only a comparison or figure of speech ("watch like an eagle", "as fast as lightning"), when it is already on screen (as a photo, or covered by a chart or diagram), or when it is not a photographable thing: a logo or brand (show_logo), a symbol or idea (show_icon), a product screenshot, chart, diagram or text.
 - The board holds 4 tiles and makes room by itself. Never remove a photo to tidy up.
 
-LOGOS AND ICONS (show_logo, show_icon) come from a library searched by NAME, not by what things look like. Use your judgment: show a symbol whenever seeing it would help the audience follow the talk, whether or not they asked. Being asked ("here's the Slack logo") always counts.
-- SHOW A LOGO when the presenter names a specific company, product, technology, tool or platform that is part of what the talk is about: what it is built on, uses, sells or integrates with, or is introducing. "We wrote the whole backend in Python" → Python. "All the data lives in Postgres" → PostgreSQL. "We deploy on Kubernetes" → Kubernetes. "Google announced record results" → Google. "Let's make this presentation about a company called Google" → Google. Several technologies named together as the parts of a stack or system ("React on the front end, a Node API in the middle, MongoDB for storage") are ONE draw_diagram, not separate logo tiles: each becomes a node and gets its own logo. name = just the brand: "Google", "Microsoft Azure". If the library has no such logo a plain card with the name is shown, so asking is always safe.
-- SHOW AN ICON when a generic thing or idea is what is being discussed and has an obvious symbol, and the symbol makes the point clearer: "everything gets written to a database first" → database; "we care a lot about security" → security; "what made it work was teamwork" → teamwork; a country's flag ("flag of Canada"). concept = the idea in 1–2 words. alternatives = 2–4 other words a symbol could be named by, especially the plain object ("teamwork" → users, group, people; "growth" → trending up, sprout): the library knows names like "users" and "database", not every idea. A card with the concept is shown if nothing fits. Not every abstract noun needs an icon.
-- SKIP (no symbol) when:
-  · it is already on the board or in Recent changes: show each thing once, and a repeat mention does not bring it back unless they ask;
-  · the name is only a foil, comparison or figure of speech, not something the talk is about ("this is much faster than what Microsoft ships", "unlike Google", "cut me some slack");
-  · the word is used in its ordinary sense: "I ate an apple", "we should go over the numbers", "she was swift to answer", "rust on the pipe";
-  · the sentence gives figures for several companies: that is a chart, and each logo goes on the chart's point, not on a tile of its own;
-  · it is filler, a greeting, or the presenter is mid-word.
-- The board holds 4 tiles and a new one pushes out the oldest, so do not push out a chart or diagram the presenter is still talking about just to show a passing logo. Photos and symbols can make room for each other.
+LOGOS AND ICONS (show_logo, show_icon) come from a library searched by NAME, not by what things look like.
+- show_logo(name): a company, product or brand the presenter asks to see, or that is central to the current point and whose identity helps explain it ("let's make this presentation about a company called Google", "here's the Slack logo"). A brand being named or used as background context is not sufficient. A company that is merely the subject of a sentence with facts or figures ("Amazon Web Services has thirty two percent…") is not a request for its logo: that is a chart, and its logo goes on the chart's point. name = just the brand: "Google", "Microsoft Azure". If the library has no such logo a plain card with the name is shown.
+- show_icon(concept, alternatives): a generic symbol: "teamwork", "a database", "security", "growth", or a country's flag ("flag of Canada"). concept = the idea in 1–2 words. alternatives = 2–4 other words a symbol could be named by, especially the plain object ("teamwork" → users, group, people; "growth" → trending up, sprout): the library knows names like "users" and "database", not every idea. A card with the concept is shown if nothing fits.
 - The newest words can name the symbol more exactly than what you showed a moment ago (Recent changes shows a generic flag, and the words now say "the flag of Canada"; or a brand name that was cut off): call show_logo / show_icon again with mode "replace" instead of leaving the wrong one up.
-- Charts and diagrams are drawn from what is said, with no request needed. Do not use show_photo for a brand or a symbol, and never a photo of a logo.
+- A company mentioned in passing ("Google announced new results", "unlike Microsoft") does not need a logo. (This is only about logos and icons: charts and diagrams are drawn from what is said, with no request needed.) Do not use show_photo for a brand or a symbol, and never a photo of a logo.
 
 CHARTS — only from numbers the presenter actually says; never invent or estimate data.
 - bar: values over time or across groups (the default whenever more numbers may follow); line: a trend over 3+ times; pie: shares of a whole; stat: exactly one number that stands alone.
@@ -107,14 +98,12 @@ CHARTS — only from numbers the presenter actually says; never invent or estima
 - Plain numbers in `value`: "fifteen thousand" → 15000, "60 percent" → 60 with unit "%". If a chart is kept in millions and they say "eighteen million", the value is 18: match the scale the chart already uses.
 - Never add an "Other", "Rest" or "Not X" remainder; a pie may sum to less than 100.
 - Keep one chart per series: grow it with add_point and correct it with set_point, never a second draw_chart for the same numbers. A new set of numbers (for example shares of a whole after a growth trend) is a new chart. A correction never turns an existing series into a pie.
-- A number that is not chart data ("we have forty desks", "the fortieth floor") is not a chart. A year or date ("founded in 2023", "in 2019 it launched") is not a quantity: never a stat or a bar. It is a timeline node (the year in `note`) or nothing.
-- Label a point with what the number IS (a date, a series, a thing), never with the unit ("Dollars") or a dangling last word ("By" from "26 billion by…", where "May" is still coming). If the phrase is cut off before the label, use the label from the earlier words, or the closest name for the number.
+- A number that is not chart data ("we have forty desks", "the fortieth floor") is not a chart.
 
 DIAGRAMS
 - flow: steps or cause → effect (edge labels for causes); cycle: something that repeats; hub: a central idea and its parts (first node is the centre); timeline: dated events (year in `note`). 1–10 nodes, labels of 1–4 words taken from the speech.
 - A diagram requires genuine structure: at least two actual stages, components, events, categories or relationships named by the presenter. A single factual claim or surprising capability is text even when its grammar suggests “A leads to B”.
 - A process told step by step can start with its first step and grow with add_nodes. Never add a node that repeats one already there.
-- Never draw a node with a placeholder label ("Step 1", "Step 2", "Part A"). Every label comes from words the presenter said. "Our pipeline has four steps" names no step yet: call no_action and draw the diagram when the first step is named.
 - If they restate or sum up a structure that is already on the board, do not draw a second copy: patch it (add_nodes, update_node, remove_node), or rebuild it with draw_diagram (full node list, or a different layout for the same nodes): draw_diagram replaces the diagram it matches in place. A node that was misheard is fixed with update_node.
 
 TEXT
@@ -137,7 +126,7 @@ ICONS ON NODES AND CHART POINTS. A node or point can carry a small picture, foun
 
 REMOVING AND CLEARING are the only irreversible actions, so remove, clear_board, remove_point, remove_node and remove_text_block each need a `quote`: the exact words, copied from the newest words, in which the presenter asks for it. If you cannot quote such words, they did not ask, so do not call it. A command in the newest words is always obeyed, even if a similar one was given a moment ago: a repeated command means it has not happened yet. Clearing is cheap, the board rebuilds itself from the next sentence.
 
-Limits: 4 tiles (every one of them can be circled at once), 3 arrows, 10 nodes per diagram, 8 points per chart, 8 blocks per text tile. If an op names an id or label that does not exist it is silently refused, so copy them exactly from the board."#;
+Limits: 4 tiles, 3 annotations, 10 nodes per diagram, 8 points per chart, 8 blocks per text tile. If an op names an id or label that does not exist it is silently refused, so copy them exactly from the board."#;
 
 pub fn tools() -> Value {
     let id = |what: &str| json!({"type": "string", "description": format!("id of the {what} on the board, e.g. e3")});
@@ -209,25 +198,25 @@ pub fn tools() -> Value {
             json!(["layout", "nodes"])),
         tool("add_nodes", "Add nodes (and optional edges) to a diagram already on the board: the presenter keeps describing the same structure.",
             json!({"id": id("diagram"), "nodes": {"type": "array", "items": node}, "edges": {"type": "array", "items": edge.clone()}}), json!(["id", "nodes"])),
-        tool("update_node", "Rename a diagram node or change its note ('call the second step compile', a misheard label), and/or retitle the diagram with `title` (then `node` may be left out).",
-            json!({"id": id("diagram"), "node": node_ref.clone(), "label": {"type": "string"}, "note": {"type": "string"}, "title": {"type": "string", "description": "the diagram's new title, ≤ 6 words"}}), json!(["id"])),
+        tool("update_node", "Rename a diagram node or change its note ('call the second step compile', a misheard label).",
+            json!({"id": id("diagram"), "node": node_ref.clone(), "label": {"type": "string"}, "note": {"type": "string"}}), json!(["id", "node"])),
         tool("remove_node", "Take one node out of a diagram ('skip the test step'). Needs the presenter's words as `quote`.",
             json!({"id": id("diagram"), "node": node_ref.clone(), "quote": quote.clone()}), json!(["id", "node", "quote"])),
         tool("add_edge", "Link two nodes of a diagram.",
             json!({"id": id("diagram"), "from": node_ref.clone(), "to": node_ref.clone(), "label": {"type": "string"}}), json!(["id", "from", "to"])),
         tool("remove_edge", "Remove the link between two nodes of a diagram.",
             json!({"id": id("diagram"), "from": node_ref.clone(), "to": node_ref}), json!(["id", "from", "to"])),
-        tool("focus", "Zoom in on one tile that is already on the board: it becomes the big tile and the others shrink. Works for every kind of tile (photo, logo, icon, chart, diagram) and with any number of tiles. 'Zoom in on the logo', 'let's look at this one'.", json!({"id": id("tile")}), json!(["id"])),
-        tool("remove", "Take one whole tile off the board ('take the eagle away', 'get rid of the chart', 'get the owl out of there', 'get that out'). Needs the presenter's words as `quote`.",
+        tool("focus", "Make one tile the focus.", json!({"id": id("tile")}), json!(["id"])),
+        tool("remove", "Take one whole tile off the board ('take the eagle away', 'get rid of the chart'). Needs the presenter's words as `quote`.",
             json!({"id": id("tile"), "quote": quote.clone()}), json!(["id", "quote"])),
         tool("arrange", "Re-lay out the board.",
             json!({"layout": {"type": "string", "enum": ["auto", "hero", "compare", "grid"],
                 "description": "hero: focus big + others small; compare: side by side; grid: all equal; auto: by count"}}), json!(["layout"])),
-        tool("annotate", "Draw attention: highlight (a circle around one whole tile; also frame) or an arrow between two tiles. 'Circle this', 'highlight the chart' and 'look at the owl' are all highlight on that tile. Asking again for a tile that is already circled changes nothing.",
+        tool("annotate", "Draw attention: highlight/frame one tile, or an arrow between two.",
             json!({"kind": {"type": "string", "enum": ["highlight", "frame", "arrow"]},
-                "targets": {"type": "array", "items": {"type": "string"}, "description": "tile ids: for highlight/frame one or several (every tile if asked to circle everything), for an arrow exactly 2"},
+                "targets": {"type": "array", "items": {"type": "string"}, "description": "tile ids (2 for arrow)"},
                 "label": {"type": "string", "description": "optional, ≤ 5 words"}}), json!(["kind", "targets"])),
-        tool("clear_annotations", "Take every circle and arrow off ('remove the circle', 'stop highlighting').", json!({}), json!([])),
+        tool("clear_annotations", "Remove all annotations.", json!({}), json!([])),
         tool("clear_board", "Clear everything (a new section of the talk). Needs the presenter's words as `quote`.", json!({"quote": quote}), json!(["quote"])),
     ])
 }
@@ -323,7 +312,7 @@ pub fn board_json(scene: &Scene) -> Value {
         })
         .collect();
     let notes: Vec<Value> = scene.annotations.iter().map(|a| json!({"kind": a.kind, "targets": a.targets, "label": a.label})).collect();
-    json!({"tiles": tiles, "layout": scene.layout, "annotations": notes, "limits": {"tiles": ls_canvas::MAX_ELEMENTS, "circles": "one per tile, all tiles at once is fine", "arrows": ls_canvas::MAX_ARROWS, "nodes": ls_canvas::MAX_NODES, "points": ls_canvas::MAX_POINTS, "text_blocks": ls_canvas::MAX_TEXT_BLOCKS}})
+    json!({"tiles": tiles, "layout": scene.layout, "annotations": notes, "limits": {"tiles": ls_canvas::MAX_ELEMENTS, "annotations": ls_canvas::MAX_ANNOTATIONS, "nodes": ls_canvas::MAX_NODES, "points": ls_canvas::MAX_POINTS, "text_blocks": ls_canvas::MAX_TEXT_BLOCKS}})
 }
 
 /// The user message. Order matters for provider prompt caching: the transcript only ever grows at its end, so
@@ -446,13 +435,13 @@ impl CanvasAgent {
         self.provider().is_some()
     }
 
-    /// On OpenAI the calls go over one continued Responses WebSocket: the transcript and instructions stay in the
-    /// server-side chain and each call sends only the board and the new speech (09-20: resending the whole
-    /// transcript over HTTP every call ran into the 500k tokens/min limit). `CANVAS_TRANSPORT=http` opts out;
-    /// a failed socket call is retried over HTTP. OpenRouter always uses Chat Completions.
+    /// The default on OpenAI: a warmed, continued Responses socket. It matched the HTTP probe baseline
+    /// (9/9 milestones over three replays, 0 fallbacks) at a lower per-call median (907 ms vs 1042 ms over
+    /// 120 calls each), so HTTP is now the opt-out (`CANVAS_TRANSPORT=http`) rather than the default, and
+    /// stays the automatic fallback on any socket failure. OpenRouter always uses Chat Completions.
     pub fn websocket_enabled(&self) -> bool {
         self.provider() == Some(Provider::OpenAi)
-            && !matches!(std::env::var("CANVAS_TRANSPORT").unwrap_or_default().to_lowercase().as_str(), "http" | "chat" | "chat-completions" | "chatcompletions")
+            && !matches!(std::env::var("CANVAS_TRANSPORT").unwrap_or_default().to_lowercase().as_str(), "http" | "https" | "chat" | "off")
     }
 
     /// Calls per minute the backend allows for this account (a new OpenRouter account is capped at 20/min for
@@ -470,10 +459,7 @@ impl CanvasAgent {
         }
     }
 
-    /// Ops for the current board given what was just said. Never fails. With no key at all the offline cue rules
-    /// answer; when a configured model errors the answer is NO ops (source `Rules`, `error` set) and the caller
-    /// offers the same words again: keyword rules guessing at speech while the model is down drew spurious
-    /// arrows and layouts (09-20).
+    /// Ops for the current board given what was just said. Never fails: a model error falls back to the offline cue rules.
     pub async fn propose(&self, input: &AgentInput<'_>) -> Proposal {
         let newest = input.newest_text();
         let mut error = None;
@@ -504,11 +490,7 @@ impl CanvasAgent {
             }
         }
         if self.has_remote() {
-            // A timeout or 5xx gets one more, shorter, attempt. A 429 names how long to wait: honour it (a fixed
-            // 600 ms retry landed in the same exhausted minute) and try up to twice more.
-            let mut attempt = 0u32;
-            let mut attempts = 2u32;
-            while attempt < attempts {
+            for attempt in 0..2 {
                 let budget = if attempt == 0 { self.timeout } else { self.timeout * 2 / 3 };
                 match tokio::time::timeout(budget, self.call_raw(input)).await {
                     Ok(Ok(text)) => {
@@ -519,35 +501,23 @@ impl CanvasAgent {
                         return Proposal { ops, source: Source::Model, dropped, error, transport: Transport::ChatHttp, first_event_ms: None, service_tier };
                     }
                     Ok(Err(e)) => {
-                        let http_error = format!("{e:#}");
-                        let rate_limited = http_error.starts_with("HTTP 429");
-                        if rate_limited {
-                            attempts = 3;
-                        }
-                        let retry = attempt + 1 < attempts && (rate_limited || http_error.starts_with("HTTP 5"));
+                        let retry = attempt == 0 && (e.to_string().starts_with("HTTP 429") || e.to_string().starts_with("HTTP 5"));
                         eprintln!("canvas agent: {e:#}");
-                        error = Some(match error { Some(previous) => format!("{previous}; HTTP failed: {http_error}"), None => http_error.clone() });
+                        let http_error = format!("{e:#}");
+                        error = Some(match error { Some(previous) => format!("{previous}; HTTP failed: {http_error}"), None => http_error });
                         if !retry {
                             break;
                         }
-                        let wait = if rate_limited {
-                            retry_hint(&http_error).unwrap_or(Duration::from_secs(1)).clamp(Duration::from_millis(300), Duration::from_millis(2500)) + Duration::from_millis(150 * (attempt as u64 + 1))
-                        } else {
-                            Duration::from_millis(600)
-                        };
-                        tokio::time::sleep(wait).await;
+                        tokio::time::sleep(Duration::from_millis(600)).await;
                     }
                     Err(_) => {
                         eprintln!("canvas agent: timed out after {budget:?}");
                         error = Some(format!("timed out after {budget:?}"));
                     }
                 }
-                attempt += 1;
             }
         }
-        // Only a build with no key at all runs on the cue rules; a configured model that failed changes nothing.
-        let ops = if self.has_remote() { vec![] } else { rule_ops(&newest, input.scene) };
-        Proposal { ops, source: Source::Rules, dropped: vec![], error, transport: Transport::Rules, first_event_ms: None, service_tier: None }
+        Proposal { ops: rule_ops(&newest, input.scene), source: Source::Rules, dropped: vec![], error, transport: Transport::Rules, first_event_ms: None, service_tier: None }
     }
 
     /// Establish the Responses socket and prepare the stable instructions and tools without generating output.
@@ -804,22 +774,6 @@ pub fn parse_response_tool_calls(response: &Value) -> Vec<Op> {
     parse_tool_calls(&json!({"choices": [{"message": {"tool_calls": calls}}]}).to_string())
 }
 
-/// How long an error body asks the caller to wait: "Please try again in 456ms" / "in 1.5s" (OpenAI's 429 text).
-pub fn retry_hint(error: &str) -> Option<Duration> {
-    let lower = error.to_lowercase();
-    let rest = &lower[lower.find("try again in ")? + "try again in ".len()..];
-    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
-    let n: f64 = digits.parse().ok()?;
-    let unit = &rest[digits.len()..];
-    if unit.starts_with("ms") {
-        Some(Duration::from_secs_f64(n / 1000.0))
-    } else if unit.starts_with('s') {
-        Some(Duration::from_secs_f64(n))
-    } else {
-        None
-    }
-}
-
 fn norm_words(s: &str) -> Vec<String> {
     s.to_lowercase().replace('’', "'").split(|c: char| !(c.is_alphanumeric() || c == '\'')).filter(|w| !w.is_empty()).map(String::from).collect()
 }
@@ -835,77 +789,22 @@ pub fn quote_ok(quote: &str, newest: &str) -> bool {
     q.iter().all(|w| it.any(|h| h == w))
 }
 
-/// What a number is measured in, as far as a chart's unit or a sentence says.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum UnitClass {
-    Percent,
-    Money,
-}
-
-/// Percent / money markers in `text`: (percent, money). A unit like "million dollars" is money, "%" is percent;
-/// anything else ("users", "billion", none) says nothing.
-fn unit_markers(text: &str) -> (bool, bool) {
-    let t = text.to_lowercase();
-    let percent = t.contains('%') || t.contains("percent");
-    let words = norm_words(&t);
-    let money = t.contains('$') || t.contains('€') || t.contains('£') || ["dollar", "dollars", "euro", "euros", "usd", "eur", "gbp", "bucks"].iter().any(|w| words.iter().any(|x| x == w));
-    (percent, money)
-}
-
-fn chart_unit_class(unit: Option<&str>) -> Option<UnitClass> {
-    match unit_markers(unit?) {
-        (true, false) => Some(UnitClass::Percent),
-        (false, true) => Some(UnitClass::Money),
-        _ => None,
-    }
-}
-
-/// True when the newest words give the number in a unit that the chart is not in: "90% of code…" against a chart
-/// in "million dollars". Words carrying both markers, or neither, are not judged.
-fn unit_clash(chart_unit: Option<&str>, newest: &str) -> bool {
-    let Some(class) = chart_unit_class(chart_unit) else { return false };
-    let (percent, money) = unit_markers(newest);
-    match class {
-        UnitClass::Money => percent && !money,
-        UnitClass::Percent => money && !percent,
-    }
-}
-
-/// Does this speech say it is a correction? (Judged on the words only; the model decides what is being corrected.)
-fn says_correction(newest: &str) -> bool {
-    let t = format!(" {} ", norm_words(newest).join(" "));
-    ["actually", "correct", "correction", "corrected", "meant", "sorry", "instead", "rather", "change", "changed", "wait", "typo", "mistake", "wrong", "fix", "oops", "whoops", "update", "revise", "misspoke", "not"]
-        .iter()
-        .any(|w| t.contains(&format!(" {w} ")))
-        || ["i mean", "make that", "make it", "should be", "should have", "i said", "no it's", "no its"].iter().any(|p| t.contains(&format!(" {p} ")))
-}
-
-/// Does the speech mention this label (a point's or the chart's title)? Prefix match either way, so "Mar" and
-/// "March" meet; short filler words never count.
-fn mentions(newest: &str, phrase: &str) -> bool {
-    const FILLER: [&str; 12] = ["the", "and", "for", "our", "per", "of", "in", "a", "an", "to", "is", "was"];
-    let hay = norm_words(newest);
-    norm_words(phrase).iter().filter(|w| w.len() >= 3 && !FILLER.contains(&w.as_str())).any(|w| {
-        hay.iter().any(|h| h.len() >= 3 && (h.starts_with(w.as_str()) || w.starts_with(h.as_str())))
-    })
-}
-
 /// Code-level guards on model output (prompt rules alone were not reliable, 09-19 probes):
 /// - remove / clear_board / remove_point / remove_node only with a `quote` that is in the newest words. This
-///   replaces the phrase lists: the model judges the language, the code only checks that the presenter's words
-///   were really there. (Waiting for finished sentences before acting was tried on 09-20 and removed: it added
-///   1–2 s to every command, and nothing it held back was wrong.);
+///   replaces the phrase lists (`take the eagle away` was not on one): the model judges the language, the code
+///   only checks that the presenter's words were really there;
 /// - chart values must be numbers the presenter said (or already on the board), which drops invented remainders
 ///   like "Not stoned: 40". A number spoken with a scale word grounds the bare value too ("eighteen million" → 18);
-/// - set_point must say it is a correction or name the quantity, and may not put a % into a chart in dollars or
-///   the reverse (09-20: "90% of code…" overwrote a $490M revenue stat);
 /// - visible text is created or edited only after a new sentence has finished;
 /// - empty photo requests are dropped.
 /// Returns the surviving ops and a reason for every op or point that was refused.
 pub fn ground(ops: Vec<Op>, scene: &Scene, transcript: &str, newest: &str, has_finished_new: bool) -> (Vec<Op>, Vec<String>) {
-    let board_values: Vec<f64> = scene.elements.iter().filter_map(|e| e.chart.as_ref()).flat_map(|c| c.points.iter().map(|p| p.value)).collect();
     let mut said = spoken_numbers(&format!("{transcript} {newest}"));
-    said.extend(board_values.iter().copied());
+    for e in &scene.elements {
+        if let Some(c) = &e.chart {
+            said.extend(c.points.iter().map(|p| p.value));
+        }
+    }
     let close = |a: f64, b: f64| (a - b).abs() <= 0.005 * a.abs().max(b.abs()) + 1e-9;
     let grounded = |v: f64| said.iter().any(|s| [1.0, 1e3, 1e6, 1e9].iter().any(|k| close(*s, v * k)));
     let mut dropped = vec![];
@@ -937,21 +836,6 @@ pub fn ground(ops: Vec<Op>, scene: &Scene, transcript: &str, newest: &str, has_f
             }
             Op::SetPoint { ref label, value, .. } | Op::AddPoint { ref label, value, .. } if !grounded(value) => {
                 dropped.push(format!("{}: {label} {value} was never said", ls_canvas::op_name(&op)));
-            }
-            Op::SetPoint { ref id, ref label, value } => {
-                let chart = scene.elements.iter().find(|e| &e.id == id).and_then(|e| e.chart.as_ref());
-                if let Some(c) = chart {
-                    if unit_clash(c.unit.as_deref(), newest) {
-                        dropped.push(format!("set_point({id}, {label}={value}): the newest words give it in a different unit than the chart ({}); a new number in another unit is a new chart", c.unit.as_deref().unwrap_or("")));
-                        continue;
-                    }
-                    let names_it = mentions(newest, label) || c.title.as_deref().is_some_and(|t| mentions(newest, t));
-                    if !says_correction(newest) && !names_it {
-                        dropped.push(format!("set_point({id}, {label}={value}): the newest words neither say it is a correction nor name that quantity; a new number about a new subject is a new chart"));
-                        continue;
-                    }
-                }
-                out.push(Op::SetPoint { id: id.clone(), label: label.clone(), value });
             }
             Op::UpdateChart { id, kind, title, points } => {
                 let points: Vec<Point> = points.into_iter().filter(|p| grounded(p.value)).collect();
@@ -1103,7 +987,7 @@ pub fn parse_tool_calls(body: &str) -> Vec<Op> {
                     edges: edges(&args["edges"]),
                 },
                 "add_nodes" => Op::AddNodes { id: s("id")?, nodes: nodes(&args["nodes"]), edges: edges(&args["edges"]) },
-                "update_node" => Op::UpdateNode { id: s("id")?, node: text("node").unwrap_or_default(), label: opt("label"), note: s("note"), title: opt("title") },
+                "update_node" => Op::UpdateNode { id: s("id")?, node: text("node")?, label: opt("label"), note: s("note"), title: opt("title") },
                 "remove_node" => Op::RemoveNode { id: s("id")?, node: text("node")?, quote: opt("quote") },
                 "add_edge" => Op::AddEdge { id: s("id")?, from: text("from")?, to: text("to")?, label: opt("label") },
                 "remove_edge" => Op::RemoveEdge { id: s("id")?, from: text("from")?, to: text("to")? },
@@ -1425,19 +1309,6 @@ mod tests {
     }
 
     #[test]
-    fn get_x_out_of_there_is_a_grounded_removal() {
-        let (c, id) = chart_scene();
-        for (said, quote) in [("Get the chart out of there.", "get the chart out of there"), ("okay get the chart out", "get the chart out"), ("Get that out of here.", "get that out")] {
-            let (kept, dropped) = ground(vec![Op::Remove { id: id.clone(), quote: Some(quote.into()) }], c.scene(), said, said, true);
-            assert_eq!(kept.len(), 1, "{said:?}: {dropped:?}");
-        }
-        // the model quoting words that were not said, or none, is still refused
-        let said = "We need to get the word out.";
-        let (kept, _) = ground(vec![Op::Remove { id: id.clone(), quote: Some("get the chart out".into()) }], c.scene(), said, said, true);
-        assert!(kept.is_empty());
-    }
-
-    #[test]
     fn chart_values_must_be_spoken_and_a_scale_word_grounds_the_bare_number() {
         let (c, id) = chart_scene(); // chart is kept in $M
         let set = |v: f64| Op::SetPoint { id: id.clone(), label: "Mar".into(), value: v };
@@ -1455,80 +1326,6 @@ mod tests {
             o => panic!("{o:?}"),
         }
         assert!(dropped.iter().any(|d| d.contains("Not stoned")));
-    }
-
-    /// The 09-20 session: a $490M revenue stat on the board, then "90% of code … written by Devin".
-    fn revenue_scene() -> (Canvas, String) {
-        let mut c = Canvas::new();
-        let p = vec![Point { label: "Revenue run rate".into(), value: 490.0, icon: None, logo: None }];
-        let s = c.apply(0, &[Op::DrawChart { kind: ChartKind::Stat, title: Some("Revenue run rate".into()), unit: Some("million dollars".into()), points: p }], 1).unwrap();
-        let id = s.elements[0].id.clone();
-        (c, id)
-    }
-
-    #[test]
-    fn a_new_number_with_a_new_subject_does_not_overwrite_a_chart() {
-        let (c, id) = revenue_scene();
-        let set = Op::SetPoint { id: id.clone(), label: "Revenue run rate".into(), value: 90.0 };
-        // the exact words from the log: no correction cue, another subject, and a % against a dollar chart
-        let said = "I'll see you this season. 90% of code at cognition is now written by Devin.";
-        let (kept, dropped) = ground(vec![set.clone()], c.scene(), said, said, true);
-        assert!(kept.is_empty(), "{kept:?}");
-        assert!(dropped[0].contains("different unit"), "{dropped:?}");
-        // even without a unit, a bare number about something else is not a correction
-        let said = "and 90 of the code at cognition is now written by Devin";
-        let (kept, dropped) = ground(vec![set.clone()], c.scene(), said, said, true);
-        assert!(kept.is_empty() && dropped[0].contains("new chart"), "{dropped:?}");
-        // a real correction still goes through, named or not
-        for said in ["Actually it's 90.", "sorry, revenue run rate should be 90 million", "make that ninety", "it's not four ninety, it's 90"] {
-            let (kept, dropped) = ground(vec![set.clone()], c.scene(), said, said, true);
-            assert_eq!(kept, vec![set.clone()], "{said}: {dropped:?}");
-        }
-        // the same % in a chart that is in %, said as a correction: fine
-        let mut c2 = Canvas::new();
-        let p = vec![Point { label: "Code by Devin".into(), value: 60.0, icon: None, logo: None }];
-        let id2 = c2.apply(0, &[Op::DrawChart { kind: ChartKind::Stat, title: None, unit: Some("%".into()), points: p }], 1).unwrap().elements[0].id.clone();
-        let fix = Op::SetPoint { id: id2, label: "Code by Devin".into(), value: 90.0 };
-        let said = "no, 90% of code is written by Devin";
-        let (kept, dropped) = ground(vec![fix.clone()], c2.scene(), said, said, true);
-        assert_eq!(kept, vec![fix], "{dropped:?}");
-    }
-
-    #[test]
-    fn commands_act_on_the_phrase_in_progress_without_waiting_for_the_finished_sentence() {
-        // 09-20: waiting for finished words added 1–2 s to "let's move on"; a quote from the live phrase is enough.
-        let (c, id) = chart_scene();
-        let live = "Okay, let's move on";
-        let (kept, dropped) = ground(vec![Op::ClearBoard { quote: Some("let's move on".into()) }], c.scene(), "", live, true);
-        assert_eq!(kept.len(), 1, "{dropped:?}");
-        let live = "get the chart out of";
-        let (kept, dropped) = ground(vec![Op::Remove { id, quote: Some("get the chart out".into()) }], c.scene(), "", live, true);
-        assert_eq!(kept.len(), 1, "{dropped:?}");
-        // still refused when the words were never said
-        let (kept, _) = ground(vec![Op::ClearBoard { quote: Some("let's move on".into()) }], c.scene(), "", "okay so here we go", true);
-        assert!(kept.is_empty());
-    }
-
-    #[test]
-    fn a_429_names_how_long_to_wait() {
-        let body = "HTTP 429 Too Many Requests: {\"error\": {\"message\": \"Rate limit reached for gpt-5.6-luna on tokens per min (TPM): Limit 500000, Used 500000, Requested 3802. Please try again in 456ms. Visit\"";
-        assert_eq!(retry_hint(body), Some(Duration::from_millis(456)));
-        assert_eq!(retry_hint("Please try again in 1.5s."), Some(Duration::from_millis(1500)));
-        assert_eq!(retry_hint("HTTP 500 boom"), None);
-    }
-
-    #[tokio::test]
-    async fn a_failed_model_call_changes_nothing() {
-        // A key that points nowhere: the call fails, and the answer is no ops, not the cue rules.
-        std::env::set_var("OPENAI_BASE_URL", "http://127.0.0.1:1");
-        let mut c = Canvas::new();
-        c.render("eagle", "eagle", "u", 1);
-        c.render("owl", "owl", "u", 2);
-        let tr = sentences(&["let's compare them side by side, it leads to the owl"]);
-        let a = CanvasAgent::new(reqwest::Client::new(), None, None).with_openai(Some("sk-test".into()));
-        let p = a.propose(&input(c.scene(), &tr, 0, "")).await;
-        assert_eq!((p.source, p.transport), (Source::Rules, Transport::Rules));
-        assert!(p.ops.is_empty() && p.error.is_some(), "{:?}", p.ops);
     }
 
     #[test]

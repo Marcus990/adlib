@@ -305,9 +305,33 @@ fn scene_log(scene: &Scene) -> Value {
 
 /// Words in `curr` beyond what `prev` already had (a growing partial repeats the words it started with).
 fn new_words_in(curr: &str, prev: &str) -> usize {
+    word_count(new_text_in(curr, prev))
+}
+
+fn new_text_in<'a>(curr: &'a str, prev: &str) -> &'a str {
     let p = prev.trim_end_matches(|c: char| !c.is_alphanumeric());
-    let tail = if !p.is_empty() && curr.starts_with(p) { &curr[p.len()..] } else { curr };
-    word_count(tail)
+    if !p.is_empty() && curr.starts_with(p) { &curr[p.len()..] } else { curr }
+}
+
+/// A short partial is worth an early Luna call only when it can change the board immediately. Ordinary
+/// narration waits for a larger, stable phrase so evolving ASR hypotheses do not produce repeated no-actions.
+fn urgent_partial(curr: &str, prev: &str) -> bool {
+    let tail = new_text_in(curr, prev).to_lowercase().replace('’', "'");
+    if tail.chars().any(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    let numeric_words = [
+        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "twenty", "thirty", "forty", "fifty",
+        "sixty", "seventy", "eighty", "ninety", "hundred", "thousand", "million", "billion", "percent",
+    ];
+    let numeric_tail = tail.split_whitespace().filter(|w| numeric_words.contains(&w.trim_matches(|c: char| !c.is_alphanumeric()))).count() >= 2;
+    let cue = [
+        "actually", "i meant", "make that", "correct ", "change ", "remove ", "take ", "drop ", "clear ", "move on", "next topic",
+        "start fresh", "show ", "put up", "look at", "zoom ", "focus on", "circle ", "highlight ", "my name is", "i'm ", "i am ",
+    ]
+    .iter()
+    .any(|cue| tail.contains(cue));
+    numeric_tail || (cue && word_count(&tail) >= 2)
 }
 
 fn word_count(s: &str) -> usize {
@@ -602,6 +626,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
     let mut call_no = 0u64;
     let mut last_chunk_id = 0u64;
     let mut dirty_since: Option<u64> = None; // when words Luna has not seen first arrived
+    let mut last_words_at: Option<Instant> = None; // last ASR hypothesis update, used to debounce ordinary partials
     // ---- photos ----
     let mut last_clear: Option<Instant> = None;
     let mut inflight = 0usize; // photo searches + generations still running
@@ -629,6 +654,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                     Msg::HearError(e) => sink.status(&json!({"type": "error", "error": e})),
                     Msg::Status(v) => sink.status(&v),
                     Msg::Chunk(c, tm, wall) => {
+                        last_words_at = Some(Instant::now());
                         summary.chunks += 1;
                         log.log(json!({"ev": "chunk", "chunk": c, "audio_ms": tm.audio_ms,
                             "speech_rms": (tm.speech_rms * 1000.0).round() / 1000.0, "vad_ms": tm.vad_ms.round(),
@@ -811,7 +837,12 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
         }
         let draining = hear_done_at.is_some();
         let due = last_call.is_none_or(|t| t.elapsed() >= min_gap) && retry_not_before.is_none_or(|t| Instant::now() >= t);
-        if !agent_busy && due && fresh_words >= if draining { 1 } else { 3 } {
+        let finished_new = transcript.len() > seen_upto;
+        let fast_partial = !speaking_now.trim().is_empty() && urgent_partial(&speaking_now, &last_speaking);
+        let partial_stable = last_words_at.is_some_and(|t| t.elapsed() >= Duration::from_millis(300));
+        let enough_partial = fresh_words >= 6 && partial_stable;
+        let should_call = fresh_words > 0 && (draining || finished_new || fast_partial || enough_partial);
+        if !agent_busy && due && should_call {
             call_no += 1;
             agent_busy = true;
             last_call = Some(Instant::now());

@@ -497,7 +497,7 @@ fn percentile(samples: &mut [u128], pct: usize) -> u128 {
 /// output size comparable while still exercising function_call_output, board state, and previous_response_id.
 async fn run_ws_latency(agent: &CanvasAgent, turns: usize) -> anyhow::Result<()> {
     anyhow::ensure!(turns >= 2, "--ws-latency needs at least 2 turns");
-    anyhow::ensure!(agent.websocket_enabled(), "--ws-latency requires OPENAI_API_KEY and CANVAS_TRANSPORT=websocket");
+    anyhow::ensure!(agent.websocket_enabled(), "--ws-latency requires OPENAI_API_KEY and cannot run with CANVAS_TRANSPORT=http");
     agent.reset_websocket().await;
     let warm_ms = agent.warm_up().await?.unwrap_or_default();
 
