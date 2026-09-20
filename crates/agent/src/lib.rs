@@ -8,7 +8,7 @@
 //! Completions fallback), OpenRouter otherwise. Their request shapes differ at the transport boundary.
 
 use futures_util::{SinkExt, StreamExt};
-use ls_canvas::{rule_ops, AnnotationKind, ChartKind, DiagramLayout, EdgeSpec, ElementKind, Layout, NodeSpec, Op, Point, Scene};
+use ls_canvas::{rule_ops, AnnotationKind, ChartKind, DiagramLayout, EdgeSpec, ElementKind, Layout, NodeSpec, Op, Point, Scene, TextBlockKind, TextBlockSpec};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -103,6 +103,13 @@ DIAGRAMS
 - A process told step by step can start with its first step and grow with add_nodes. Never add a node that repeats one already there.
 - If they restate or sum up a structure that is already on the board, do not draw a second copy: patch it (add_nodes, update_node, remove_node), or rebuild it with draw_diagram (full node list, or a different layout for the same nodes): draw_diagram replaces the diagram it matches in place. A node that was misheard is fixed with update_node.
 
+TEXT
+- Text is for structure the presenter explicitly creates: a heading or section label, an enumerated list, a stated takeaway, or a closing. Never transcribe ordinary narration and never turn a story into paragraphs on screen.
+- `draw_text` creates one text tile from semantic blocks. Use heading for a title, paragraph for one short supporting thought, and bullet for each explicit item. Use `add_text_blocks` as the presenter continues the same list. Patch corrections by block id with `update_text_block`; do not redraw the tile.
+- `emphasis` contains at most two short, exact phrases copied from that block's text. Emphasize only words the presenter stresses or frames as the key takeaway.
+- Text must be extractive: use the presenter's own words and keep it concise. Never create text from unfinished words in "Being spoken now"; wait for the finished sentence.
+- A closing such as "Thank you" is a text tile, usually heading "Thank you" and optional paragraph "Questions?" only when those words were said. Clear the old board only when the newest words also authorize `clear_board` with a quote.
+
 TECHNICAL DIAGRAMS (architecture, data flow, request paths, pipelines, infrastructure): draw_diagram with layout "flow" and an explicit `edges` list: one edge for EVERY connection the presenter describes ("the API talks to Postgres and Redis" is two edges out of the API), each with a 1–3 word label of what travels or happens ("writes", "publishes events", "token") when they say it. Node labels are the component names as said ("API gateway", "Orders service", "Postgres"). Draw the whole path in one diagram and grow it with add_nodes (with their edges) as more components are described.
 
 ICONS ON NODES AND CHART POINTS. A node or point can carry a small picture, found in a library by exact name, so use exactly these words.
@@ -111,9 +118,9 @@ ICONS ON NODES AND CHART POINTS. A node or point can carry a small picture, foun
 - In technical diagrams give every node a logo or an icon: client → globe, monitor or smartphone; gateway or load balancer → network or router; service → server; queue → list-ordered; cache → database-zap; database → database; storage → hard-drive; users → users; auth → lock or key; event stream → workflow; monitoring → activity; container → container. Use the same icon for the same kind of thing throughout, so the diagram reads consistently.
 - Diagrams of process steps, people or ideas get icons only when they add meaning. On charts use `logo` only when the bars or slices are companies or products (cloud providers, databases); no icons on other charts.
 
-REMOVING AND CLEARING are the only irreversible actions, so remove, clear_board, remove_point and remove_node each need a `quote`: the exact words, copied from the newest words, in which the presenter asks for it. If you cannot quote such words, they did not ask, so do not call it. A command in the newest words is always obeyed, even if a similar one was given a moment ago: a repeated command means it has not happened yet. Clearing is cheap, the board rebuilds itself from the next sentence.
+REMOVING AND CLEARING are the only irreversible actions, so remove, clear_board, remove_point, remove_node and remove_text_block each need a `quote`: the exact words, copied from the newest words, in which the presenter asks for it. If you cannot quote such words, they did not ask, so do not call it. A command in the newest words is always obeyed, even if a similar one was given a moment ago: a repeated command means it has not happened yet. Clearing is cheap, the board rebuilds itself from the next sentence.
 
-Limits: 4 tiles, 3 annotations, 10 nodes per diagram, 8 points per chart. If an op names an id or label that does not exist it is silently refused, so copy them exactly from the board."#;
+Limits: 4 tiles, 3 annotations, 10 nodes per diagram, 8 points per chart, 8 blocks per text tile. If an op names an id or label that does not exist it is silently refused, so copy them exactly from the board."#;
 
 pub fn tools() -> Value {
     let id = |what: &str| json!({"type": "string", "description": format!("id of the {what} on the board, e.g. e3")});
@@ -131,6 +138,12 @@ pub fn tools() -> Value {
         "from": {"type": "string", "description": "node label"}, "to": {"type": "string", "description": "node label"},
         "label": {"type": "string", "description": "optional ≤ 3 words, e.g. 'causes'"}}, "required": ["from", "to"]});
     let point = json!({"type": "object", "properties": {"label": {"type": "string"}, "value": {"type": "number"}, "logo": logo_hint.clone()}, "required": ["label", "value"]});
+    let text_block = json!({"type": "object", "properties": {
+        "kind": {"type": "string", "enum": ["heading", "paragraph", "bullet"]},
+        "text": {"type": "string", "description": "concise words taken from finished speech"},
+        "level": {"type": "integer", "minimum": 0, "maximum": 2, "description": "heading: 1 or 2; bullet: 0 or 1"},
+        "emphasis": {"type": "array", "maxItems": 2, "items": {"type": "string"}, "description": "short exact phrases within text"}
+    }, "required": ["kind", "text"]});
     let tool = |name: &str, description: &str, properties: Value, required: Value| {
         json!({"type": "function", "function": {"name": name, "description": description,
             "parameters": {"type": "object", "properties": properties, "required": required}}})
@@ -162,6 +175,14 @@ pub fn tools() -> Value {
             json!({"id": id("chart"), "label": {"type": "string"}, "quote": quote.clone()}), json!(["id", "label", "quote"])),
         tool("set_chart", "Change a chart's kind, title or unit without touching its data ('show that as a line chart', 'call this chart monthly signups').",
             json!({"id": id("chart"), "kind": kind, "title": {"type": "string", "description": "≤ 6 words"}, "unit": {"type": "string"}}), json!(["id"])),
+        tool("draw_text", "Add a NEW structured text tile for an explicit heading, list, takeaway or closing. Never transcribe ordinary narration or unfinished speech.",
+            json!({"blocks": {"type": "array", "minItems": 1, "maxItems": 8, "items": text_block.clone()}}), json!(["blocks"])),
+        tool("add_text_blocks", "Append finished items to an existing text tile as the presenter continues the same list.",
+            json!({"id": id("text tile"), "blocks": {"type": "array", "minItems": 1, "items": text_block.clone()}}), json!(["id", "blocks"])),
+        tool("update_text_block", "Correct one existing text block by its block id. Only include fields that changed.",
+            json!({"id": id("text tile"), "block": {"type": "string", "description": "block id from the board, e.g. b4"}, "text": {"type": "string"}, "level": {"type": "integer"}, "emphasis": {"type": "array", "items": {"type": "string"}}}), json!(["id", "block"])),
+        tool("remove_text_block", "Remove one item from a text tile. Needs the presenter's words as `quote`.",
+            json!({"id": id("text tile"), "block": {"type": "string"}, "quote": quote.clone()}), json!(["id", "block", "quote"])),
         tool("draw_diagram", "Add a NEW diagram, or rebuild the one it matches in place (same steps, or a different layout for them).",
             json!({"layout": {"type": "string", "enum": ["flow", "cycle", "hub", "timeline"],
                     "description": "flow: steps / cause→effect left to right; cycle: steps that repeat; hub: first node is the centre, others are its parts; timeline: dated events (put the date in note)"},
@@ -278,10 +299,14 @@ pub fn board_json(scene: &Scene) -> Value {
                 json!({"id": e.id, "chart": c.map(|c| c.kind), "title": c.and_then(|c| c.title.clone()), "unit": c.and_then(|c| c.unit.clone()), "focus": e.focus,
                     "points": c.map(|c| c.points.iter().map(|p| json!([p.label, p.value])).collect::<Vec<_>>()).unwrap_or_default()})
             }
+            ElementKind::Text => {
+                let t = e.text.as_ref();
+                json!({"id": e.id, "text": t.map(|t| t.blocks.iter().map(|b| json!({"id": b.id, "kind": b.kind, "text": b.text, "level": b.level, "emphasis": b.emphasis})).collect::<Vec<_>>()).unwrap_or_default(), "focus": e.focus})
+            }
         })
         .collect();
     let notes: Vec<Value> = scene.annotations.iter().map(|a| json!({"kind": a.kind, "targets": a.targets, "label": a.label})).collect();
-    json!({"tiles": tiles, "layout": scene.layout, "annotations": notes, "limits": {"tiles": ls_canvas::MAX_ELEMENTS, "annotations": ls_canvas::MAX_ANNOTATIONS, "nodes": ls_canvas::MAX_NODES, "points": ls_canvas::MAX_POINTS}})
+    json!({"tiles": tiles, "layout": scene.layout, "annotations": notes, "limits": {"tiles": ls_canvas::MAX_ELEMENTS, "annotations": ls_canvas::MAX_ANNOTATIONS, "nodes": ls_canvas::MAX_NODES, "points": ls_canvas::MAX_POINTS, "text_blocks": ls_canvas::MAX_TEXT_BLOCKS}})
 }
 
 /// The user message. Order matters for provider prompt caching: the transcript only ever grows at its end, so
@@ -433,7 +458,7 @@ impl CanvasAgent {
         if self.websocket_enabled() {
             match tokio::time::timeout(self.timeout, self.call_responses_ws(input)).await {
                 Ok(Ok(reply)) => {
-                    let (ops, dropped) = ground(parse_response_tool_calls(&reply.response), input.scene, &input.transcript_text(), &newest);
+                    let (ops, dropped) = ground(parse_response_tool_calls(&reply.response), input.scene, &input.transcript_text(), &newest, input.new_from < input.transcript.len());
                     return Proposal {
                         ops,
                         source: Source::Model,
@@ -461,7 +486,7 @@ impl CanvasAgent {
                 let budget = if attempt == 0 { self.timeout } else { self.timeout * 2 / 3 };
                 match tokio::time::timeout(budget, self.call_raw(input)).await {
                     Ok(Ok(text)) => {
-                        let (ops, dropped) = ground(parse_tool_calls(&text), input.scene, &input.transcript_text(), &newest);
+                        let (ops, dropped) = ground(parse_tool_calls(&text), input.scene, &input.transcript_text(), &newest, input.new_from < input.transcript.len());
                         let service_tier = serde_json::from_str::<Value>(&text)
                             .ok()
                             .and_then(|response| response["service_tier"].as_str().map(String::from));
@@ -762,9 +787,10 @@ pub fn quote_ok(quote: &str, newest: &str) -> bool {
 ///   only checks that the presenter's words were really there;
 /// - chart values must be numbers the presenter said (or already on the board), which drops invented remainders
 ///   like "Not stoned: 40". A number spoken with a scale word grounds the bare value too ("eighteen million" → 18);
+/// - visible text is created or edited only after a new sentence has finished;
 /// - empty photo requests are dropped.
 /// Returns the surviving ops and a reason for every op or point that was refused.
-pub fn ground(ops: Vec<Op>, scene: &Scene, transcript: &str, newest: &str) -> (Vec<Op>, Vec<String>) {
+pub fn ground(ops: Vec<Op>, scene: &Scene, transcript: &str, newest: &str, has_finished_new: bool) -> (Vec<Op>, Vec<String>) {
     let mut said = spoken_numbers(&format!("{transcript} {newest}"));
     for e in &scene.elements {
         if let Some(c) = &e.chart {
@@ -790,6 +816,9 @@ pub fn ground(ops: Vec<Op>, scene: &Scene, transcript: &str, newest: &str) -> (V
             }
         }
         match op {
+            Op::DrawText { .. } | Op::AddTextBlocks { .. } | Op::UpdateTextBlock { .. } if !has_finished_new => {
+                dropped.push(format!("{}: text waits for finished speech", ls_canvas::op_name(&op)));
+            }
             Op::DrawChart { kind, title, unit, points } => {
                 let (keep, lost): (Vec<Point>, Vec<Point>) = points.into_iter().partition(|p| grounded(p.value));
                 dropped.extend(lost.iter().map(|p| format!("draw_chart: {} {} was never said", p.label, p.value)));
@@ -959,6 +988,14 @@ pub fn parse_tool_calls(body: &str) -> Vec<Op> {
                 "add_point" => Op::AddPoint { id: s("id")?, label: text("label")?, value: number(&args["value"])?, icon: opt("icon"), logo: opt("logo") },
                 "remove_point" => Op::RemovePoint { id: s("id")?, label: text("label")?, quote: opt("quote") },
                 "set_chart" => Op::SetChart { id: s("id")?, kind: s("kind").and_then(|k| chart_kind(&k)), title: opt("title"), unit: s("unit") },
+                "draw_text" => Op::DrawText { blocks: text_blocks(&args["blocks"]) },
+                "add_text_blocks" => Op::AddTextBlocks { id: s("id")?, blocks: text_blocks(&args["blocks"]) },
+                "update_text_block" => Op::UpdateTextBlock {
+                    id: s("id")?, block: s("block")?, text: opt("text"),
+                    emphasis: args.get("emphasis").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()),
+                    level: args.get("level").and_then(|v| v.as_u64()).map(|n| n.min(255) as u8),
+                },
+                "remove_text_block" => Op::RemoveTextBlock { id: s("id")?, block: s("block")?, quote: opt("quote") },
                 _ => return None,
             })
         })
@@ -973,6 +1010,23 @@ fn chart_kind(k: &str) -> Option<ChartKind> {
         "stat" => Some(ChartKind::Stat),
         _ => None,
     }
+}
+
+fn text_blocks(v: &Value) -> Vec<TextBlockSpec> {
+    v.as_array().map(|a| a.iter().filter_map(|b| {
+        let kind = match b["kind"].as_str()? {
+            "heading" => TextBlockKind::Heading,
+            "paragraph" => TextBlockKind::Paragraph,
+            "bullet" => TextBlockKind::Bullet,
+            _ => return None,
+        };
+        Some(TextBlockSpec {
+            kind,
+            text: b["text"].as_str()?.to_string(),
+            level: b["level"].as_u64().unwrap_or(if kind == TextBlockKind::Heading { 1 } else { 0 }).min(255) as u8,
+            emphasis: b["emphasis"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
+        })
+    }).collect()).unwrap_or_default()
 }
 
 // Lenient: models sometimes send nodes as bare strings, numbers as strings ("15,000"), edges as pairs.
@@ -1137,6 +1191,23 @@ mod tests {
     }
 
     #[test]
+    fn parses_rich_text_tools_and_waits_for_finished_speech() {
+        let body = r#"{"choices":[{"message":{"tool_calls":[
+            {"function":{"name":"draw_text","arguments":"{\"blocks\":[{\"kind\":\"heading\",\"text\":\"Three lessons\",\"emphasis\":[\"Three\"]},{\"kind\":\"bullet\",\"text\":\"Start small\"}]}"}},
+            {"function":{"name":"update_text_block","arguments":"{\"id\":\"e1\",\"block\":\"b2\",\"text\":\"Start with users\"}"}},
+            {"function":{"name":"remove_text_block","arguments":"{\"id\":\"e1\",\"block\":\"b2\",\"quote\":\"remove the first point\"}"}}
+        ]}}]}"#;
+        let ops = parse_tool_calls(body);
+        assert_eq!(ops.len(), 3, "{ops:?}");
+        assert!(matches!(&ops[0], Op::DrawText { blocks } if blocks.len() == 2 && blocks[0].kind == TextBlockKind::Heading));
+        let scene = Scene::default();
+        let (kept, dropped) = ground(vec![ops[0].clone()], &scene, "", "Three lessons", false);
+        assert!(kept.is_empty() && dropped[0].contains("finished speech"));
+        let (kept, _) = ground(vec![ops[0].clone()], &scene, "Three lessons.", "Three lessons.", true);
+        assert_eq!(kept.len(), 1);
+    }
+
+    #[test]
     fn request_is_ordered_for_caching_and_lists_board_and_tools() {
         let (c, id) = chart_scene();
         let tr = sentences(&["Revenue was ten million in January.", "Then fifteen million in March."]);
@@ -1145,7 +1216,7 @@ mod tests {
         assert_eq!(v["model"], DEFAULT_MODEL);
         assert_eq!(v["tool_choice"], "required", "nothing-to-do is an explicit no_action, not silence");
         let names: Vec<&str> = v["tools"].as_array().unwrap().iter().map(|t| t["function"]["name"].as_str().unwrap()).collect();
-        for n in ["no_action", "show_photo", "show_logo", "show_icon", "set_point", "add_point", "remove_point", "set_chart", "update_node", "remove_node", "add_nodes", "clear_board", "remove"] {
+        for n in ["no_action", "show_photo", "show_logo", "show_icon", "set_point", "add_point", "remove_point", "set_chart", "draw_text", "add_text_blocks", "update_text_block", "remove_text_block", "update_node", "remove_node", "add_nodes", "clear_board", "remove"] {
             assert!(names.contains(&n), "{n} missing from {names:?}");
         }
         assert!(!names.contains(&"update_chart") && !names.contains(&"extend_diagram"));
@@ -1219,12 +1290,12 @@ mod tests {
         let tr = sentences(&["Okay, let's move on.", "Revenue was ten million in January."]);
         // "let's move on" was said, but before the newest words: the model may not act on it now
         let ops = vec![Op::ClearBoard { quote: Some("let's move on".into()) }, Op::Remove { id: id.clone(), quote: None }];
-        let (kept, dropped) = ground(ops, c.scene(), "Okay, let's move on. Revenue was ten million in January.", "Revenue was ten million in January.");
+        let (kept, dropped) = ground(ops, c.scene(), "Okay, let's move on. Revenue was ten million in January.", "Revenue was ten million in January.", true);
         assert!(kept.is_empty(), "{kept:?}");
         assert_eq!(dropped.len(), 2, "{dropped:?}");
         assert!(dropped[0].contains("not in the newest words") && dropped[1].contains("no quote"));
         // "take the eagle away" has no removal phrase from the old list, but the quote proves the presenter said it
-        let (kept, _) = ground(vec![Op::Remove { id, quote: Some("take the chart away".into()) }], c.scene(), "", "Take the chart away.");
+        let (kept, _) = ground(vec![Op::Remove { id, quote: Some("take the chart away".into()) }], c.scene(), "", "Take the chart away.", true);
         assert_eq!(kept.len(), 1);
         let _ = tr;
     }
@@ -1234,14 +1305,14 @@ mod tests {
         let (c, id) = chart_scene(); // chart is kept in $M
         let set = |v: f64| Op::SetPoint { id: id.clone(), label: "Mar".into(), value: v };
         // "eighteen million" → 18 on a chart in millions (was dropped, and the update then lost the point)
-        let (kept, _) = ground(vec![set(18.0)], c.scene(), "", "Sorry, March revenue was eighteen million.");
+        let (kept, _) = ground(vec![set(18.0)], c.scene(), "", "Sorry, March revenue was eighteen million.", true);
         assert_eq!(kept, vec![set(18.0)]);
         // a value nobody said is refused, with a reason
-        let (kept, dropped) = ground(vec![set(99.0)], c.scene(), "", "Sorry, March revenue was eighteen million.");
+        let (kept, dropped) = ground(vec![set(99.0)], c.scene(), "", "Sorry, March revenue was eighteen million.", true);
         assert!(kept.is_empty() && dropped[0].contains("never said"), "{dropped:?}");
         // invented remainders are still dropped from a new chart
         let pie = Op::DrawChart { kind: ChartKind::Pie, title: None, unit: Some("%".into()), points: vec![Point { label: "Stoned".into(), value: 60.0, icon: None, logo: None }, Point { label: "Not stoned".into(), value: 40.0, icon: None, logo: None }] };
-        let (kept, dropped) = ground(vec![pie], c.scene(), "", "About 60% of them are stoned.");
+        let (kept, dropped) = ground(vec![pie], c.scene(), "", "About 60% of them are stoned.", true);
         match &kept[0] {
             Op::DrawChart { points, .. } => assert_eq!(points.len(), 1),
             o => panic!("{o:?}"),

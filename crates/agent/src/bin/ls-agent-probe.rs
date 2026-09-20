@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 const KEYS: &[&str] = &[
-    "elements", "present", "absent", "cleared", "no_change", "layout", "focus", "annotated", "charts", "diagrams", "photo", "no_photo", "logo", "icon", "no_symbol", "hints", "icons_valid", "point_logos", "icon_coverage",
+    "elements", "present", "absent", "cleared", "no_change", "layout", "focus", "annotated", "charts", "diagrams", "texts", "photo", "no_photo", "logo", "icon", "no_symbol", "hints", "icons_valid", "point_logos", "icon_coverage",
 ];
 
 #[derive(Clone)]
@@ -241,6 +241,22 @@ fn check_diagram(id: &str, want: &Value, after: &Scene, bad: &mut Vec<String>) {
     }
 }
 
+fn check_text(id: &str, want: &Value, after: &Scene, bad: &mut Vec<String>) {
+    let Some(card) = after.elements.iter().find(|e| e.id == id).and_then(|e| e.text.as_ref()) else {
+        bad.push(format!("{id}: no text tile on the board"));
+        return;
+    };
+    let shown = card.blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join(" | ");
+    for t in strings(&want["blocks_include"]) {
+        if !card.blocks.iter().any(|b| b.text.to_lowercase().contains(&t.to_lowercase())) {
+            bad.push(format!("{id} text: want a block containing {t:?}, got [{shown}]"));
+        }
+    }
+    if let Some(n) = want["block_count"].as_u64() {
+        if card.blocks.len() != n as usize { bad.push(format!("{id} block count: want {n}, got {} [{shown}]", card.blocks.len())); }
+    }
+}
+
 fn check(expect: &Value, before: &Scene, after: &Scene, ops: &[Op]) -> Vec<String> {
     let mut bad = vec![];
     let Some(map) = expect.as_object() else { return vec!["`expect` must be an object".into()] };
@@ -284,6 +300,7 @@ fn check(expect: &Value, before: &Scene, after: &Scene, ops: &[Op]) -> Vec<Strin
             }
             "charts" => want.as_object().into_iter().flatten().for_each(|(id, w)| check_chart(id, w, after, &mut bad)),
             "diagrams" => want.as_object().into_iter().flatten().for_each(|(id, w)| check_diagram(id, w, after, &mut bad)),
+            "texts" => want.as_object().into_iter().flatten().for_each(|(id, w)| check_text(id, w, after, &mut bad)),
             "photo" => {
                 let subject = want["subject_contains"].as_str().unwrap_or_default().to_lowercase();
                 let replace = want["mode"].as_str() == Some("replace");

@@ -2359,5 +2359,51 @@
    "no_symbol": true,
    "no_photo": true
   }
+ },
+ {
+  "id": "text-explicit-list",
+  "group": "text",
+  "board": [],
+  "history": ["Today I want to share what we learned building this company."],
+  "newest": "There are three lessons: start with users, measure the outcome, and keep the feedback loop short.",
+  "expect": {
+   "elements": 1,
+   "texts": {"e1": {"block_count": 4, "blocks_include": ["three lessons", "start with users", "measure the outcome", "feedback loop"]}},
+   "no_photo": true
+  }
+ },
+ {
+  "id": "text-stated-takeaway",
+  "group": "text",
+  "board": [],
+  "history": ["We ran twelve experiments over six weeks."],
+  "newest": "The key takeaway is simple: speed of learning beats speed of shipping.",
+  "expect": {
+   "elements": 1,
+   "texts": {"e1": {"blocks_include": ["speed of learning"]}},
+   "no_photo": true
+  }
+ },
+ {
+  "id": "text-correct-block",
+  "group": "text",
+  "board": [{"op": {"op": "draw_text", "blocks": [
+   {"kind": "heading", "text": "Three lessons", "level": 1, "emphasis": []},
+   {"kind": "bullet", "text": "Measure outputs", "level": 0, "emphasis": []}
+  ]}}],
+  "history": ["There are three lessons. First, measure outputs."],
+  "newest": "Actually, make that second point measure outcomes.",
+  "expect": {
+   "elements": 1,
+   "texts": {"e1": {"block_count": 2, "blocks_include": ["measure outcomes"]}}
+  }
+ },
+ {
+  "id": "text-guard-ordinary-narration",
+  "group": "text",
+  "board": [],
+  "history": ["Let me tell you how this began."],
+  "newest": "We stayed up late, talked to customers, and rewrote the prototype before sunrise.",
+  "expect": {"no_change": true, "no_photo": true}
  }
 ]

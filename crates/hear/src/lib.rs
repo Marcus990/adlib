@@ -255,7 +255,7 @@ pub fn clean(s: &str) -> String {
     }
     let out = collapse_repeats(&out.split_whitespace().collect::<Vec<_>>().join(" "));
     let lower = out.to_lowercase();
-    if ["", ".", "you", "you.", "thank you.", "thanks for watching!"].contains(&lower.as_str()) {
+    if ["", ".", "you", "you.", "thanks for watching!"].contains(&lower.as_str()) {
         return String::new();
     }
     out
@@ -668,7 +668,7 @@ mod tests {
     #[test]
     fn clean_strips_markers_and_hallucinations() {
         assert_eq!(clean(" [BLANK_AUDIO] "), "");
-        assert_eq!(clean("Thank you."), "");
+        assert_eq!(clean("Thank you."), "Thank you.", "a real closing can render as a text card");
         assert_eq!(clean(" Hello (music) world "), "Hello world");
         assert_eq!(clean("Oh, it's just, it's just, it's just, it's just so exciting."), "Oh, it's just, so exciting.");
         assert_eq!(clean("what, what, what, what, what"), "what,");

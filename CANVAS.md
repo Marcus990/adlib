@@ -12,7 +12,7 @@ speech → Whisper (partial + final phrases) → transcript
           │ whenever Luna is idle, ≥ 3 new words, under the rate cap
           ▼
    Luna (OpenAI Responses WebSocket, or HTTP/OpenRouter chat) sees: transcript · board with ids · recent changes · newest words
-          → tool calls: show_photo / draw_chart / set_point / … / remove / clear_board / no_action
+          → tool calls: show_photo / draw_chart / draw_text / … / remove / clear_board / no_action
           ▼
    Rust: guards (quote for destructive ops, spoken numbers) → Canvas ops by id → Scene v+1 → emit "scene"
           show_photo → CLIP search of the library → (nothing?) image generation → Canvas render → "scene"
@@ -28,7 +28,7 @@ speech → Whisper (partial + final phrases) → transcript
   faster and more consistent. `CANVAS_SERVICE_TIER=fast` opts into Fast mode; agent logs record the returned tier.
 
 ## Scene
-- `Element { id, image_id, caption, rect (0..1), z, focus }` — ≤ 4 images (oldest evicted).
+- `Element { id, kind, image_id, caption, rect (0..1), z, focus, diagram?, chart?, text? }` — ≤ 4 tiles (oldest evicted).
 - `Annotation { id, kind: highlight|frame|arrow, targets: [element ids], label? }` — ≤ 3.
 - `layout`: auto | hero | compare | grid — the layout engine turns (elements, layout, focus) into rects.
   auto: 1 → full; 2 → side by side; 3 → hero + 2; 4 → 2×2. hero: focus big, others stacked; compare: 2 up.
@@ -45,8 +45,8 @@ Offline rules (no key): "compare/versus/side by side" → compare; "focus on/thi
 ## Contracts
 `RenderEvent` stays (logs, eval, replay). New `Scene` is emitted alongside to the web view.
 
-## Live diagrams and charts (2026-09-19, user choice: "live diagrams" + "charts from speech")
-- Tiles are `kind: image | diagram | chart | logo`. A `logo` tile is a company logo, an icon or a flag from the symbol
+## Live diagrams, charts and text (2026-09-19)
+- Tiles are `kind: image | diagram | chart | text | logo`. A `logo` tile is a company logo, an icon or a flag from the symbol
   library (`image_id` = its id, drawn as a plain image with its name under it), or a **name card** (`image_id` empty, just
   the name in handwriting) when the library has nothing. `Canvas::render_logo` dedupes on the asset id or the name.
   Photos come from `show_photo`; diagrams and charts from Luna's
@@ -54,6 +54,11 @@ Offline rules (no key): "compare/versus/side by side" → compare; "focus on/thi
   (one value), grown with `add_point`, trimmed with `remove_point`; diagrams with `add_nodes`, `update_node`,
   `remove_node`, `add_edge`, `remove_edge`. There is no whole-data-set `update_chart` tool any more: a model that
   sent only the changed point used to wipe the rest of the chart.
+- A text tile holds up to eight ordered semantic blocks: `heading`, `paragraph` and `bullet`. Blocks get stable ids
+  (`b1`…) so Luna can append, correct or remove one block without redrawing the tile. `emphasis` is a list of exact
+  phrases within the block; the renderer marks those phrases using the active theme. A closing such as “Thank you” is
+  an ordinary heading block, rather than a special slide type. Text tools only apply after finished speech, so a partial
+  ASR phrase cannot become visible copy.
 - Canvas rules: omitted edges = chain (flow/timeline), chain + closing edge (cycle), spokes (hub); a redraw
   sharing ≥ half the nodes of a diagram on the board replaces it in place; same chart title → replace data;
   a stat with ≥ 2 values becomes bars; ≤ 8 nodes / points; node ids are never reused after a removal.

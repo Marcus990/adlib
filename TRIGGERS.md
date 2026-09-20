@@ -21,6 +21,8 @@ A quick guide for presenters (top) and for whoever tunes it (bottom). Canvas mod
 | A loop | "…and it all runs in a loop." | Turns the process into a cycle. |
 | Parts of a whole | "The system is made up of three parts: the ears, the brain and the canvas." | |
 | A timeline | "In 2019 we… In 2021 we… In 2023…" | |
+| Structured text | "There are three lessons. First, start with users. Second, measure the outcome." | Explicit headings, lists, takeaways and closings become text; ordinary narration does not. |
+| Fix text | "Actually, make the second point measure the real outcome." | Updates that block without redrawing the card. |
 | Compare / zoom / point | "Let's compare them side by side." "Zoom in on the owl." "Notice the eyes." | |
 | Remove a picture | "Take the eagle away." / "Get rid of the chart." | Name the thing. |
 | Clear the board | "Let's move on." / "Next topic." | Once per section. |
@@ -58,6 +60,7 @@ It acts only on the newest words; earlier speech is context. Its answer is tool 
 | `show_logo` / `show_icon` accept `mode replace` | Swap the symbol just shown for a better one: the words were cut off ("the flag…" → "…of Canada") and Luna acted on the unfinished phrase. |
 | `draw_chart` · `set_point` · `add_point` · `remove_point` · `set_chart` | A new chart; correct one value; add a point; drop a point; change kind / title / unit. Points are addressed by label ("Mar" finds "March"). |
 | `draw_diagram` · `add_nodes` · `update_node` · `remove_node` · `add_edge` · `remove_edge` | A new diagram; grow it; rename a step; drop a step; link or unlink steps. |
+| `draw_text` · `add_text_blocks` · `update_text_block` · `remove_text_block` | A structured heading/list/takeaway/closing; extend it; correct one block; remove one block. |
 | `focus` · `arrange` · `annotate` · `clear_annotations` | Layout and emphasis. |
 | `remove(id)` · `clear_board` | Take a tile away; clear the screen. |
 
@@ -68,7 +71,7 @@ words get a final call.
 
 ## Hard rules in code (the model judges the language; the code checks the evidence)
 
-- **Destructive ops need a quote.** `remove`, `clear_board`, `remove_point` and `remove_node` carry a `quote`: the
+- **Destructive ops need a quote.** `remove`, `clear_board`, `remove_point`, `remove_node` and `remove_text_block` carry a `quote`: the
   exact words in which the presenter asked. The code checks every word of it appears, in order, in the *newest*
   words. No quote, or a quote from earlier speech, and the op is refused (and logged). There are no phrase lists
   any more, so "take the eagle away" and "let's park that" work as well as "remove". One clear per 6 s.
@@ -77,6 +80,9 @@ words get a final call.
   "Not stoned: 40" are dropped.
 - **Ops address things by id**, so an op still applies when a photo landed while Luna was thinking. If its target
   is gone, it is refused and logged. A `clear_board` clears only the tiles Luna saw.
+- **Visible text waits for a finished sentence.** Luna still sees partial speech and can react quickly with other tools,
+  but draw/add/update text calls from a partial-only turn are refused. Text blocks use the presenter's words; emphasis
+  phrases must be exact substrings and are capped at two per block.
 - Canvas limits: ≤ 4 tiles, ≤ 3 annotations, ≤ 8 nodes and ≤ 8 points; a stat with a second value becomes bars; a
   redraw sharing half its nodes with a diagram on the board replaces it in place.
 - **Logos and icons never go to image generation.** They are looked up in `LS_ASSETS/icons` (`crates/search/src/icons.rs`, a port
