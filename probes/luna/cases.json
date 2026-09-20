@@ -2431,5 +2431,46 @@
    "texts": {"e1": {"block_count": 1, "blocks_include": ["customer retention"]}},
    "no_photo": true
   }
+ },
+ {
+  "id": "text-section-cue-becomes-heading",
+  "group": "text",
+  "board": [],
+  "history": ["Let me set this up."],
+  "newest": "The scenario.",
+  "expect": {
+   "elements": 1,
+   "texts": {"e1": {"block_count": 1, "blocks_include": ["The scenario"]}},
+   "no_photo": true
+  }
+ },
+ {
+  "id": "text-section-adds-first-body",
+  "group": "text",
+  "board": [{"op": {"op": "draw_text", "blocks": [
+   {"kind": "heading", "text": "The scenario", "level": 1, "emphasis": ["scenario"]}
+  ]}}],
+  "history": ["The scenario."],
+  "newest": "A support team loses every Friday copying the same numbers across five spreadsheets.",
+  "expect": {
+   "elements": 1,
+   "texts": {"e1": {"block_count": 2, "blocks_include": ["The scenario", "five spreadsheets"]}},
+   "no_photo": true
+  }
+ },
+ {
+  "id": "text-section-updates-one-body",
+  "group": "text",
+  "board": [{"op": {"op": "draw_text", "blocks": [
+   {"kind": "heading", "text": "The scenario", "level": 1, "emphasis": ["scenario"]},
+   {"kind": "paragraph", "text": "A support team loses every Friday to manual reporting", "level": 0, "emphasis": ["manual reporting"]}
+  ]}}],
+  "history": ["The scenario.", "A support team loses every Friday to manual reporting."],
+  "newest": "They copy the same numbers across five spreadsheets.",
+  "expect": {
+   "elements": 1,
+   "texts": {"e1": {"block_count": 2, "blocks_include": ["The scenario", "five spreadsheets"]}},
+   "no_photo": true
+  }
  }
 ]

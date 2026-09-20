@@ -59,6 +59,8 @@ Offline rules (no key): "compare/versus/side by side" → compare; "focus on/thi
   for list extensions and corrections. Every block carries 1–2 exact `emphasis` phrases; the renderer shows the full
   concise block and underlines those phrases. A closing such as “Thank you” is an ordinary heading block. Text tools only
   apply after finished speech, so a partial ASR phrase cannot become visible copy.
+- A section cue such as “the scenario” becomes the heading. The next relevant claim becomes its one paragraph body;
+  later details patch that body in place while the heading stays. Explicit lists use bullet blocks instead.
 - Canvas rules: omitted edges = chain (flow/timeline), chain + closing edge (cycle), spokes (hub); a redraw
   sharing ≥ half the nodes of a diagram on the board replaces it in place; same chart title → replace data;
   a stat with ≥ 2 values becomes bars; ≤ 8 nodes / points; node ids are never reused after a removal.

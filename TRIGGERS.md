@@ -22,6 +22,7 @@ A quick guide for presenters (top) and for whoever tunes it (bottom). Canvas mod
 | Parts of a whole | "The system is made up of three parts: the ears, the brain and the canvas." | |
 | A timeline | "In 2019 we… In 2021 we… In 2023…" | |
 | Structured text | "There are three lessons. First, start with users. Second, measure the outcome." | One text tile maximum. New text replaces old text; the full concise wording appears with selected key phrases underlined. Ordinary narration does not become text. |
+| Section + body | "The scenario." Then describe it. | Keeps “The scenario” as the heading and revises one body paragraph as the explanation develops. A new section cue replaces the card. |
 | Fix text | "Actually, make the second point measure the real outcome." | Updates that block without redrawing the card. |
 | Compare / zoom / point | "Let's compare them side by side." "Zoom in on the owl." "Notice the eyes." | |
 | Remove a picture | "Take the eagle away." / "Get rid of the chart." | Name the thing. |

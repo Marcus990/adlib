@@ -939,18 +939,52 @@ impl Canvas {
                 let Some(current) = self.scene.elements.iter().find(|e| &e.id == id).and_then(|e| e.text.as_ref()).map(|t| t.blocks.len()) else {
                     return self.miss(format!("add_text_blocks: no text tile {id}"));
                 };
-                if current >= MAX_TEXT_BLOCKS {
+                let has_body = self.scene.elements.iter().find(|e| &e.id == id).and_then(|e| e.text.as_ref()).is_some_and(|t| t.blocks.iter().any(|b| b.kind == TextBlockKind::Paragraph));
+                let replaces_body = has_body && blocks.iter().any(|b| b.kind != TextBlockKind::Heading);
+                if current >= MAX_TEXT_BLOCKS && !replaces_body {
                     return self.miss(format!("add_text_blocks: {id} already has {MAX_TEXT_BLOCKS} blocks"));
                 }
-                let added = self.text_blocks(blocks, MAX_TEXT_BLOCKS - current);
+                let added = self.text_blocks(blocks, MAX_TEXT_BLOCKS);
                 if added.is_empty() {
                     return self.miss("add_text_blocks: no usable blocks".into());
                 }
-                self.scene.elements.iter_mut().find(|e| &e.id == id).unwrap().text.as_mut().unwrap().blocks.extend(added);
-                self.focus_only(id);
-                true
+                let card = self.scene.elements.iter_mut().find(|e| &e.id == id).unwrap().text.as_mut().unwrap();
+                let mut changed = false;
+                for block in added {
+                    if block.kind == TextBlockKind::Paragraph || (has_body && block.kind == TextBlockKind::Bullet) {
+                        if let Some(body) = card.blocks.iter_mut().find(|b| b.kind == TextBlockKind::Paragraph) {
+                            changed |= body.text != block.text || body.level != block.level || body.emphasis != block.emphasis;
+                            body.text = block.text;
+                            body.level = 0;
+                            body.emphasis = block.emphasis;
+                            continue;
+                        }
+                    }
+                    if card.blocks.len() < MAX_TEXT_BLOCKS {
+                        card.blocks.push(block);
+                        changed = true;
+                    }
+                }
+                if changed { self.focus_only(id); }
+                changed
             }
             Op::UpdateTextBlock { id, block, text, emphasis, level } => {
+                let heading_only_body = self.scene.elements.iter().find(|e| &e.id == id).and_then(|e| e.text.as_ref()).is_some_and(|card| {
+                    card.blocks.len() == 1 && card.blocks[0].id == *block && card.blocks[0].kind == TextBlockKind::Heading && *level == Some(0)
+                });
+                if heading_only_body {
+                    let spec = TextBlockSpec {
+                        kind: TextBlockKind::Paragraph,
+                        text: text.clone().unwrap_or_default(),
+                        level: 0,
+                        emphasis: emphasis.clone().unwrap_or_default(),
+                    };
+                    let Some(clean) = clean_text_spec(&spec) else { return self.miss("update_text_block: no usable first body".into()) };
+                    let body = TextBlock { id: self.new_block_id(), kind: clean.kind, text: clean.text, level: clean.level, emphasis: clean.emphasis };
+                    self.scene.elements.iter_mut().find(|e| &e.id == id).unwrap().text.as_mut().unwrap().blocks.push(body);
+                    self.focus_only(id);
+                    return true;
+                }
                 let Some(card) = self.scene.elements.iter_mut().find(|e| &e.id == id).and_then(|e| e.text.as_mut()) else {
                     return self.miss(format!("update_text_block: no text tile {id}"));
                 };
@@ -1701,6 +1735,49 @@ mod tests {
 
         assert!(c.apply(s.version, &[Op::DrawText { blocks: vec![block(TextBlockKind::Heading, "Unselected words", &[])] }], 6).is_none());
         assert!(c.take_notes().iter().any(|note| note.contains("draw_text: no usable blocks")));
+    }
+
+    #[test]
+    fn a_section_keeps_one_stable_body_paragraph() {
+        let block = |kind, text: &str, emphasis: &[&str]| TextBlockSpec {
+            kind, text: text.into(), level: if kind == TextBlockKind::Heading { 1 } else { 0 }, emphasis: emphasis.iter().map(|s| s.to_string()).collect(),
+        };
+        let mut c = Canvas::new();
+        let s = c.apply(0, &[Op::DrawText { blocks: vec![
+            block(TextBlockKind::Heading, "The scenario", &["scenario"]),
+            block(TextBlockKind::Paragraph, "A team loses Friday to reporting", &["loses Friday"]),
+        ]}], 1).unwrap();
+        let id = s.elements[0].id.clone();
+        let body_id = s.elements[0].text.as_ref().unwrap().blocks[1].id.clone();
+        let s = c.apply(s.version, &[Op::AddTextBlocks { id, blocks: vec![
+            block(TextBlockKind::Paragraph, "They copy numbers across five spreadsheets", &["five spreadsheets"]),
+        ]}], 2).unwrap();
+        let blocks = &s.elements[0].text.as_ref().unwrap().blocks;
+        assert_eq!(blocks.len(), 2, "a developed section still has one heading and one body");
+        assert_eq!(blocks[1].id, body_id, "the body is patched rather than appended");
+        assert!(blocks[1].text.contains("five spreadsheets"));
+
+        let s = c.apply(s.version, &[Op::AddTextBlocks { id: s.elements[0].id.clone(), blocks: vec![
+            block(TextBlockKind::Bullet, "They repeat it every Friday", &["every Friday"]),
+        ]}], 3).unwrap();
+        let blocks = &s.elements[0].text.as_ref().unwrap().blocks;
+        assert_eq!(blocks.len(), 2, "prose mislabeled as a bullet cannot create a third section block");
+        assert_eq!(blocks[1].kind, TextBlockKind::Paragraph);
+        assert_eq!(blocks[1].id, body_id);
+
+        let mut title_only = Canvas::new();
+        let s = title_only.apply(0, &[Op::DrawText { blocks: vec![
+            block(TextBlockKind::Heading, "The scenario", &["scenario"]),
+        ]}], 1).unwrap();
+        let id = s.elements[0].id.clone();
+        let heading = s.elements[0].text.as_ref().unwrap().blocks[0].id.clone();
+        let s = title_only.apply(s.version, &[Op::UpdateTextBlock {
+            id, block: heading, text: Some("A team copies five spreadsheets".into()), emphasis: Some(vec!["five spreadsheets".into()]), level: Some(0),
+        }], 2).unwrap();
+        let blocks = &s.elements[0].text.as_ref().unwrap().blocks;
+        assert_eq!(blocks.len(), 2, "body prose aimed at a lone heading becomes its first paragraph");
+        assert_eq!(blocks[0].text, "The scenario");
+        assert_eq!(blocks[1].kind, TextBlockKind::Paragraph);
     }
 
     #[test]
