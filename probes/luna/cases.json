@@ -2405,5 +2405,17 @@
   "history": ["Let me tell you how this began."],
   "newest": "We stayed up late, talked to customers, and rewrote the prototype before sunrise.",
   "expect": {"no_change": true, "no_photo": true}
+ },
+ {
+  "id": "text-single-actor-outcome-not-diagram",
+  "group": "text",
+  "board": [],
+  "history": ["So here's the situation. You have two interns, James and Marcus, and they broke prod."],
+  "newest": "What they did was that they somehow enabled their website's customer service agents to end up doing the coding side.",
+  "expect": {
+   "elements": 1,
+   "texts": {"e1": {"blocks_include": ["customer service agents", "coding"]}},
+   "no_photo": true
+  }
  }
 ]

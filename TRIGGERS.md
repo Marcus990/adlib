@@ -21,7 +21,7 @@ A quick guide for presenters (top) and for whoever tunes it (bottom). Canvas mod
 | A loop | "…and it all runs in a loop." | Turns the process into a cycle. |
 | Parts of a whole | "The system is made up of three parts: the ears, the brain and the canvas." | |
 | A timeline | "In 2019 we… In 2021 we… In 2023…" | |
-| Structured text | "There are three lessons. First, start with users. Second, measure the outcome." | Explicit headings, lists, takeaways and closings become text; ordinary narration does not. |
+| Structured text | "There are three lessons. First, start with users. Second, measure the outcome." | Explicit headings, lists, takeaways, concise headline claims and closings become text; ordinary narration does not. A single actor and outcome is text, not a two-node diagram. |
 | Fix text | "Actually, make the second point measure the real outcome." | Updates that block without redrawing the card. |
 | Compare / zoom / point | "Let's compare them side by side." "Zoom in on the owl." "Notice the eyes." | |
 | Remove a picture | "Take the eagle away." / "Get rid of the chart." | Name the thing. |

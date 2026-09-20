@@ -100,15 +100,17 @@ CHARTS — only from numbers the presenter actually says; never invent or estima
 
 DIAGRAMS
 - flow: steps or cause → effect (edge labels for causes); cycle: something that repeats; hub: a central idea and its parts (first node is the centre); timeline: dated events (year in `note`). 1–10 nodes, labels of 1–4 words taken from the speech.
+- A diagram requires genuine structure: at least two actual stages, components, events, categories or relationships named by the presenter. A single factual claim or surprising capability is text even when its grammar suggests “A leads to B”.
 - A process told step by step can start with its first step and grow with add_nodes. Never add a node that repeats one already there.
 - If they restate or sum up a structure that is already on the board, do not draw a second copy: patch it (add_nodes, update_node, remove_node), or rebuild it with draw_diagram (full node list, or a different layout for the same nodes): draw_diagram replaces the diagram it matches in place. A node that was misheard is fixed with update_node.
 
 TEXT
-- Text is for structure the presenter explicitly creates: a heading or section label, an enumerated list, a stated takeaway, or a closing. Never transcribe ordinary narration and never turn a story into paragraphs on screen.
+- Text is for structure the presenter explicitly creates: a heading or section label, an enumerated list, a stated takeaway, a concise headline claim, or a closing. Never transcribe ordinary narration and never turn a story into paragraphs on screen.
 - `draw_text` creates one text tile from semantic blocks. Use heading for a title, paragraph for one short supporting thought, and bullet for each explicit item. Use `add_text_blocks` as the presenter continues the same list. Patch corrections by block id with `update_text_block`; do not redraw the tile.
 - `emphasis` contains at most two short, exact phrases copied from that block's text. Emphasize only words the presenter stresses or frames as the key takeaway.
 - Text must be extractive: use the presenter's own words and keep it concise. Never create text from unfinished words in "Being spoken now"; wait for the finished sentence.
 - A closing such as "Thank you" is a text tile, usually heading "Thank you" and optional paragraph "Questions?" only when those words were said. Clear the old board only when the newest words also authorize `clear_board` with a quote.
+- A single claim with one actor and one outcome is text, not a diagram: “customer service agents ended up doing the coding” should be a short heading/body card. Do not manufacture diagram nodes by splitting a sentence into its subject and predicate.
 
 TECHNICAL DIAGRAMS (architecture, data flow, request paths, pipelines, infrastructure): draw_diagram with layout "flow" and an explicit `edges` list: one edge for EVERY connection the presenter describes ("the API talks to Postgres and Redis" is two edges out of the API), each with a 1–3 word label of what travels or happens ("writes", "publishes events", "token") when they say it. Node labels are the component names as said ("API gateway", "Orders service", "Postgres"). Draw the whole path in one diagram and grow it with add_nodes (with their edges) as more components are described.
 
@@ -175,7 +177,7 @@ pub fn tools() -> Value {
             json!({"id": id("chart"), "label": {"type": "string"}, "quote": quote.clone()}), json!(["id", "label", "quote"])),
         tool("set_chart", "Change a chart's kind, title or unit without touching its data ('show that as a line chart', 'call this chart monthly signups').",
             json!({"id": id("chart"), "kind": kind, "title": {"type": "string", "description": "≤ 6 words"}, "unit": {"type": "string"}}), json!(["id"])),
-        tool("draw_text", "Add a NEW structured text tile for an explicit heading, list, takeaway or closing. Never transcribe ordinary narration or unfinished speech.",
+        tool("draw_text", "Add a NEW structured text tile for an explicit heading, list, takeaway, concise headline claim or closing. Prefer this over a diagram for one actor and one outcome. Never transcribe ordinary narration or unfinished speech.",
             json!({"blocks": {"type": "array", "minItems": 1, "maxItems": 8, "items": text_block.clone()}}), json!(["blocks"])),
         tool("add_text_blocks", "Append finished items to an existing text tile as the presenter continues the same list.",
             json!({"id": id("text tile"), "blocks": {"type": "array", "minItems": 1, "items": text_block.clone()}}), json!(["id", "blocks"])),
