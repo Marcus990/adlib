@@ -223,9 +223,11 @@ fn resolve(nodes: &[Node], key: &str) -> Option<String> {
     nodes.iter().find(|n| n.id == key.trim() || same(&n.label, key)).map(|n| n.id.clone())
 }
 
-/// A "stat" is one number or a before → after; three or more values read better as bars.
+/// A "stat" is ONE headline number. As soon as a second value exists the presenter is comparing
+/// quantities, and that reads as bars — a 2-point stat renders as two numbers joined by an arrow
+/// (sketch.js:293), which is what "200 users last year, 300 the year before" drew on 09-19.
 fn promote(kind: ChartKind, n: usize) -> ChartKind {
-    if kind == ChartKind::Stat && n >= 3 { ChartKind::Bar } else { kind }
+    if kind == ChartKind::Stat && n >= 2 { ChartKind::Bar } else { kind }
 }
 
 fn clean_points(points: &[Point]) -> Vec<Point> {
@@ -969,6 +971,31 @@ mod tests {
         // image refinement still targets the image, not the focused chart
         let s = c.update("owl", "owl", "u", 4);
         assert!(s.elements.iter().any(|e| e.image_id == "owl") && !s.elements.iter().any(|e| e.image_id == "eagle"));
+    }
+
+    /// 09-19, the recorded failure: "last year we had like 200 users" drew a 1-point stat, then "the year
+    /// before that we had 300 users" updated it — still `stat`, which both renderers draw as two numbers
+    /// joined by an arrow. Two spoken quantities are a comparison, and a comparison is bars. This goes
+    /// through the UpdateChart caller of `promote`, which is the path the incident actually took.
+    #[test]
+    fn two_spoken_numbers_are_bars_even_when_the_model_says_stat() {
+        let mut c = Canvas::new();
+        let v = c.scene().version;
+        let s = c
+            .apply(v, &[Op::DrawChart { kind: ChartKind::Stat, title: Some("Users last year".into()), unit: Some("users".into()), points: pts(&[("Last year", 200.0)]) }], 6)
+            .unwrap();
+        let e = s.elements.last().unwrap();
+        assert_eq!(e.chart.as_ref().unwrap().kind, ChartKind::Stat, "one number is still a headline number");
+        let id = e.id.clone();
+        let s = c
+            .apply(
+                s.version,
+                &[Op::UpdateChart { id, kind: Some(ChartKind::Stat), title: Some("Users over two years".into()), points: pts(&[("Year before", 300.0), ("Last year", 200.0)]) }],
+                7,
+            )
+            .unwrap();
+        let ch = s.elements.last().unwrap().chart.as_ref().unwrap();
+        assert_eq!((ch.kind, ch.points.len()), (ChartKind::Bar, 2), "a second value makes it bars even when the model insists on stat");
     }
 
     #[test]

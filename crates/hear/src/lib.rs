@@ -33,7 +33,12 @@ pub struct ChunkerConfig {
 
 impl Default for ChunkerConfig {
     fn default() -> Self {
-        Self { tick_ms: 500, min_silence_ms: 600, max_chunk_ms: 8_000, min_speech_ms: 400 }
+        // min_silence 700: presenters pause mid-sentence for breath, and at 600 ms that split the
+        // sentence in two (18% of finals on 09-19 were fragments under 1.5 s). whisper.cpp merges VAD
+        // segments whose gap is < 200 ms and shrinks each reported gap by 2× speech_pad, so the effective
+        // threshold is ~900 ms — inside the 700–900 ms band LiveKit and Deepgram use for end-of-turn.
+        // Waiting longer costs nothing on screen: partials keep flowing while the pause runs.
+        Self { tick_ms: 500, min_silence_ms: 700, max_chunk_ms: 8_000, min_speech_ms: 400 }
     }
 }
 
@@ -89,7 +94,8 @@ impl<A: Asr, V: Vad> Chunker<A, V> {
             return Ok(vec![]);
         }
         let end = (spans.last().unwrap().1 * SR as f32) as usize;
-        Ok(self.finalize(end.min(self.buf.len()), vad_ms)?.into_iter().collect())
+        let end = end.min(self.buf.len());
+        Ok(self.finalize(end, self.buf.len(), vad_ms)?.into_iter().collect())
     }
 
     fn tick(&mut self) -> anyhow::Result<Vec<(Chunk, ChunkTiming)>> {
@@ -112,16 +118,38 @@ impl<A: Asr, V: Vad> Chunker<A, V> {
         // earlier utterance at the gap so two utterances never merge.
         if let Some(w) = spans.windows(2).find(|w| ((w[1].0 - w[0].1) * 1000.0) as u64 >= self.cfg.min_silence_ms) {
             let end_sample = ((w[0].1 * SR as f32) as usize).min(self.buf.len());
-            return Ok(self.finalize(end_sample, vad_ms)?.into_iter().collect());
+            // Drop the gap too, keeping 200 ms of lead-in before the next utterance: silence left at the
+            // head of the buffer becomes the leading audio of the next decode, and Whisper hallucinates
+            // into it (`max_initial_ts` forces the first timestamp into the window's first second).
+            let lead = 0.2_f32;
+            let drain_to = (((w[1].0 - lead).max(0.0) * SR as f32) as usize).clamp(end_sample, self.buf.len());
+            return Ok(self.finalize(end_sample, drain_to, vad_ms)?.into_iter().collect());
         }
         let speech_start = (spans[0].0 * 1000.0) as u64;
         let speech_end = (spans.last().unwrap().1 * 1000.0) as u64;
         let silence_after = buf_ms.saturating_sub(speech_end);
 
-        if silence_after >= self.cfg.min_silence_ms || buf_ms >= self.cfg.max_chunk_ms {
-            let end = if silence_after >= self.cfg.min_silence_ms { speech_end } else { buf_ms };
-            let end_sample = ((end as usize) * SR / 1000).min(self.buf.len());
-            return Ok(self.finalize(end_sample, vad_ms)?.into_iter().collect());
+        if silence_after >= self.cfg.min_silence_ms {
+            // Drop the silence that triggered this finalize, but never the newest 300 ms: Silero misses
+            // quiet or overlapping speech at the live edge, and audio the VAD did not flag is still audio.
+            // Draining the whole buffer here deleted words outright for a soft second speaker.
+            let end_sample = ((speech_end as usize) * SR / 1000).min(self.buf.len());
+            let drain_to = self.buf.len().saturating_sub(SR * 300 / 1000).max(end_sample);
+            return Ok(self.finalize(end_sample, drain_to, vad_ms)?.into_iter().collect());
+        }
+        if buf_ms >= self.cfg.max_chunk_ms {
+            // A cut at the wall clock bisects whatever word is in flight — 8% of finals on 09-19, one of
+            // them ending "...telling me to like...". Cut at the last inter-word silence of >= 100 ms
+            // instead, which is what Silero itself does at its `max_speech_duration_s` cap. Blind only if
+            // the speaker genuinely never paused.
+            let cut = spans
+                .windows(2)
+                .filter(|w| ((w[1].0 - w[0].1) * 1000.0) >= 100.0)
+                .next_back()
+                .map(|w| (w[0].1 * SR as f32) as usize)
+                .unwrap_or(self.buf.len())
+                .min(self.buf.len());
+            return Ok(self.finalize(cut, cut, vad_ms)?.into_iter().collect());
         }
         if speech_end.saturating_sub(speech_start) < self.cfg.min_speech_ms {
             return Ok(vec![]);
@@ -132,10 +160,12 @@ impl<A: Asr, V: Vad> Chunker<A, V> {
         if text.is_empty() || text == self.last_curr {
             return Ok(vec![]);
         }
+        let stable = agreed_prefix(&self.last_curr, &text);
         self.last_curr = text.clone();
         let c = Chunk {
             id: self.take_id(),
             text,
+            stable,
             t_start_ms: Self::ms(self.buf_start) + speech_start,
             t_end_ms: Self::ms(self.total),
             is_final: false,
@@ -143,19 +173,27 @@ impl<A: Asr, V: Vad> Chunker<A, V> {
         Ok(vec![(c, ChunkTiming { audio_ms: Self::ms(self.total), vad_ms, asr_ms })])
     }
 
-    fn finalize(&mut self, end_sample: usize, vad_ms: f64) -> anyhow::Result<Option<(Chunk, ChunkTiming)>> {
+    /// `end_sample` is where the speech ends; `drain_to` is how much of the buffer this utterance
+    /// consumes (>= `end_sample`, so trailing silence does not become the next decode's leading audio).
+    fn finalize(&mut self, end_sample: usize, drain_to: usize, vad_ms: f64) -> anyhow::Result<Option<(Chunk, ChunkTiming)>> {
         let t = std::time::Instant::now();
-        let text = clean(&self.asr.transcribe(&self.buf[..end_sample])?);
+        // Decode a guard band past the VAD's idea of the end. Silero's 100 ms pad is tuned for
+        // segmentation, not for giving a transformer acoustic context, and a word's release (plosives,
+        // final /s/) lands after the energy-based endpoint — cutting there clips the last word.
+        let decode_to = (end_sample + SR * 250 / 1000).min(self.buf.len());
+        let text = clean(&self.asr.transcribe(&self.buf[..decode_to])?);
         let asr_ms = t.elapsed().as_secs_f64() * 1000.0;
         let start_ms = Self::ms(self.buf_start);
         let end_ms = start_ms + Self::ms(end_sample as u64);
-        self.buf.drain(..end_sample);
-        self.buf_start += end_sample as u64;
+        let stable = agreed_prefix(&self.last_curr, &text);
+        let drain_to = drain_to.clamp(end_sample, self.buf.len());
+        self.buf.drain(..drain_to);
+        self.buf_start += drain_to as u64;
         self.last_curr.clear();
         if text.is_empty() {
             return Ok(None);
         }
-        let c = Chunk { id: self.take_id(), text, t_start_ms: start_ms, t_end_ms: end_ms, is_final: true };
+        let c = Chunk { id: self.take_id(), text, stable, t_start_ms: start_ms, t_end_ms: end_ms, is_final: true };
         Ok(Some((c, ChunkTiming { audio_ms: Self::ms(self.total), vad_ms, asr_ms })))
     }
 
@@ -164,6 +202,21 @@ impl<A: Asr, V: Vad> Chunker<A, V> {
         self.next_id += 1;
         id
     }
+}
+
+/// The leading words this decode agrees on with the decode before it.
+///
+/// Whisper re-transcribes the whole utterance every tick, so this is cross-decode agreement — the same
+/// signal `LocalAgreement-2` uses (Macháček et al. 2023). A word the audio really contains survives the
+/// re-decode; a hallucinated one does not. It is a far better confidence measure than Whisper's own
+/// probabilities, which stay high precisely when it hallucinates. On 09-19 "I'll get it, okay, it's done."
+/// was followed by "I'll get that guy's gun." — they agree on one word, and "gun" is not in it.
+pub fn agreed_prefix(prev: &str, curr: &str) -> String {
+    let norm = |w: &str| w.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'').to_lowercase();
+    let p: Vec<&str> = prev.split_whitespace().collect();
+    let c: Vec<&str> = curr.split_whitespace().collect();
+    let n = p.iter().zip(c.iter()).take_while(|(a, b)| norm(a) == norm(b)).count();
+    c[..n].join(" ")
 }
 
 /// Strip Whisper's non-speech markers and whitespace.

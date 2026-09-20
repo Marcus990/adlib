@@ -32,13 +32,18 @@ in fragments and early words can be wrong), call draw_diagram again with the ful
 replaces the old one in place. Don't add a node that repeats one already there. If they restate or sum up a structure that is already on \
 the board, rework that diagram (draw_diagram with its id's layout) — never draw a second copy of it.\n\
 CHARTS — only from numbers the presenter actually says (never invent or estimate data): values over time or \
-across groups (bar; line for a trend over 3+ times), shares of a whole (pie), one headline number or a \
-before → after (stat). Use plain numbers in `value` (\"fifteen thousand\" → 15000, \"60 percent\" → 60 with \
+across groups (bar; line for a trend over 3+ times), shares of a whole (pie), one number that stands alone \
+with nothing to compare it to (stat). Numbers arrive one at a time: if the presenter is listing or comparing \
+values (\"last year… the year before…\"), use bar from the FIRST number — a bar chart with one value draws as \
+a single big number and grows into bars as more arrive. Choose stat only when no second number is coming. \
+Use plain numbers in `value` (\"fifteen thousand\" → 15000, \"60 percent\" → 60 with \
 unit \"%\"). Every value must be one the presenter said: never add an \"Other\", \"Rest\" or \"Not X\" \
 remainder — a pie may sum to less than 100. When they add a number or the transcript firms up (early words \
 can be misheard), call update_chart with the full corrected list of values. update_chart is only for the SAME \
-series; a new set of numbers (e.g. shares of a whole after a growth trend) is a new chart — draw_chart. Never \
-turn one chart into another kind.\n\
+series; a new set of numbers (e.g. shares of a whole after a growth trend) is a new chart — draw_chart. Keep \
+the chart's id as its data grows: promote it with update_chart (kind \"bar\" once a second value exists), \
+never a second draw_chart for the same numbers. The one kind change that is forbidden is turning an existing \
+series into a pie — that is always a new chart.\n\
 `needs` (when present) is a router's call on what this sentence needs — \"chart\", \"diagram\" or \"board\". \
 Produce that unless the sentence plainly cannot support it (then call no tool).\n\
 BOARD — \"let's move on\", \"next topic\", \"new section\", \"start fresh\", \"clear the screen\", \"reset the \
@@ -95,14 +100,15 @@ pub fn tools() -> Value {
         {"type": "function", "function": {"name": "draw_chart", "description": "Add a chart tile built from numbers the presenter said.",
             "parameters": {"type": "object", "properties": {
                 "kind": {"type": "string", "enum": ["bar", "line", "pie", "stat"],
-                    "description": "bar: compare values; line: trend over 3+ times; pie: shares of a whole; stat: one headline number, or before→after with 2 points"},
+                    "description": "bar: compare values, and the default whenever more numbers may follow; line: trend over 3+ times; pie: shares of a whole; stat: exactly one number, standing alone"},
                 "title": {"type": "string", "description": "≤ 6 words"},
                 "unit": {"type": "string", "description": "e.g. %, $, users, km"},
                 "points": {"type": "array", "items": point.clone(), "description": "in the order spoken (chronological for time)"}},
                 "required": ["kind", "points"]}}},
         {"type": "function", "function": {"name": "update_chart", "description": "Replace a chart's data with the FULL corrected list of values (include the ones already there that are still right).",
             "parameters": {"type": "object", "properties": {"id": id,
-                "kind": {"type": "string", "enum": ["bar", "line", "pie", "stat"]},
+                "kind": {"type": "string", "enum": ["bar", "line", "pie", "stat"],
+                    "description": "the kind the data now needs — send \"bar\" once the series has a second value"},
                 "title": {"type": "string", "description": "optional new title if the chart's meaning grew"},
                 "points": {"type": "array", "items": point}},
                 "required": ["id", "points"]}}}

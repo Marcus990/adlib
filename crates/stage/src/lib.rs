@@ -27,8 +27,10 @@ pub struct StageConfig {
     /// A new image from an in-progress (non-final) phrase must be matched by two consecutive
     /// updates before it shows — partial transcripts misfire ("what a bald…" heard as "what a ball is").
     pub confirm_partials: bool,
-    /// …unless Jev is this confident: on 09-19 logs every wrong candidate the rule caught had p ≤ 0.55,
-    /// while 34 of 42 correct ones had p ≥ 0.6 and paid ~0.6 s for the wait.
+    /// …unless the subject survived a re-decode (see `Chunk::stable`), or this is a FINAL chunk and Jev
+    /// is at least this confident. A Whisper final is an independent re-decode of a shorter window, not a
+    /// refinement of the partial before it, so `is_final` alone is not evidence the words settled: on
+    /// 09-19 "I'll get that guy's gun." arrived as a final at p=0.67 and went straight to the screen.
     pub confirm_below_p: f32,
 }
 
@@ -41,9 +43,14 @@ impl Default for StageConfig {
             tau: 0.52, // 09-19 logs: real matches 0.54–0.61, junk phrases ("six", "last year") 0.43–0.49
             hold_render_ms: 4000,
             hold_update_ms: 1500,
-            join_timeout_ms: 1000,
+            // Must exceed the SLOWER branch's worst case, which is the phrase model's own 900 ms ceiling
+            // plus the CLIP pass (p90 ~550 ms). At 1000 ms it was cutting the search half off before it
+            // could land: 14 of 120 chunks on the 09-19 replay timed out and could never render.
+            join_timeout_ms: 2000,
             confirm_partials: true,
-            confirm_below_p: 0.6,
+            // 09-19 corpus: the gun final scored 0.67 and the wrong "camera" render 0.80, while the
+            // correct penguin final scored 0.88. Only a final this confident skips corroboration.
+            confirm_below_p: 0.85,
         }
     }
 }
@@ -85,6 +92,8 @@ pub struct Stage {
     cfg: StageConfig,
     halves: BTreeMap<u64, Half>,
     texts: VecDeque<(u64, String)>,
+    /// Per chunk, the words that survived a re-decode (`Chunk::stable`).
+    stable: VecDeque<(u64, String)>,
     current: Visual,
     current_since_ms: u64,
     pending: Option<Visual>,
@@ -102,6 +111,7 @@ impl Stage {
             cfg,
             halves: BTreeMap::new(),
             texts: VecDeque::new(),
+            stable: VecDeque::new(),
             current: Visual { kind: "clear", image_id: None, caption: None, trigger_text: String::new(), chunk_id: 0 },
             current_since_ms: 0,
             pending: None,
@@ -125,6 +135,33 @@ impl Stage {
         while self.texts.len() > 64 {
             self.texts.pop_front();
         }
+        self.stable.retain(|(id, _)| *id != c.id);
+        self.stable.push_back((c.id, c.stable.clone()));
+        while self.stable.len() > 64 {
+            self.stable.pop_front();
+        }
+    }
+
+    /// Did the words this match was built from survive a re-decode of the same audio?
+    ///
+    /// The search phrase's head word must appear in the chunk's agreed prefix. This is the one check that
+    /// separates "the presenter said penguin" from "Whisper invented gun": both look identical to Jev, to
+    /// the phrase model and to CLIP, and differ only in whether the audio produced the word twice.
+    fn subject_settled(&self, chunk_id: u64, phrase: &str) -> bool {
+        let Some((_, stable)) = self.stable.iter().find(|(i, _)| *i == chunk_id) else {
+            return false;
+        };
+        if stable.is_empty() {
+            return false;
+        }
+        let norm = |w: &str| w.trim_matches(|c: char| !c.is_alphanumeric()).trim_end_matches('s').to_lowercase();
+        let words: Vec<String> = stable.split_whitespace().map(norm).collect();
+        phrase
+            .split_whitespace()
+            .map(norm)
+            .filter(|w| w.len() > 2)
+            .last()
+            .is_some_and(|head| words.contains(&head))
     }
 
     /// What Jev and the query model should see as "on screen": the pending visual if a change is
@@ -244,7 +281,13 @@ impl Stage {
                     return Outcome::Duplicate;
                 }
                 let confirmed = matches!(&self.candidate, Some((id, t)) if id == &m.image_id && now_ms.saturating_sub(*t) <= CANDIDATE_TTL_MS);
-                if self.cfg.confirm_partials && d.p < self.cfg.confirm_below_p && !self.finals.contains(&d.chunk_id) && !confirmed {
+                // Render at once only when the words are evidenced: either the subject survived a
+                // re-decode of the same audio, or this is a final Jev is very sure about. Everything
+                // else waits for one agreeing sighting — which, when the presenter really is talking
+                // about the thing, arrives on the next tick ~650 ms later.
+                let settled = self.subject_settled(d.chunk_id, &m.phrase)
+                    || (self.finals.contains(&d.chunk_id) && d.p >= self.cfg.confirm_below_p);
+                if self.cfg.confirm_partials && !settled && !confirmed {
                     self.candidate = Some((m.image_id.clone(), now_ms));
                     return Outcome::Unconfirmed;
                 }
@@ -320,15 +363,20 @@ mod tests {
         assert_eq!(s.on_decision(dec(2, 2, Action::NewRender, 0.3), 0), Some(Outcome::BelowProbability));
     }
 
+    /// Until 09-19 a partial with p ≥ 0.6 skipped confirmation, on the measurement that wrong candidates
+    /// scored ≤ 0.55. The gun disproved it: p = 0.67 on words that were never spoken. Jev reasons about
+    /// TEXT, so it cannot be confident that the text is right — only a re-decode can say that. A partial
+    /// now waits unless its subject survived one (see `a_subject_that_survived_a_redecode_...`).
     #[test]
-    fn confident_partials_skip_confirmation() {
+    fn confident_partials_still_need_agreement() {
         let mut s = Stage::new(StageConfig::default());
-        // chunk 1 is a partial: weak evidence waits for a second agreeing update …
         s.on_search(found(1, "eagle", 0.6), 0);
         assert_eq!(s.on_decision(dec(1, 1, Action::NewRender, 0.5), 0), Some(Outcome::Unconfirmed));
-        // … strong evidence shows at once
         s.on_search(found(2, "owl", 0.6), 100);
-        assert!(matches!(s.on_decision(dec(2, 2, Action::NewRender, 0.8), 100), Some(Outcome::Rendered(_))));
+        assert_eq!(s.on_decision(dec(2, 2, Action::NewRender, 0.8), 100), Some(Outcome::Unconfirmed));
+        // …and the second agreeing sighting, one ASR tick later, shows it.
+        s.on_search(found(3, "owl", 0.6), 700);
+        assert!(matches!(s.on_decision(dec(3, 3, Action::NewRender, 0.8), 700), Some(Outcome::Rendered(_))));
     }
 
     #[test]
@@ -403,12 +451,14 @@ mod tests {
 
     #[test]
     fn missing_branch_times_out() {
-        let mut s = Stage::new(StageConfig { confirm_partials: false, ..StageConfig::default() });
+        let cfg = StageConfig { confirm_partials: false, ..StageConfig::default() };
+        let t = cfg.join_timeout_ms;
+        let mut s = Stage::new(cfg);
         s.on_decision(dec(1, 1, Action::NewRender, 0.9), 0);
-        assert!(s.tick(1000).is_empty());
-        assert_eq!(s.tick(1001), vec![(1, Outcome::TimedOut)]);
+        assert!(s.tick(t).is_empty());
+        assert_eq!(s.tick(t + 1), vec![(1, Outcome::TimedOut)]);
         // A late partner now starts a fresh half and cannot render alone.
-        assert_eq!(s.on_search(found(1, "eagle", 0.6), 1100), None);
+        assert_eq!(s.on_search(found(1, "eagle", 0.6), t + 100), None);
     }
 
     #[test]
@@ -436,16 +486,74 @@ mod tests {
         assert_eq!(s.on_decision(dec(2, 2, Action::NewRender, 0.5), 800), Some(Outcome::Unconfirmed), "disagreeing update resets");
         s.on_search(found(3, "eagle", 0.6), 1600);
         assert_eq!(rendered(s.on_decision(dec(3, 3, Action::NewRender, 0.5), 1600)).image_id.as_deref(), Some("eagle"));
-        // A final chunk shows immediately.
-        s.on_chunk(&Chunk { id: 9, text: "take a look at this owl".into(), t_start_ms: 0, t_end_ms: 1, is_final: true });
+        // A confident final shows immediately.
+        s.on_chunk(&Chunk { id: 9, text: "take a look at this owl".into(), stable: String::new(), t_start_ms: 0, t_end_ms: 1, is_final: true });
         s.on_search(found(9, "owl", 0.6), 9000);
         assert_eq!(rendered(s.on_decision(dec(9, 9, Action::NewRender, 0.9), 9000)).image_id.as_deref(), Some("owl"));
+    }
+
+    /// 09-19: chunk #6 "I'll get it, okay, it's done." was followed by FINAL #7 "I'll get that guy's gun."
+    /// — an independent re-decode, agreeing on one word. Jev said photo at p=0.67 and a gun went up.
+    #[test]
+    fn a_final_that_rewrites_the_sentence_waits() {
+        // τ as it is on the asset card, where the incident ran.
+        let mut s = Stage::new(StageConfig { tau: 0.22, ..StageConfig::default() });
+        s.on_chunk(&Chunk {
+            id: 7,
+            text: "I'll get that guy's gun.".into(),
+            stable: "I'll".into(), // all the previous decode and this one agreed on
+            t_start_ms: 0,
+            t_end_ms: 1,
+            is_final: true,
+        });
+        s.on_search(found(7, "gun", 0.283), 0);
+        assert_eq!(
+            s.on_decision(dec(7, 7, Action::NewRender, 0.67), 0),
+            Some(Outcome::Unconfirmed),
+            "a final is not evidence on its own: 'gun' never survived a re-decode"
+        );
+        // The presenter moves on ("Um, how", "Um, hi, hello") — nothing agrees, so it never shows.
+        assert!(s.tick(2600).iter().all(|(_, o)| !matches!(o, Outcome::Rendered(_))));
+    }
+
+    /// The same run, 35 s earlier: #46 "Now let's talk about pink." → FINAL #47 "…about penguins."
+    /// Also a rewrite, but Jev was sure (p=0.88). This must not regress — it is the good case.
+    #[test]
+    fn a_confident_final_still_renders_at_once() {
+        let mut s = Stage::new(StageConfig { tau: 0.22, ..StageConfig::default() });
+        s.on_chunk(&Chunk {
+            id: 47,
+            text: "Now let's talk about penguins.".into(),
+            stable: "Now let's talk about".into(),
+            t_start_ms: 0,
+            t_end_ms: 1,
+            is_final: true,
+        });
+        s.on_search(found(47, "penguin", 0.3), 0);
+        assert_eq!(rendered(s.on_decision(dec(47, 47, Action::NewRender, 0.88), 0)).image_id.as_deref(), Some("penguin"));
+    }
+
+    /// A subject that survived a re-decode renders at once even on a partial with a middling p —
+    /// this is what keeps the fast path fast (the usual case: the word is simply still there).
+    #[test]
+    fn a_subject_that_survived_a_redecode_needs_no_confirmation() {
+        let mut s = Stage::new(StageConfig::default());
+        s.on_chunk(&Chunk {
+            id: 3,
+            text: "penguins can't fly but they swim".into(),
+            stable: "penguins can't fly".into(),
+            t_start_ms: 0,
+            t_end_ms: 1,
+            is_final: false,
+        });
+        s.on_search(found(3, "penguin", 0.6), 0);
+        assert_eq!(rendered(s.on_decision(dec(3, 3, Action::NewRender, 0.5), 0)).image_id.as_deref(), Some("penguin"));
     }
 
     #[test]
     fn trigger_text_comes_from_chunk() {
         let mut s = Stage::new(StageConfig { confirm_partials: false, ..StageConfig::default() });
-        s.on_chunk(&Chunk { id: 1, text: "our eagle mascot".into(), t_start_ms: 0, t_end_ms: 1, is_final: false });
+        s.on_chunk(&Chunk { id: 1, text: "our eagle mascot".into(), stable: String::new(), t_start_ms: 0, t_end_ms: 1, is_final: false });
         s.on_search(found(1, "eagle", 0.6), 0);
         s.on_decision(dec(1, 1, Action::NewRender, 0.9), 0);
         assert_eq!(s.displayed().trigger_text, "our eagle mascot");

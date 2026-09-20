@@ -477,6 +477,8 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
     let mut graphic_chunks: std::collections::HashSet<u64> = Default::default();
     // How sure Jev was that this sentence wants a photo; drawing one needs more than showing a stock one.
     let mut photo_conf: std::collections::HashMap<u64, f32> = Default::default();
+    // Chunks whose transcript Whisper has finalised; generation only draws from these.
+    let mut final_chunks: std::collections::HashSet<u64> = Default::default();
     let caption_of = |id: &str| -> String {
         // Card photos from COCO have no label at all; "photo" keeps board summaries readable.
         match engine.searcher.index.entries.iter().find(|e| e.id == id) {
@@ -553,6 +555,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                             agent_trigger = Some((context, c.text.clone(), c.id, None));
                         }
                         if c.is_final {
+                            final_chunks.insert(c.id);
                             recent.push_back(c.text.clone());
                             while recent.len() > 5 {
                                 recent.pop_front();
@@ -566,9 +569,14 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                         if c.is_final {
                             prev_final = c.text.clone();
                         }
+                        // Jev sees the last few finals (~25 s), not just one (~9 s): a topic recurs across
+                        // sentences while an analogy's vehicle is named once and dropped, and with a
+                        // one-sentence window "watch like the eagle" is indistinguishable from "here's an
+                        // eagle". The phrase model keeps the tight window so its grounding check stays tight.
+                        let context = recent.iter().filter(|t| **t != c.text).cloned().collect::<Vec<_>>().join(" ");
                         // Branch 1: whether.
                         {
-                            let (e, tx, c, d, prev, log) = (engine.clone(), tx.clone(), c.clone(), displayed.clone(), prev.clone(), log.clone());
+                            let (e, tx, c, d, prev, log) = (engine.clone(), tx.clone(), c.clone(), displayed.clone(), context, log.clone());
                             tokio::spawn(async move {
                                 let t = log.now_ms();
                                 let (dec, src) = e.decider.decide(c.id, c.id, &prev, &c.text, &d, t).await;
@@ -580,6 +588,16 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                             let (e, tx, c, d, prev, log) = (engine.clone(), tx.clone(), c.clone(), displayed, prev, log.clone());
                             tokio::spawn(async move {
                                 let t = log.now_ms();
+                                // "so", "uh", "and over your": nothing to look for. Asked anyway, the phrase
+                                // model answers filler with library words, which then satisfy names() and
+                                // bypass the label gate. Skipping also frees a core for Whisper. The empty
+                                // result must still be sent or the decision half orphans and times out.
+                                if c.text.split_whitespace().filter(|w| w.len() > 2).count() < 2 {
+                                    let empty = ls_contracts::QueryResult { chunk_id: c.id, phrases: vec![], from_fallback: false, named: false };
+                                    let n = log.now_ms();
+                                    let _ = tx.send(Msg::Search(SearchOutcome { chunk_id: c.id, best: None }, empty, vec![], t, n, n));
+                                    return;
+                                }
                                 // The speech names one library subject outright → search it now; the phrase
                                 // model (≈0.45 s, mostly network) is only needed to interpret the speech.
                                 let q = match ls_query::named_subject(&c.text, e.query.vocab()) {
@@ -758,7 +776,19 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
             }
             // Drawing asserts "this is the thing you meant", so it needs Jev to be sure it wanted a photo
             // at all (a library photo is cheaper to be wrong about). Offline (no routing) → allowed.
-            if engine.decider.has_remote() && photo_conf.get(&id).copied().unwrap_or(0.0) < 0.8 {
+            // 0.8 was unsatisfiable: every chunk that ever reached a gap scored 0.68–0.69, so generation
+            // has been silently dead since routing shipped. Skips are logged now — a feature that is off
+            // must not look identical to a feature that is on.
+            let conf = photo_conf.get(&id).copied().unwrap_or(0.0);
+            if engine.decider.has_remote() && conf < 0.7 {
+                log.log(json!({"ev": "gen_skipped", "chunk_id": id, "subject": &subject, "reason": "p_visual", "p_visual": conf}));
+                continue;
+            }
+            // Never draw from a transcript that is still moving. Every one of the six junk generations on
+            // 09-19 ("Paris" from "parrots", "200 users", "second year") came from a partial that a later
+            // chunk corrected; a final costs ~1 s and blocks all of them.
+            if engine.decider.has_remote() && !final_chunks.contains(&id) {
+                log.log(json!({"ev": "gen_skipped", "chunk_id": id, "subject": &subject, "reason": "not_final"}));
                 continue;
             }
             // "planet Earth from space" right after "planet Earth" is the same picture.
@@ -804,7 +834,12 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
             }
             if let Some(t) = agent_trigger {
                 if agent_busy {
-                    agent_next = Some(t); // latest wins; runs when the in-flight call returns
+                    // Latest wins; runs when the in-flight call returns. The agent is ~3× slower than the
+                    // chunk rate, so this drops roughly 38% of routed sentences — log it rather than let
+                    // a starved queue look like a quiet one.
+                    if let Some(dropped) = agent_next.replace(t) {
+                        log.log(json!({"ev": "agent_dropped", "chunk_id": dropped.2, "hint": dropped.3}));
+                    }
                 } else {
                     agent_busy = true;
                     spawn_agent(canvas.scene().clone(), t.0, t.1, t.2, t.3);
