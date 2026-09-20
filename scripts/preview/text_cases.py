@@ -94,6 +94,9 @@ CASES += [
         {"kind": "heading", "text": "Thank you", "level": 1, "emphasis": []},
         {"kind": "paragraph", "text": "Questions?", "level": 0, "emphasis": []},
     ]), focus=True)]}},
+    {"name": "text-wrapped-emphasis", "scene": {"elements": [tile("e1", "text", text=text_card([
+        {"kind": "heading", "text": "Build the company by keeping the customer feedback loop extraordinarily short", "level": 1, "emphasis": ["customer feedback loop extraordinarily short"]},
+    ]), focus=True)]}},
     {"name": "text-grid", "scene": grid(
         tile("e1", "text", text=LESSONS),
         tile("e2", "text", text=text_card([

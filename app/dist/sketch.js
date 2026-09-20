@@ -642,13 +642,27 @@
       const key = `text:${row.b.id}:${row.b.text}:${(row.b.emphasis || []).join('|')}`, isNew = !seen.has(key);
       seen.add(key);
       const x = titleOnly ? W / 2 : pad + row.indent;
+      const source = String(row.b.text), sourceLower = source.toLowerCase();
+      let cursor = 0;
+      const spans = row.lines.map(line => {
+        const plain = line.replace(/…$/, '').trimEnd(), at = sourceLower.indexOf(plain.toLowerCase(), cursor);
+        const start = at < 0 ? cursor : at;
+        cursor = start + plain.length;
+        return { start, end: start + plain.length };
+      });
       row.lines.forEach((line, li) => {
         const cy = y + row.lh * (li + 0.5), anchor = titleOnly ? 'middle' : 'start';
-        if (!titleOnly) for (const phrase of row.b.emphasis || []) {
-          const at = line.toLowerCase().indexOf(String(phrase).toLowerCase());
-          if (at >= 0) {
-            const before = line.slice(0, at), hit = line.slice(at, at + phrase.length);
-            const sx = x + tw(before, row.size, row.weight), ex = sx + tw(hit, row.size, row.weight);
+        for (const phrase of row.b.emphasis || []) {
+          const from = sourceLower.indexOf(String(phrase).toLowerCase());
+          if (from >= 0) {
+            const to = from + String(phrase).length, span = spans[li];
+            let a = Math.max(from, span.start) - span.start, b = Math.min(to, span.end) - span.start;
+            while (a < b && /\s/.test(line[a])) a++;
+            while (b > a && /\s/.test(line[b - 1])) b--;
+            if (a >= b) continue;
+            const before = line.slice(0, a), hit = line.slice(a, b);
+            const lineW = tw(line, row.size, row.weight), left = titleOnly ? x - lineW / 2 : x;
+            const sx = left + tw(before, row.size, row.weight), ex = sx + tw(hit, row.size, row.weight);
             const r = rng(key + ':' + li + ':' + phrase);
             pen(svg, lineD(r, sx, cy + row.size * 0.48, ex, cy + row.size * 0.48, row.size * 0.08), MARK[2], Math.max(2, row.size * 0.16), isNew, li * 100, 350, { opacity: 0.8 });
           }
