@@ -1,167 +1,14 @@
-//! Track D: the fast query model (design doc §7.2). Turns prev + curr (+ what is on screen) into
-//! 1–3 short visual noun phrases. Remote: an OpenRouter chat model with JSON output and a hard
-//! 900 ms timeout (700 ms timed out on 28% of calls in the 09-19 live test). Fallback: local noun-phrase extraction, so this branch never blocks.
-
-use ls_contracts::{Displayed, QueryResult};
-use serde::Deserialize;
-use std::time::Duration;
-
-pub const DEFAULT_MODEL: &str = "google/gemini-2.5-flash-lite";
-/// OpenRouter base URL; override with OPENROUTER_BASE_URL (e.g. a local mock for latency tests).
-fn base() -> String {
-    std::env::var("OPENROUTER_BASE_URL").unwrap_or_else(|_| "https://openrouter.ai".into())
-}
-
-const SYSTEM_PROMPT: &str = "You turn a live presenter's speech into image search phrases for a local photo library. \
-Return JSON only: {\"phrases\": [...]} with 1 to 3 short, concrete, visual noun phrases (2-5 words each), most important first. \
-Focus on the NEWEST speech. Drop filler words. Resolve references using what is on screen \
-(\"make it red\" with a car on screen -> \"red car\"). If the presenter points at something (\"here's…\", \"take a look at…\", \"picture this…\"), the thing they point at comes first. \
-Every phrase must name something the newest speech actually says, the obvious name of a thing it says \
-(\"the bird that hunts at night\" -> \"owl\"), or a thing already on screen that the newest speech refers to. \
-A thing named only as a comparison or figure of speech is NOT a subject: \"watch like an eagle\", \"it's like \
-a dog chasing its tail\", \"as fast as lightning\" name nothing to show. \
-If the newest speech names nothing to look at, return {\"phrases\": []} — that is the right answer most of the time. \
-Name the EXACT thing said (\"owl\", not \"bird\"; \"sunflower\", not \"flower\") — a missing picture is drawn \
-on demand, so a broader category is never a useful substitute. \
-Do NOT include what is already on screen unless the newest speech is about it.";
-
-#[derive(Clone)]
-pub struct QueryClient {
-    http: reqwest::Client,
-    api_key: Option<String>,
-    model: String,
-    timeout: Duration,
-    /// Library captions: shown to the model and used to bias the local fallback.
-    vocab: Vec<String>,
-}
-
-impl QueryClient {
-    /// Library captions this client was built with.
-    pub fn vocab(&self) -> &[String] {
-        &self.vocab
-    }
-
-    pub fn new(http: reqwest::Client, api_key: Option<String>, model: Option<String>, vocab: Vec<String>) -> Self {
-        Self {
-            http,
-            api_key: api_key.filter(|k| !k.trim().is_empty()),
-            model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
-            timeout: Duration::from_millis(900),
-            vocab,
-        }
-    }
-
-    pub fn has_remote(&self) -> bool {
-        self.api_key.is_some()
-    }
-
-    /// Never fails and never takes longer than the timeout (plus local fallback time).
-    pub async fn query(&self, chunk_id: u64, prev: &str, curr: &str, displayed: &Displayed) -> QueryResult {
-        if self.api_key.is_some() {
-            match tokio::time::timeout(self.timeout, self.remote(prev, curr, displayed)).await {
-                Ok(Ok(phrases)) => {
-                    // The model is generative: given filler it invents a subject. Keep only phrases whose
-                    // head word was actually heard (or is on screen). An empty list is returned AS-IS —
-                    // falling through to fallback_phrases here is what promoted a cue word like "picture"
-                    // into a subject of its own.
-                    let phrases = phrases.into_iter().filter(|p| grounded_in(p, prev, curr, displayed)).collect();
-                    return QueryResult { chunk_id, phrases, from_fallback: false, named: false };
-                }
-                // Only a genuine failure falls through to the local extractor. An EMPTY answer is the
-                // model doing its job — the prompt asks for [] when the speech names nothing to look at —
-                // and treating that as a failure sent 54 filler chunks to fallback_phrases on the first
-                // replay, which is precisely how a cue word like "picture" became a subject.
-                Ok(Err(e)) => eprintln!("query: remote error: {e:#}"),
-                Err(_) => eprintln!("query: remote timed out after {:?}", self.timeout),
-            }
-        }
-        let text = if curr.trim().is_empty() { prev } else { curr };
-        QueryResult { chunk_id, phrases: fallback_phrases(text, &self.vocab), from_fallback: true, named: false }
-    }
-
-    /// Warm the HTTPS connection (TLS + HTTP/2) before the talk.
-    pub async fn warm_up(&self) {
-        if self.api_key.is_some() {
-            let _ = tokio::time::timeout(Duration::from_secs(5), self.remote("", "hello", &blank())).await;
-        }
-    }
-
-    async fn remote(&self, prev: &str, curr: &str, displayed: &Displayed) -> anyhow::Result<Vec<String>> {
-        let key = self.api_key.as_deref().unwrap_or_default();
-        let on_screen = displayed.caption.as_deref().unwrap_or("nothing");
-        // The library list used to be sent here. On filler the model simply recited its most frequent
-        // labels ("and over your" -> tree, person, house, 39 times on 09-19), and because those are labels
-        // verbatim they satisfy ls_search::names() and bypass the label gate entirely. `self.vocab` is still
-        // used by named_subject and fallback_phrases; it just no longer prompts the model.
-        let user = format!("On screen: {on_screen}\nPrevious speech: {prev}\nNewest speech: {curr}");
-        let body = serde_json::json!({
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user}
-            ],
-            "response_format": {"type": "json_object"},
-            "temperature": 0,
-            "max_tokens": 60,
-            "provider": {"sort": "latency"}
-        });
-        let resp = self.http.post(format!("{}/api/v1/chat/completions", base())).bearer_auth(key).json(&body).send().await?;
-        let status = resp.status();
-        let text = resp.text().await?;
-        if !status.is_success() {
-            anyhow::bail!("HTTP {status}: {}", truncate(&text, 300));
-        }
-        parse_chat_phrases(&text)
-    }
-}
-
-fn blank() -> Displayed {
-    Displayed::default()
-}
-
-fn truncate(s: &str, n: usize) -> &str {
-    &s[..s.char_indices().nth(n).map(|(i, _)| i).unwrap_or(s.len())]
-}
-
-#[derive(Deserialize)]
-struct Chat {
-    choices: Vec<ChatChoice>,
-}
-#[derive(Deserialize)]
-struct ChatChoice {
-    message: ChatMsg,
-}
-#[derive(Deserialize)]
-struct ChatMsg {
-    content: Option<String>,
-}
-#[derive(Deserialize)]
-struct Phrases {
-    phrases: Vec<String>,
-}
-
-/// Parse an OpenRouter chat-completions response whose content is `{"phrases": [...]}`
-/// (tolerates code fences around the JSON).
-pub fn parse_chat_phrases(body: &str) -> anyhow::Result<Vec<String>> {
-    let chat: Chat = serde_json::from_str(body)?;
-    let content = chat.choices.first().and_then(|c| c.message.content.clone()).unwrap_or_default();
-    let start = content.find('{').ok_or_else(|| anyhow::anyhow!("no JSON object in: {content}"))?;
-    let end = content.rfind('}').ok_or_else(|| anyhow::anyhow!("no JSON object in: {content}"))?;
-    let p: Phrases = serde_json::from_str(&content[start..=end])?;
-    Ok(p.phrases.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).take(3).collect())
-}
+//! Offline helpers for when Luna is unavailable: the presenter cues ("here's…", "take a look at…") and the
+//! library subject a phrase names outright. (The remote phrase model that used to live here was removed with
+//! the Luna refactor: Luna names the photo subject itself.)
 
 /// Presentational cues: phrases a presenter uses when pointing the audience at something to look at.
-/// Shared with ls-decide's display-intent heuristic.
+/// Used by the offline fallback (no key / Luna down).
 pub const CUES: &[&str] = &[
     "here's", "here is", "here are", "take a look", "look at", "have a look", "picture this", "imagine",
     "as you can see", "you can see", "let me show you", "i'll show you", "check out", "this is what",
     "this is our", "this is the", "that's what", "what it looks like", "looks like this", "show you",
 ];
-
-/// Refinement phrases: they don't signal display intent on their own, but the object after them is
-/// what to search for ("…actually, make that the white rose").
-pub const REFINE_OBJECT_CUES: &[&str] = &["make that", "make it", "switch to", "change it to", "instead of that", "the other one"];
 
 /// Words from `text` after its last presentational cue (≤ `window` words), or None if no cue.
 pub fn after_last_cue(text: &str, window: usize) -> Option<Vec<String>> {
@@ -181,22 +28,9 @@ fn after_last(text: &str, window: usize, cues: &[&str]) -> Option<Vec<String>> {
     )
 }
 
-const STOP: &[&str] = &[
-    "a", "an", "the", "and", "or", "but", "so", "um", "uh", "like", "you", "know", "i", "we", "our", "us", "my", "me", "it",
-    "its", "it's", "is", "are", "was", "were", "be", "been", "being", "this", "that", "these", "those", "there", "here",
-    "to", "of", "in", "on", "at", "for", "with", "about", "from", "by", "as", "into", "over", "next", "then", "now",
-    "just", "really", "very", "also", "let's", "lets", "let", "talk", "tell", "want", "going", "gonna", "get", "got",
-    "have", "has", "had", "do", "does", "did", "can", "could", "will", "would", "should", "what", "which", "who", "how",
-    "why", "when", "where", "all", "some", "any", "one", "two", "first", "second", "okay", "ok", "right", "yeah", "well",
-    "think", "see", "look", "show", "make", "say", "said", "thing", "things", "stuff", "today", "they", "them", "their",
-    "he", "she", "his", "her", "him", "not", "no", "yes", "if", "because", "every", "single", "whole", "up", "out",
-    "more", "most", "much", "many", "lot", "lots", "kind", "sort", "bit", "little", "new", "good", "great", "big",
-    "sits", "sit", "right", "next", "looks", "seems", "feels", "sounds", "appears", "actually", "instead", "that", "i'm", "we're", "you're", "that's", "what's", "here's", "there's", "don't",
-];
-
 /// The one library subject the speech names outright ("Penguins can't fly…" → "penguin"), or None when
 /// there are none, several ("owls and penguins"), or the name is ambiguous ("a rose and a white rose" —
-/// the bare "rose" needs the phrase model). Whole words; a plural -s/-es on the last word counts.
+/// the bare "rose" is left alone). Whole words; a plural -s/-es on the last word counts.
 pub fn named_subject(text: &str, vocab: &[String]) -> Option<String> {
     let words: Vec<String> = text
         .to_lowercase()
@@ -230,122 +64,9 @@ pub fn named_subject(text: &str, vocab: &[String]) -> Option<String> {
     (head_count <= found.len()).then_some(subject)
 }
 
-/// Local noun-phrase fallback: runs of content words, newest first, preferring runs that contain
-/// a library vocabulary word. Crude but instant and offline.
-///
-/// See also [`named_subject`]: when the speech names exactly one library subject, the photo search runs on
-/// it immediately instead of waiting for the phrase model.
-/// Split into lowercase words, stripping possessives and plurals.
-fn toks(s: &str) -> Vec<String> {
-    s.to_lowercase()
-        .split(|c: char| !c.is_alphanumeric() && c != '\'')
-        .filter(|t| !t.is_empty())
-        .map(|t| t.trim_end_matches("'s").trim_end_matches('s').to_string())
-        .collect()
-}
-
-/// The phrase's head word must have been heard, or already be on screen. The phrase model is generative:
-/// given filler it answers with plausible subjects that were never spoken ("and over your" -> tree, person,
-/// house on 09-19). Since those are usually library labels verbatim, they satisfy `ls_search::names()` and
-/// bypass the label gate, so this is the only check standing between an invented subject and the screen.
-pub fn grounded_in(phrase: &str, prev: &str, curr: &str, displayed: &Displayed) -> bool {
-    let Some(head) = toks(phrase).into_iter().filter(|w| w.len() > 2 && !STOP.contains(&w.as_str())).last() else {
-        return false;
-    };
-    let mut ctx = toks(curr);
-    ctx.extend(toks(prev));
-    ctx.extend(toks(displayed.caption.as_deref().unwrap_or("")));
-    for line in &displayed.on_screen {
-        ctx.extend(toks(line));
-    }
-    ctx.contains(&head)
-}
-
-pub fn fallback_phrases(text: &str, vocab: &[String]) -> Vec<String> {
-    // "here's what a bald eagle looks like…" → the object after the cue is what to search for.
-    let mut out = vec![];
-    let all: Vec<&str> = CUES.iter().chain(REFINE_OBJECT_CUES).copied().collect();
-    if let Some(after) = after_last(text, 8, &all) {
-        let obj: Vec<&String> = after
-            .iter()
-            .skip_while(|w| STOP.contains(&w.as_str()) || w.len() <= 2)
-            .take_while(|w| !STOP.contains(&w.as_str()) && w.len() > 2)
-            .take(4)
-            .collect();
-        if !obj.is_empty() {
-            out.push(obj.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" "));
-        }
-    }
-    for p in content_runs(text, vocab) {
-        if !out.contains(&p) && out.len() < 3 {
-            out.push(p);
-        }
-    }
-    out
-}
-
-fn content_runs(text: &str, vocab: &[String]) -> Vec<String> {
-    let words: Vec<String> = text
-        .split(|c: char| !(c.is_alphanumeric() || c == '\'' || c == '-'))
-        .filter(|w| !w.is_empty())
-        .map(|w| w.to_lowercase())
-        .collect();
-    let mut runs: Vec<Vec<String>> = vec![];
-    let mut cur: Vec<String> = vec![];
-    for w in words {
-        let content = !STOP.contains(&w.as_str()) && w.len() > 2 && !w.chars().all(|c| c.is_ascii_digit());
-        if content {
-            cur.push(w);
-        } else if !cur.is_empty() {
-            runs.push(std::mem::take(&mut cur));
-        }
-    }
-    if !cur.is_empty() {
-        runs.push(cur);
-    }
-    let vocab_words: Vec<String> = vocab
-        .iter()
-        .flat_map(|c| c.split(|ch: char| !ch.is_alphanumeric()).map(|w| w.to_lowercase()).collect::<Vec<_>>())
-        .filter(|w| w.len() > 2)
-        .collect();
-    // Newest first; keep at most 4 words of each run (the tail, nearest the head noun).
-    let mut cands: Vec<(bool, usize, String)> = runs
-        .iter()
-        .enumerate()
-        .rev()
-        .map(|(i, r)| {
-            let tail = &r[r.len().saturating_sub(4)..];
-            let hit = tail.iter().any(|w| vocab_words.iter().any(|v| v == w || v.trim_end_matches('s') == w.trim_end_matches('s')));
-            (hit, i, tail.join(" "))
-        })
-        .collect();
-    // Stable sort: vocabulary hits first, recency preserved within each group.
-    cands.sort_by_key(|(hit, _, _)| !*hit);
-    let mut out: Vec<String> = vec![];
-    for (_, _, p) in cands {
-        if !out.contains(&p) {
-            out.push(p);
-        }
-        if out.len() == 3 {
-            break;
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn fallback_extracts_content_runs_newest_first() {
-        let p = fallback_phrases("So, um, today I want to tell you about our new office in Tokyo, and the river at night", &[]);
-        assert_eq!(p, vec!["night", "river", "tokyo"], "newest content runs first");
-        let p = fallback_phrases("First, here's what a bald eagle looks like. It can spot prey two miles away.", &[]);
-        assert_eq!(p[0], "bald eagle", "object after the cue first: {p:?}");
-        let p = fallback_phrases("And here is a red rose. Actually, make that the white rose instead.", &[]);
-        assert_eq!(p[0], "white rose", "refinement object first: {p:?}");
-    }
 
     #[test]
     fn named_subject_only_when_unambiguous() {
@@ -354,40 +75,11 @@ mod tests {
         assert_eq!(named_subject("Penguins can't fly, but they're incredible swimmers.", &v).as_deref(), Some("penguin"));
         assert_eq!(named_subject("Think about a sunflower in a field.", &v).as_deref(), Some("sunflower"));
         assert_eq!(named_subject("Finally, here's the planet Earth from space.", &v).as_deref(), Some("earth"));
-        assert_eq!(named_subject("Owls and penguins.", &v), None, "two subjects → phrase model");
+        assert_eq!(named_subject("Owls and penguins.", &v), None, "two subjects");
         assert_eq!(named_subject("So let's do a side-by-side of a rose and a white rose.", &v), None, "bare 'rose' is ambiguous");
         assert_eq!(named_subject("And here is a red rose, actually, make that the white rose instead.", &v), None);
         assert_eq!(named_subject("Honestly, the flowers were great", &v).as_deref(), Some("flower"));
         assert_eq!(named_subject("Hangouts can't fly, but they're incredible swimmers.", &v), None, "no library word");
         assert_eq!(named_subject("Honestly I think so", &v), None, "'nest' inside a word doesn't count");
-    }
-
-    #[test]
-    fn fallback_prefers_library_vocabulary() {
-        let vocab = vec!["eagle (animals)".to_string(), "guitar (instruments)".to_string()];
-        let p = fallback_phrases("my grandfather played the guitar every weekend in the garden", &vocab);
-        assert_eq!(p[0], "guitar", "got {p:?}");
-        assert!(p.len() >= 2);
-    }
-
-    #[test]
-    fn fallback_empty_text() {
-        assert!(fallback_phrases("um, so, yeah", &[]).is_empty());
-    }
-
-    #[test]
-    fn parses_openrouter_chat_json() {
-        let body = r#"{"id":"x","choices":[{"message":{"role":"assistant","content":"```json\n{\"phrases\": [\"Tokyo office skyline\", \"night city lights\"]}\n```"}}]}"#;
-        assert_eq!(parse_chat_phrases(body).unwrap(), vec!["Tokyo office skyline", "night city lights"]);
-    }
-
-    #[tokio::test]
-    async fn no_key_uses_fallback_immediately() {
-        let q = QueryClient::new(reqwest::Client::new(), None, None, vec![]);
-        let d = blank();
-        let r = q.query(7, "", "the golden eagle over the mountains", &d).await;
-        assert!(r.from_fallback);
-        assert_eq!(r.chunk_id, 7);
-        assert!(r.phrases.contains(&"golden eagle".to_string()), "got {:?}", r.phrases);
     }
 }

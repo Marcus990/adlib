@@ -58,4 +58,5 @@ if lats:
 summ = [e for e in log if e.get("ev") == "summary"]
 if summ:
     s = summ[-1]
-    print("outcomes:", s["summary"]["outcomes"], "decide:", s["summary"]["decide_sources"], "fallbacks:", s["summary"]["query_fallbacks"])
+    sm = s["summary"]
+    print("agent calls:", sm.get("agent_calls"), "fallbacks:", sm.get("agent_fallbacks"), "ops applied/refused:", sm.get("ops_applied"), sm.get("ops_refused"), "generated:", sm.get("generated"))
