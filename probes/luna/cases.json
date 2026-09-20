@@ -1649,6 +1649,347 @@
   }
  },
  {
+  "id": "board-zoom-two-logos",
+  "group": "board",
+  "board": [
+   {
+    "logo": {
+     "asset": "logos:python",
+     "caption": "Python"
+    }
+   },
+   {
+    "logo": {
+     "asset": "logos:google-icon",
+     "caption": "Google"
+    }
+   }
+  ],
+  "history": [
+   "We wrote it in Python.",
+   "And it runs on Google."
+  ],
+  "newest": "Let's zoom in on the Python logo.",
+  "expect": {
+   "focus": "e1",
+   "layout": "hero",
+   "elements": 2
+  }
+ },
+ {
+  "id": "board-zoom-one-logo",
+  "group": "board",
+  "board": [
+   {
+    "logo": {
+     "asset": "logos:python",
+     "caption": "Python"
+    }
+   }
+  ],
+  "history": [
+   "We wrote it in Python."
+  ],
+  "newest": "Let's zoom in on the logo.",
+  "expect": {
+   "focus": "e1",
+   "layout": "hero",
+   "elements": 1
+  }
+ },
+ {
+  "id": "board-zoom-four-mixed",
+  "group": "board",
+  "board": [
+   {
+    "photo": "eagle"
+   },
+   {
+    "photo": "owl"
+   },
+   {
+    "logo": {
+     "asset": "lucide:database",
+     "caption": "Database"
+    }
+   },
+   {
+    "logo": {
+     "asset": "logos:python",
+     "caption": "Python"
+    }
+   }
+  ],
+  "history": [
+   "Here is an eagle.",
+   "And an owl.",
+   "Everything lives in a database.",
+   "Written in Python."
+  ],
+  "newest": "Zoom in on the database icon.",
+  "expect": {
+   "focus": "e3",
+   "layout": "hero",
+   "elements": 4
+  }
+ },
+ {
+  "id": "board-circle-this",
+  "group": "board",
+  "board": [
+   {
+    "photo": "eagle"
+   },
+   {
+    "photo": "owl"
+   }
+  ],
+  "history": [
+   "Here is an eagle.",
+   "And here is an owl."
+  ],
+  "newest": "Circle this.",
+  "expect": {
+   "annotated": [
+    "e2"
+   ],
+   "elements": 2
+  }
+ },
+ {
+  "id": "board-highlight-this",
+  "group": "board",
+  "board": [
+   {
+    "photo": "eagle"
+   },
+   {
+    "photo": "owl"
+   }
+  ],
+  "history": [
+   "Here is an eagle.",
+   "And here is an owl."
+  ],
+  "newest": "Let's highlight this.",
+  "expect": {
+   "annotated": [
+    "e2"
+   ],
+   "elements": 2
+  }
+ },
+ {
+  "id": "board-look-at-named",
+  "group": "board",
+  "board": [
+   {
+    "photo": "eagle"
+   },
+   {
+    "photo": "owl"
+   }
+  ],
+  "history": [
+   "Here is an eagle.",
+   "And here is an owl."
+  ],
+  "newest": "Look at the eagle.",
+  "expect": {
+   "annotated": [
+    "e1"
+   ],
+   "elements": 2
+  }
+ },
+ {
+  "id": "board-circle-all-four",
+  "group": "board",
+  "board": [
+   {
+    "photo": "eagle"
+   },
+   {
+    "photo": "owl"
+   },
+   {
+    "logo": {
+     "asset": "logos:python",
+     "caption": "Python"
+    }
+   },
+   {
+    "logo": {
+     "asset": "logos:google-icon",
+     "caption": "Google"
+    }
+   }
+  ],
+  "history": [
+   "Here is an eagle.",
+   "And an owl.",
+   "We wrote it in Python.",
+   "And it runs on Google."
+  ],
+  "newest": "Circle everything.",
+  "expect": {
+   "annotated": [
+    "e1",
+    "e2",
+    "e3",
+    "e4"
+   ],
+   "elements": 4
+  }
+ },
+ {
+  "id": "board-circle-two-named",
+  "group": "board",
+  "board": [
+   {
+    "photo": "eagle"
+   },
+   {
+    "photo": "owl"
+   },
+   {
+    "logo": {
+     "asset": "logos:python",
+     "caption": "Python"
+    }
+   },
+   {
+    "logo": {
+     "asset": "logos:google-icon",
+     "caption": "Google"
+    }
+   }
+  ],
+  "history": [
+   "Here is an eagle.",
+   "And an owl.",
+   "We wrote it in Python.",
+   "And it runs on Google."
+  ],
+  "newest": "Let's highlight the eagle and the owl.",
+  "expect": {
+   "annotated": [
+    "e1",
+    "e2"
+   ],
+   "elements": 4
+  }
+ },
+ {
+  "id": "board-circle-one-of-four",
+  "group": "board",
+  "board": [
+   {
+    "photo": "eagle"
+   },
+   {
+    "photo": "owl"
+   },
+   {
+    "logo": {
+     "asset": "logos:python",
+     "caption": "Python"
+    }
+   },
+   {
+    "logo": {
+     "asset": "logos:google-icon",
+     "caption": "Google"
+    }
+   }
+  ],
+  "history": [
+   "Here is an eagle.",
+   "And an owl.",
+   "We wrote it in Python.",
+   "And it runs on Google."
+  ],
+  "newest": "Circle the Python logo.",
+  "expect": {
+   "annotated": [
+    "e3"
+   ],
+   "elements": 4
+  }
+ },
+ {
+  "id": "board-remove-get-x-out-of-there",
+  "group": "board",
+  "board": [
+   {
+    "photo": "eagle"
+   },
+   {
+    "photo": "owl"
+   }
+  ],
+  "history": [
+   "Here is an eagle.",
+   "And here is an owl."
+  ],
+  "newest": "Get the eagle out of there.",
+  "expect": {
+   "absent": [
+    "e1"
+   ],
+   "present": [
+    "e2"
+   ],
+   "elements": 1
+  }
+ },
+ {
+  "id": "board-remove-get-that-out",
+  "group": "board",
+  "board": [
+   {
+    "photo": "eagle"
+   },
+   {
+    "photo": "owl"
+   }
+  ],
+  "history": [
+   "Here is an eagle.",
+   "And here is an owl."
+  ],
+  "newest": "Get that out.",
+  "expect": {
+   "absent": [
+    "e2"
+   ],
+   "present": [
+    "e1"
+   ],
+   "elements": 1
+  }
+ },
+ {
+  "id": "board-remove-get-out-figure-of-speech",
+  "group": "board",
+  "board": [
+   {
+    "photo": "eagle"
+   },
+   {
+    "photo": "owl"
+   }
+  ],
+  "history": [
+   "Here is an eagle.",
+   "And here is an owl."
+  ],
+  "newest": "We need to get the word out about this.",
+  "expect": {
+   "no_change": true
+  }
+ },
+ {
   "id": "board-annotate",
   "group": "board",
   "board": [
@@ -1827,7 +2168,7 @@
   }
  },
  {
-  "id": "logo-guard-passing-mention",
+  "id": "logo-subject-of-the-sentence",
   "group": "symbol",
   "board": [],
   "history": [
@@ -1835,9 +2176,10 @@
   ],
   "newest": "Google announced record results last week.",
   "expect": {
-   "no_symbol": true,
-   "no_photo": true,
-   "no_change": true
+   "logo": {
+    "name_contains": "google"
+   },
+   "no_photo": true
   }
  },
  {
@@ -2368,6 +2710,308 @@
   ],
   "newest": "Amazon Web Services has thirty two percent of the market.",
   "expect": {
+   "no_symbol": true,
+   "no_photo": true
+  }
+ },
+ {
+  "id": "ambient-python",
+  "group": "ambient",
+  "board": [],
+  "history": [
+   "Let me tell you how we built it."
+  ],
+  "newest": "We wrote the whole backend in Python, and it has been great.",
+  "expect": {
+   "logo": {
+    "name_contains": "python"
+   },
+   "no_photo": true
+  }
+ },
+ {
+  "id": "ambient-postgres",
+  "group": "ambient",
+  "board": [],
+  "history": [],
+  "newest": "All of the data lives in Postgres.",
+  "expect": {
+   "logo": {
+    "name_contains": "postg"
+   },
+   "no_photo": true
+  }
+ },
+ {
+  "id": "ambient-kubernetes",
+  "group": "ambient",
+  "board": [],
+  "history": [],
+  "newest": "We deploy everything on Kubernetes.",
+  "expect": {
+   "logo": {
+    "name_contains": "kubernetes"
+   },
+   "no_photo": true
+  }
+ },
+ {
+  "id": "ambient-company-subject",
+  "group": "ambient",
+  "board": [],
+  "history": [
+   "Let's talk about infrastructure."
+  ],
+  "newest": "Google runs one of the largest networks in the world.",
+  "expect": {
+   "logo": {
+    "name_contains": "google"
+   },
+   "no_photo": true
+  }
+ },
+ {
+  "id": "ambient-stack-list",
+  "group": "ambient",
+  "board": [],
+  "history": [],
+  "newest": "The stack is React on the front end, Node on the back end, and Redis for caching.",
+  "expect": {
+   "elements": 1,
+   "diagrams": {
+    "e1": {
+     "nodes_include": [
+      "React",
+      "Node",
+      "Redis"
+     ]
+    }
+   },
+   "hints": {
+    "React": {
+     "logo": "react"
+    },
+    "Node": {
+     "logo": "node"
+    },
+    "Redis": {
+     "logo": "redis"
+    }
+   },
+   "icons_valid": true,
+   "no_photo": true
+  }
+ },
+ {
+  "id": "ambient-icon-database",
+  "group": "ambient",
+  "board": [],
+  "history": [],
+  "newest": "Everything gets written to a database first.",
+  "expect": {
+   "icon": {
+    "concept_contains": "database"
+   },
+   "no_photo": true
+  }
+ },
+ {
+  "id": "ambient-icon-security",
+  "group": "ambient",
+  "board": [],
+  "history": [],
+  "newest": "We care a lot about security here.",
+  "expect": {
+   "icon": {
+    "concept_contains": "security",
+    "min_alternatives": 1
+   },
+   "no_photo": true
+  }
+ },
+ {
+  "id": "ambient-icon-teamwork",
+  "group": "ambient",
+  "board": [],
+  "history": [],
+  "newest": "What made it work was really good teamwork.",
+  "expect": {
+   "icon": {
+    "concept_contains": "team",
+    "min_alternatives": 1
+   },
+   "no_photo": true
+  }
+ },
+ {
+  "id": "ambient-with-chart-on-board",
+  "group": "ambient",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "And all of it runs on Kubernetes.",
+  "expect": {
+   "logo": {
+    "name_contains": "kubernetes"
+   },
+   "charts": {
+    "e1": {
+     "values": [
+      40,
+      55,
+      70
+     ]
+    }
+   }
+  }
+ },
+ {
+  "id": "ambient-guard-already-shown",
+  "group": "ambient",
+  "board": [
+   {
+    "logo": {
+     "asset": "logos:python",
+     "caption": "Python"
+    }
+   }
+  ],
+  "history": [
+   "We wrote the backend in Python."
+  ],
+  "newest": "And Python is what we picked because the whole team knows it.",
+  "expect": {
+   "no_symbol": true,
+   "no_photo": true,
+   "no_change": true
+  },
+  "changes": [
+   {
+    "at_s": 4,
+    "what": "show_logo Python"
+   }
+  ]
+ },
+ {
+  "id": "ambient-guard-apple-fruit",
+  "group": "ambient",
+  "board": [],
+  "history": [],
+  "newest": "I ate an apple on the way here.",
+  "expect": {
+   "no_symbol": true,
+   "no_photo": true,
+   "no_change": true
+  }
+ },
+ {
+  "id": "ambient-guard-go-verb",
+  "group": "ambient",
+  "board": [],
+  "history": [],
+  "newest": "We should go over the numbers next.",
+  "expect": {
+   "no_symbol": true,
+   "no_photo": true,
+   "no_change": true
+  }
+ },
+ {
+  "id": "ambient-guard-swift-adjective",
+  "group": "ambient",
+  "board": [],
+  "history": [],
+  "newest": "She was swift to answer every question.",
+  "expect": {
+   "no_symbol": true,
+   "no_photo": true,
+   "no_change": true
+  }
+ },
+ {
+  "id": "ambient-guard-slack-idiom",
+  "group": "ambient",
+  "board": [],
+  "history": [],
+  "newest": "Please cut me some slack, I'm a little nervous.",
+  "expect": {
+   "no_symbol": true,
+   "no_photo": true,
+   "no_change": true
+  }
+ },
+ {
+  "id": "ambient-guard-rust-corrosion",
+  "group": "ambient",
+  "board": [],
+  "history": [],
+  "newest": "There was rust all over the old pipe.",
+  "expect": {
+   "no_symbol": true,
+   "no_photo": true,
+   "no_change": true
+  }
+ },
+ {
+  "id": "ambient-guard-filler",
+  "group": "ambient",
+  "board": [],
+  "history": [],
+  "newest": "So, um, thanks for having me today.",
+  "expect": {
+   "no_symbol": true,
+   "no_photo": true,
+   "no_change": true
+  }
+ },
+ {
+  "id": "ambient-guard-comparison-foil",
+  "group": "ambient",
+  "board": [],
+  "history": [
+   "Let's talk about speed."
+  ],
+  "newest": "Ours is much faster than whatever Oracle ships.",
+  "expect": {
+   "no_symbol": true,
+   "no_photo": true,
+   "no_change": true
+  }
+ },
+ {
+  "id": "diagram-guard-no-placeholder-steps",
+  "group": "diagram-edit",
+  "board": [],
+  "history": [
+   "Let me explain how we ship."
+  ],
+  "newest": "Our pipeline has four steps.",
+  "expect": {
+   "no_change": true,
    "no_symbol": true,
    "no_photo": true
   }
