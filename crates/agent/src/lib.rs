@@ -4,12 +4,18 @@
 //! [`ground`] (spoken numbers only, quoted authority for destructive ops) before the canvas applies them.
 //! No key / error / timeout → offline cue rules.
 //!
-//! Two backends, same tools and parsing: OpenAI's own API when `OPENAI_API_KEY` is set (no middleman, higher
-//! rate limits), OpenRouter otherwise. Their request shapes differ, see [`CanvasAgent::request_body`].
+//! Two backends, same tools and parsing: OpenAI's Responses WebSocket when `OPENAI_API_KEY` is set (with Chat
+//! Completions fallback), OpenRouter otherwise. Their request shapes differ at the transport boundary.
 
+use futures_util::{SinkExt, StreamExt};
 use ls_canvas::{rule_ops, AnnotationKind, ChartKind, DiagramLayout, EdgeSpec, ElementKind, Layout, NodeSpec, Op, Point, Scene};
 use serde_json::{json, Value};
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::net::TcpStream;
+use tokio::sync::Mutex;
+use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::header, http::HeaderValue, Message};
+use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
 /// GPT-5.6 Luna (user's choice, 09-19), named the OpenRouter way. OpenAI's own API calls it `gpt-5.6-luna`
 /// (the `openai/` prefix is dropped). Reasoning is off/minimal: this call is a small tool decision, not a puzzle.
@@ -30,6 +36,15 @@ fn openai_base() -> String {
 pub enum Provider {
     OpenAi,
     OpenRouter,
+}
+
+/// How Luna was reached for a proposal. Logged separately from `Source` so a WebSocket failure followed by a
+/// successful HTTP retry is visible without being counted as an offline fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transport {
+    ResponsesWebSocket,
+    ChatHttp,
+    Rules,
 }
 
 /// Transcript budget in characters (~10k tokens). Older sentences past it are dropped from the front.
@@ -200,6 +215,11 @@ pub struct Proposal {
     pub dropped: Vec<String>,
     /// Why the model call failed, when it did and the rules answered instead.
     pub error: Option<String>,
+    pub transport: Transport,
+    /// Time from sending `response.create` until the first WebSocket event. HTTP does not expose this split.
+    pub first_event_ms: Option<u64>,
+    /// The service tier OpenAI says actually served the request (`priority` means Fast mode).
+    pub service_tier: Option<String>,
 }
 
 fn clock(s: u64) -> String {
@@ -260,6 +280,44 @@ pub fn user_message(input: &AgentInput) -> String {
     out
 }
 
+/// Once a Responses chain exists, its earlier transcript and instructions are already in model state. Send only
+/// the authoritative current board, recent outcomes, and genuinely new speech on later turns.
+pub fn incremental_user_message(input: &AgentInput) -> String {
+    let mut out = format!("## Board now\n{}\n", board_json(input.scene));
+    out += "\n## Recent changes (newest last)\n";
+    out += &if input.changes.is_empty() {
+        "(none yet)\n".to_string()
+    } else {
+        input.changes.iter().map(|c| format!("[{}] {}", clock(c.at_s), c.what)).collect::<Vec<_>>().join("\n") + "\n"
+    };
+    out += &format!("\n## Newest words: act on these (now {})\n", clock(input.now_s));
+    let new: Vec<String> = input.transcript.iter().skip(input.new_from).map(|s| format!("[{}] {}", clock(s.at_s), s.text.trim())).collect();
+    out += &if new.is_empty() { "Said since your last call: (nothing new)\n".to_string() } else { format!("Said since your last call:\n{}\n", new.join("\n")) };
+    out += &if input.speaking_now.trim().is_empty() { "Being spoken now: (silence)\n".to_string() } else { format!("Being spoken now (may be unfinished): {}\n", input.speaking_now.trim()) };
+    out
+}
+
+type ResponsesSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+struct WsState {
+    socket: Option<ResponsesSocket>,
+    previous_response_id: Option<String>,
+    pending_call_ids: Vec<String>,
+    pending_output: Option<String>,
+    generated_turn: bool,
+}
+
+impl Default for WsState {
+    fn default() -> Self {
+        Self { socket: None, previous_response_id: None, pending_call_ids: vec![], pending_output: None, generated_turn: false }
+    }
+}
+
+struct WsReply {
+    response: Value,
+    first_event_ms: u64,
+}
+
 #[derive(Clone)]
 pub struct CanvasAgent {
     http: reqwest::Client,
@@ -270,6 +328,11 @@ pub struct CanvasAgent {
     pub model: String,
     /// First attempt; a timeout or a 429/5xx gets one more, shorter, attempt (`CANVAS_TIMEOUT_MS`, default 6000).
     timeout: Duration,
+    /// OpenAI processing tier. Fast is the application default; `default` exists for controlled benchmarks.
+    service_tier: String,
+    /// One live Responses connection and response chain. `CanvasAgent` clones share it so the pipeline can make
+    /// the call in a task, apply the returned ops, then report those outcomes to the next turn.
+    ws: Arc<Mutex<WsState>>,
 }
 
 impl CanvasAgent {
@@ -280,6 +343,8 @@ impl CanvasAgent {
             openai_key: None,
             model: model.unwrap_or_else(|| DEFAULT_MODEL.into()),
             timeout: Duration::from_millis(std::env::var("CANVAS_TIMEOUT_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(6000)),
+            service_tier: std::env::var("CANVAS_SERVICE_TIER").unwrap_or_else(|_| "fast".into()),
+            ws: Arc::new(Mutex::new(WsState::default())),
         }
     }
 
@@ -304,10 +369,17 @@ impl CanvasAgent {
         self.provider().is_some()
     }
 
+    /// WebSocket mode remains an explicit rollout switch until it matches the established HTTP probe baseline.
+    /// OpenRouter always uses Chat Completions.
+    pub fn websocket_enabled(&self) -> bool {
+        self.provider() == Some(Provider::OpenAi)
+            && matches!(std::env::var("CANVAS_TRANSPORT").unwrap_or_default().to_lowercase().as_str(), "ws" | "websocket")
+    }
+
     /// Calls per minute the backend allows for this account (a new OpenRouter account is capped at 20/min for
-    /// Luna; the OpenAI key measured 500/min and 500k tokens/min, and each call carries the whole transcript).
+    /// Luna; the OpenAI key measured 500/min and 500k tokens/min).
     pub fn default_rpm(&self) -> u32 {
-        if self.provider() == Some(Provider::OpenAi) { 30 } else { 18 }
+        if self.provider() == Some(Provider::OpenAi) { 500 } else { 18 }
     }
 
     /// The model id as the backend spells it.
@@ -323,18 +395,48 @@ impl CanvasAgent {
     pub async fn propose(&self, input: &AgentInput<'_>) -> Proposal {
         let newest = input.newest_text();
         let mut error = None;
+        if self.websocket_enabled() {
+            match tokio::time::timeout(self.timeout, self.call_responses_ws(input)).await {
+                Ok(Ok(reply)) => {
+                    let (ops, dropped) = ground(parse_response_tool_calls(&reply.response), input.scene, &input.transcript_text(), &newest);
+                    return Proposal {
+                        ops,
+                        source: Source::Model,
+                        dropped,
+                        error: None,
+                        transport: Transport::ResponsesWebSocket,
+                        first_event_ms: Some(reply.first_event_ms),
+                        service_tier: reply.response["service_tier"].as_str().map(String::from),
+                    };
+                }
+                Ok(Err(e)) => {
+                    eprintln!("canvas agent websocket: {e:#}; retrying over HTTP");
+                    error = Some(format!("websocket failed: {e:#}"));
+                    self.reset_websocket().await;
+                }
+                Err(_) => {
+                    eprintln!("canvas agent websocket: timed out after {:?}; retrying over HTTP", self.timeout);
+                    error = Some(format!("websocket timed out after {:?}", self.timeout));
+                    self.reset_websocket().await;
+                }
+            }
+        }
         if self.has_remote() {
             for attempt in 0..2 {
                 let budget = if attempt == 0 { self.timeout } else { self.timeout * 2 / 3 };
                 match tokio::time::timeout(budget, self.call_raw(input)).await {
                     Ok(Ok(text)) => {
                         let (ops, dropped) = ground(parse_tool_calls(&text), input.scene, &input.transcript_text(), &newest);
-                        return Proposal { ops, source: Source::Model, dropped, error: None };
+                        let service_tier = serde_json::from_str::<Value>(&text)
+                            .ok()
+                            .and_then(|response| response["service_tier"].as_str().map(String::from));
+                        return Proposal { ops, source: Source::Model, dropped, error, transport: Transport::ChatHttp, first_event_ms: None, service_tier };
                     }
                     Ok(Err(e)) => {
                         let retry = attempt == 0 && (e.to_string().starts_with("HTTP 429") || e.to_string().starts_with("HTTP 5"));
                         eprintln!("canvas agent: {e:#}");
-                        error = Some(format!("{e:#}"));
+                        let http_error = format!("{e:#}");
+                        error = Some(match error { Some(previous) => format!("{previous}; HTTP failed: {http_error}"), None => http_error });
                         if !retry {
                             break;
                         }
@@ -347,7 +449,44 @@ impl CanvasAgent {
                 }
             }
         }
-        Proposal { ops: rule_ops(&newest, input.scene), source: Source::Rules, dropped: vec![], error }
+        Proposal { ops: rule_ops(&newest, input.scene), source: Source::Rules, dropped: vec![], error, transport: Transport::Rules, first_event_ms: None, service_tier: None }
+    }
+
+    /// Establish the Responses socket and prepare the stable instructions and tools without generating output.
+    /// This is called during app startup; `propose` also calls it lazily if startup warmup did not complete.
+    pub async fn warm_up(&self) -> anyhow::Result<Option<u64>> {
+        if !self.websocket_enabled() {
+            return Ok(None);
+        }
+        let started = Instant::now();
+        tokio::time::timeout(self.timeout, async {
+            let mut state = self.ws.lock().await;
+            self.ensure_ws_warm(&mut state).await
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("Luna WebSocket warmup timed out after {:?}", self.timeout))??;
+        Ok(Some(started.elapsed().as_millis() as u64))
+    }
+
+    /// Feed the real canvas result back as the output for every tool call in the last response. The next turn
+    /// also carries the full current board, so this concise receipt is enough to keep the chain honest.
+    pub async fn acknowledge(&self, applied: &[String], refused: &[String], scene: &Scene) {
+        if !self.websocket_enabled() {
+            return;
+        }
+        let mut state = self.ws.lock().await;
+        if !state.pending_call_ids.is_empty() {
+            state.pending_output = Some(json!({"applied": applied, "refused": refused, "board": board_json(scene)}).to_string());
+        }
+    }
+
+    /// Drop conversation state between unrelated probe cases or after a connection failure.
+    pub async fn reset_websocket(&self) {
+        let mut state = self.ws.lock().await;
+        if let Some(mut socket) = state.socket.take() {
+            let _ = socket.close(None).await;
+        }
+        *state = WsState::default();
     }
 
     /// The chat-completions request. The two backends disagree about the model's parameters:
@@ -368,6 +507,9 @@ impl CanvasAgent {
         match self.provider() {
             Some(Provider::OpenAi) => {
                 body["max_completion_tokens"] = json!(700);
+                // Fast mode is the right tradeoff for the latency-sensitive live demo. OpenAI reports the
+                // actual tier as `priority` in the response, which the pipeline logs on every call.
+                body["service_tier"] = json!(self.service_tier);
                 if model.starts_with("gpt-5") {
                     body["reasoning_effort"] = json!("none");
                 }
@@ -400,6 +542,168 @@ impl CanvasAgent {
         }
         Ok(text)
     }
+
+    async fn connect_responses(&self) -> anyhow::Result<ResponsesSocket> {
+        let mut url = format!("{}/v1/responses", openai_base().trim_end_matches('/'));
+        if let Some(rest) = url.strip_prefix("https://") {
+            url = format!("wss://{rest}");
+        } else if let Some(rest) = url.strip_prefix("http://") {
+            url = format!("ws://{rest}");
+        }
+        let mut request = url.into_client_request()?;
+        let key = self.openai_key.as_deref().ok_or_else(|| anyhow::anyhow!("OPENAI_API_KEY is not set"))?;
+        request.headers_mut().insert(header::AUTHORIZATION, HeaderValue::from_str(&format!("Bearer {key}"))?);
+        request.headers_mut().insert("OpenAI-Beta", HeaderValue::from_static("responses_websockets=2026-02-06"));
+        let (socket, _) = connect_async(request).await?;
+        Ok(socket)
+    }
+
+    async fn ensure_ws_warm(&self, state: &mut WsState) -> anyhow::Result<()> {
+        if state.socket.is_some() && state.previous_response_id.is_some() {
+            return Ok(());
+        }
+        let mut socket = self.connect_responses().await?;
+        let request = json!({
+            "type": "response.create",
+            "stream_id": "live-slides",
+            "model": self.wire_model(),
+            "store": false,
+            "generate": false,
+            "input": [],
+            "instructions": SYSTEM,
+            "tools": response_tools(),
+            "reasoning": {"effort": "none"},
+            "temperature": 0,
+            "service_tier": self.service_tier,
+            "max_output_tokens": 700
+        });
+        socket.send(Message::Text(request.to_string().into())).await?;
+        let reply = wait_for_response(&mut socket, "live-slides").await?;
+        let id = reply.response["id"].as_str().ok_or_else(|| anyhow::anyhow!("warmup response had no id: {}", reply.response))?;
+        state.socket = Some(socket);
+        state.previous_response_id = Some(id.to_string());
+        state.pending_call_ids.clear();
+        state.pending_output = None;
+        state.generated_turn = false;
+        Ok(())
+    }
+
+    async fn call_responses_ws(&self, input: &AgentInput<'_>) -> anyhow::Result<WsReply> {
+        let mut state = self.ws.lock().await;
+        self.ensure_ws_warm(&mut state).await?;
+
+        let previous = state.previous_response_id.clone().ok_or_else(|| anyhow::anyhow!("WebSocket chain was not warmed"))?;
+        let mut items = vec![];
+        if !state.pending_call_ids.is_empty() {
+            let output = state.pending_output.take().unwrap_or_else(|| json!({"status": "accepted for application"}).to_string());
+            for call_id in state.pending_call_ids.drain(..) {
+                items.push(json!({"type": "function_call_output", "call_id": call_id, "output": output}));
+            }
+        }
+        let message = if state.generated_turn { incremental_user_message(input) } else { user_message(input) };
+        items.push(json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": message}]}));
+        let request = json!({
+            "type": "response.create",
+            "stream_id": "live-slides",
+            "model": self.wire_model(),
+            "store": false,
+            "previous_response_id": previous,
+            "instructions": SYSTEM,
+            "input": items,
+            "tools": response_tools(),
+            "tool_choice": "required",
+            "parallel_tool_calls": true,
+            "reasoning": {"effort": "none"},
+            "temperature": 0,
+            "service_tier": self.service_tier,
+            "max_output_tokens": 700
+        });
+        let socket = state.socket.as_mut().ok_or_else(|| anyhow::anyhow!("WebSocket disconnected before send"))?;
+        socket.send(Message::Text(request.to_string().into())).await?;
+        let reply = wait_for_response(socket, "live-slides").await?;
+        let id = reply.response["id"].as_str().ok_or_else(|| anyhow::anyhow!("completed response had no id: {}", reply.response))?;
+        state.previous_response_id = Some(id.to_string());
+        state.pending_call_ids = response_call_ids(&reply.response);
+        state.generated_turn = true;
+        Ok(reply)
+    }
+}
+
+/// Responses uses the function fields directly on each tool, while Chat Completions nests them under
+/// `function`. Keep one source of truth for the schemas and convert only at the transport boundary.
+pub fn response_tools() -> Value {
+    Value::Array(
+        tools()
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|tool| {
+                let function = tool.get("function")?.as_object()?;
+                Some(json!({
+                    "type": "function",
+                    "name": function.get("name")?,
+                    "description": function.get("description")?,
+                    "parameters": function.get("parameters")?
+                }))
+            })
+            .collect(),
+    )
+}
+
+async fn wait_for_response(socket: &mut ResponsesSocket, stream_id: &str) -> anyhow::Result<WsReply> {
+    let started = Instant::now();
+    let mut first_event_ms = None;
+    while let Some(message) = socket.next().await {
+        let message = message?;
+        let text = match message {
+            Message::Text(text) => text.to_string(),
+            Message::Binary(bytes) => String::from_utf8(bytes.to_vec())?,
+            Message::Ping(bytes) => {
+                socket.send(Message::Pong(bytes)).await?;
+                continue;
+            }
+            Message::Close(frame) => anyhow::bail!("Responses WebSocket closed before completion: {frame:?}"),
+            _ => continue,
+        };
+        first_event_ms.get_or_insert(started.elapsed().as_millis() as u64);
+        let raw: Value = serde_json::from_str(&text)?;
+        // The SDK iterator wraps raw server events in `{type:"message", message:...}`. Accept either form so
+        // local mocks can use the SDK-visible shape while production uses the wire event directly.
+        let event = if raw["type"] == "message" { &raw["message"] } else { &raw };
+        if event.get("stream_id").and_then(Value::as_str).is_some_and(|id| id != stream_id) {
+            continue;
+        }
+        match event["type"].as_str().unwrap_or_default() {
+            "response.completed" => {
+                return Ok(WsReply { response: event["response"].clone(), first_event_ms: first_event_ms.unwrap_or_default() });
+            }
+            "response.failed" | "response.incomplete" | "error" => anyhow::bail!("Responses event: {event}"),
+            _ => {}
+        }
+    }
+    anyhow::bail!("Responses WebSocket ended before response.completed")
+}
+
+fn response_call_ids(response: &Value) -> Vec<String> {
+    response["output"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| item["type"] == "function_call")
+        .filter_map(|item| item["call_id"].as_str().map(String::from))
+        .collect()
+}
+
+/// Responses `output[*].{name,arguments}` → the same parser used by Chat Completions.
+pub fn parse_response_tool_calls(response: &Value) -> Vec<Op> {
+    let calls: Vec<Value> = response["output"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| item["type"] == "function_call")
+        .map(|item| json!({"function": {"name": item["name"], "arguments": item["arguments"]}}))
+        .collect();
+    parse_tool_calls(&json!({"choices": [{"message": {"tool_calls": calls}}]}).to_string())
 }
 
 fn norm_words(s: &str) -> Vec<String> {
@@ -720,6 +1024,33 @@ mod tests {
     }
 
     #[test]
+    fn responses_tools_are_flat_and_function_calls_parse() {
+        let tools = response_tools();
+        let first = &tools.as_array().unwrap()[0];
+        assert_eq!(first["type"], "function");
+        assert_eq!(first["name"], "no_action");
+        assert!(first.get("function").is_none());
+        assert_eq!(first["parameters"]["type"], "object");
+
+        let response = json!({
+            "id": "resp_1",
+            "output": [
+                {"type": "reasoning", "id": "rs_1"},
+                {"type": "function_call", "call_id": "call_1", "name": "set_point", "arguments": "{\"id\":\"e1\",\"label\":\"March\",\"value\":80}"},
+                {"type": "function_call", "call_id": "call_2", "name": "no_action", "arguments": "{\"reason\":\"done\"}"}
+            ]
+        });
+        assert_eq!(response_call_ids(&response), vec!["call_1", "call_2"]);
+        assert_eq!(
+            parse_response_tool_calls(&response),
+            vec![
+                Op::SetPoint { id: "e1".into(), label: "March".into(), value: 80.0 },
+                Op::NoAction { reason: "done".into() },
+            ]
+        );
+    }
+
+    #[test]
     fn parses_the_patch_photo_and_guarded_tools() {
         let call = |name: &str, args: &str| format!(r#"{{"function":{{"name":"{name}","arguments":{}}}}}"#, serde_json::to_string(args).unwrap());
         let body = format!(
@@ -771,6 +1102,10 @@ mod tests {
         assert!(user.contains("[0:00] Revenue was ten million") && user.contains(&format!("\"id\":\"{id}\"")));
         assert!(user.contains("Said since your last call:\n[0:10] Then fifteen million in March."), "only sentences from new_from on");
         assert!(user.contains("Being spoken now (may be unfinished): actually March was eighteen"));
+
+        let incremental = incremental_user_message(&input(c.scene(), &tr, 1, "actually March was eighteen"));
+        assert!(!incremental.contains("Revenue was ten million"), "old transcript is inherited through previous_response_id");
+        assert!(incremental.contains("Then fifteen million") && incremental.contains(&format!("\"id\":\"{id}\"")));
     }
 
     #[test]
@@ -783,19 +1118,20 @@ mod tests {
         assert_eq!(oa.provider(), Some(Provider::OpenAi));
         let b = oa.request_body(&inp);
         assert_eq!(b["model"], "gpt-5.6-luna");
+        assert_eq!(b["service_tier"], "fast");
         assert_eq!((b["max_completion_tokens"].as_i64(), b["reasoning_effort"].as_str(), b["temperature"].as_i64()), (Some(700), Some("none"), Some(0)));
         for rejected in ["max_tokens", "reasoning", "provider"] {
             assert!(b.get(rejected).is_none(), "OpenAI rejects `{rejected}`");
         }
         assert_eq!(b["tool_choice"], "required");
-        assert_eq!(oa.default_rpm(), 30);
+        assert_eq!(oa.default_rpm(), 500);
         // OpenRouter: prefixed model id, max_tokens, reasoning object, provider routing
         let or = CanvasAgent::new(reqwest::Client::new(), Some("k".into()), Some("gpt-5.6-luna".into()));
         assert_eq!(or.provider(), Some(Provider::OpenRouter));
         let b = or.request_body(&inp);
         assert_eq!(b["model"], "openai/gpt-5.6-luna");
         assert_eq!((b["max_tokens"].as_i64(), b["reasoning"]["effort"].as_str()), (Some(700), Some("minimal")));
-        assert!(b.get("provider").is_some() && b.get("max_completion_tokens").is_none() && b.get("reasoning_effort").is_none());
+        assert!(b.get("provider").is_some() && b.get("max_completion_tokens").is_none() && b.get("reasoning_effort").is_none() && b.get("service_tier").is_none());
         assert_eq!(or.default_rpm(), 18);
         // both keys: OpenAI wins; no key: offline
         let both = CanvasAgent::new(reqwest::Client::new(), Some("r".into()), None).with_openai(Some("o".into()));
@@ -876,6 +1212,7 @@ mod tests {
         let a = CanvasAgent::new(reqwest::Client::new(), None, None);
         let p = a.propose(&input(c.scene(), &tr, 0, "")).await;
         assert_eq!(p.source, Source::Rules);
+        assert_eq!(p.transport, Transport::Rules);
         assert_eq!(p.ops, vec![Op::Arrange { layout: Layout::Compare }]);
     }
 }

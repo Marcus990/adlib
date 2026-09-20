@@ -8,12 +8,13 @@
 //!   cargo run -p ls-agent --bin ls-agent-probe -- --runs 3         # real model (OPENROUTER_API_KEY, .env ok)
 //!   ... --timing --filter a,b       # no timeout: per-call latency + token usage, no pass/fail
 //!   ... --filter chart-correct   --group diagram-edit   --rpm 18   --verbose   --model <id>
+//!   ... --ws-latency 30         # one warmed chain of identical chart corrections; p50/p95
 //!
-//! Requests are paced at `--rpm` (default: the backend's, 30 on OpenAI, 18 on OpenRouter, where a new account is
+//! Requests are paced at `--rpm` (default: the backend's, 500 on OpenAI, 18 on OpenRouter, where a new account is
 //! capped at 20/min per model and a 429 would look like a model failure). OPENAI_API_KEY selects OpenAI.
 
-use ls_agent::{AgentInput, CanvasAgent, Sentence, Source};
-use ls_canvas::{board_summary, Canvas, Op, Scene};
+use ls_agent::{AgentInput, CanvasAgent, Change, Sentence, Source, Transport};
+use ls_canvas::{board_summary, Canvas, ChartKind, Op, Point, Scene};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -43,12 +44,14 @@ struct Args {
     dry: bool,
     verbose: bool,
     timing: bool,
+    ws_smoke: bool,
+    ws_latency: Option<usize>,
     model: Option<String>,
 }
 
 fn parse_args() -> Args {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut a = Args { cases: root.join("probes/luna/cases.json"), runs: 3, filter: None, group: None, rpm: None, dry: false, verbose: false, timing: false, model: None };
+    let mut a = Args { cases: root.join("probes/luna/cases.json"), runs: 3, filter: None, group: None, rpm: None, dry: false, verbose: false, timing: false, ws_smoke: false, ws_latency: None, model: None };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -60,6 +63,8 @@ fn parse_args() -> Args {
             "--model" => a.model = it.next(),
             "--dry" => a.dry = true,
             "--timing" => a.timing = true,
+            "--ws-smoke" => a.ws_smoke = true,
+            "--ws-latency" => a.ws_latency = Some(it.next().and_then(|v| v.parse().ok()).expect("--ws-latency <turns>")),
             "--verbose" | "-v" => a.verbose = true,
             other => panic!("unknown argument {other}"),
         }
@@ -274,6 +279,9 @@ fn check(expect: &Value, before: &Scene, after: &Scene, ops: &[Op]) -> Vec<Strin
 
 struct Outcome {
     source: Source,
+    transport: Transport,
+    service_tier: Option<String>,
+    first_event_ms: Option<u64>,
     ms: u128,
     ops: Vec<Op>,
     dropped: Vec<String>,
@@ -302,7 +310,153 @@ async fn run_once(agent: &CanvasAgent, case: &Case) -> anyhow::Result<Outcome> {
     let after = canvas.apply_seen(&before, &p.ops, 1).unwrap_or_else(|| before.clone());
     let notes = canvas.take_notes();
     let problems = check(&case.expect, &before, &after, &p.ops);
-    Ok(Outcome { source: p.source, ms, ops: p.ops, dropped: p.dropped, notes, error: p.error, problems })
+    Ok(Outcome {
+        source: p.source,
+        transport: p.transport,
+        service_tier: p.service_tier,
+        first_event_ms: p.first_event_ms,
+        ms,
+        ops: p.ops,
+        dropped: p.dropped,
+        notes,
+        error: p.error,
+        problems,
+    })
+}
+
+/// Two related generated turns on one socket: proves warmup chaining, function_call_output, incremental speech,
+/// and a patch op against the board produced by the first turn.
+async fn run_ws_smoke(agent: &CanvasAgent) -> anyhow::Result<()> {
+    anyhow::ensure!(agent.websocket_enabled(), "--ws-smoke requires OPENAI_API_KEY and cannot run with CANVAS_TRANSPORT=http");
+    agent.reset_websocket().await;
+    let warm_ms = agent.warm_up().await?.unwrap_or_default();
+    let mut canvas = Canvas::new();
+    let mut transcript = vec![Sentence {
+        at_s: 0,
+        text: "January signups were forty, February fifty-five, and March seventy.".into(),
+    }];
+    let mut changes: Vec<Change> = vec![];
+
+    for (turn, new_from) in [(1u64, 0usize), (2u64, 1usize)] {
+        if turn == 2 {
+            transcript.push(Sentence { at_s: 5, text: "Actually, let's correct March from seventy to eighty.".into() });
+        }
+        let before = canvas.scene().clone();
+        let input = AgentInput { scene: &before, transcript: &transcript, new_from, speaking_now: "", changes: &changes, now_s: 5 * (turn - 1) };
+        let started = Instant::now();
+        let proposal = agent.propose(&input).await;
+        anyhow::ensure!(proposal.transport == Transport::ResponsesWebSocket, "turn {turn} used {:?}: {:?}", proposal.transport, proposal.error);
+        let _ = canvas.apply_seen(&before, &proposal.ops, turn);
+        let applied = canvas.take_applied();
+        let refused = canvas.take_notes();
+        agent.acknowledge(&applied, &refused, canvas.scene()).await;
+        changes.extend(applied.iter().map(|what| Change { at_s: 5 * (turn - 1), what: what.clone() }));
+        println!(
+            "turn {turn}: {} ms · tier {:?} · first event {:?} ms · ops {} · applied {:?}",
+            started.elapsed().as_millis(),
+            proposal.service_tier,
+            proposal.first_event_ms,
+            serde_json::to_string(&proposal.ops)?,
+            applied
+        );
+    }
+    let chart = canvas.scene().elements.iter().find_map(|element| element.chart.as_ref()).ok_or_else(|| anyhow::anyhow!("smoke test produced no chart"))?;
+    let march = chart.points.iter().find(|point| point.label.eq_ignore_ascii_case("March") || point.label.eq_ignore_ascii_case("Mar"));
+    anyhow::ensure!(march.is_some_and(|point| near(point.value, 80.0)), "March was not corrected to 80: {:?}", chart.points);
+    println!("PASS ws-smoke · warmup {warm_ms} ms · final board {}", board_summary(canvas.scene()).join(" | "));
+    Ok(())
+}
+
+fn percentile(samples: &mut [u128], pct: usize) -> u128 {
+    samples.sort_unstable();
+    let rank = (samples.len() * pct).div_ceil(100).saturating_sub(1);
+    samples[rank]
+}
+
+/// Measure one persistent Responses chain with a stable task shape. Alternating the same chart correction keeps
+/// output size comparable while still exercising function_call_output, board state, and previous_response_id.
+async fn run_ws_latency(agent: &CanvasAgent, turns: usize) -> anyhow::Result<()> {
+    anyhow::ensure!(turns >= 2, "--ws-latency needs at least 2 turns");
+    anyhow::ensure!(agent.websocket_enabled(), "--ws-latency requires OPENAI_API_KEY and CANVAS_TRANSPORT=websocket");
+    agent.reset_websocket().await;
+    let warm_ms = agent.warm_up().await?.unwrap_or_default();
+
+    let mut canvas = Canvas::new();
+    let initial = Op::DrawChart {
+        kind: ChartKind::Bar,
+        title: Some("Monthly signups".into()),
+        unit: Some("signups".into()),
+        points: vec![Point { label: "March".into(), value: 70.0 }],
+    };
+    let _ = canvas.apply(0, &[initial], 0);
+    let mut transcript: Vec<Sentence> = vec![];
+    let mut changes: Vec<Change> = vec![];
+    let mut totals: Vec<u128> = vec![];
+    let mut first_events: Vec<u128> = vec![];
+    let mut after_first: Vec<u128> = vec![];
+    let mut served_tier: Option<String> = None;
+
+    for turn in 1..=turns {
+        let (old, target) = if turn % 2 == 1 { (70, 80) } else { (80, 70) };
+        transcript.push(Sentence {
+            at_s: turn as u64 * 5,
+            text: format!("Actually, correct March from {old} to {target}."),
+        });
+        let before = canvas.scene().clone();
+        let input = AgentInput {
+            scene: &before,
+            transcript: &transcript,
+            new_from: transcript.len() - 1,
+            speaking_now: "",
+            changes: &changes,
+            now_s: turn as u64 * 5,
+        };
+        let started = Instant::now();
+        let proposal = agent.propose(&input).await;
+        let total = started.elapsed().as_millis();
+        anyhow::ensure!(proposal.transport == Transport::ResponsesWebSocket, "turn {turn} used {:?}: {:?}", proposal.transport, proposal.error);
+        let tier = proposal.service_tier.as_deref().ok_or_else(|| anyhow::anyhow!("turn {turn} did not report a service tier"))?;
+        if let Some(expected) = served_tier.as_deref() {
+            anyhow::ensure!(tier == expected, "turn {turn} changed service tier from {expected} to {tier}");
+        } else {
+            served_tier = Some(tier.to_string());
+        }
+        let first = proposal.first_event_ms.ok_or_else(|| anyhow::anyhow!("turn {turn} had no first-event timing"))? as u128;
+
+        let _ = canvas.apply_seen(&before, &proposal.ops, turn as u64);
+        let applied = canvas.take_applied();
+        let refused = canvas.take_notes();
+        let value = canvas
+            .scene()
+            .elements
+            .iter()
+            .find_map(|element| element.chart.as_ref())
+            .and_then(|chart| chart.points.iter().find(|point| point.label.eq_ignore_ascii_case("March")))
+            .map(|point| point.value);
+        anyhow::ensure!(value.is_some_and(|value| near(value, target as f64)), "turn {turn} did not set March to {target}: ops {:?}, refused {:?}", proposal.ops, refused);
+        agent.acknowledge(&applied, &refused, canvas.scene()).await;
+        changes.extend(applied.into_iter().map(|what| Change { at_s: turn as u64 * 5, what }));
+        if changes.len() > 10 {
+            changes.drain(..changes.len() - 10);
+        }
+
+        totals.push(total);
+        first_events.push(first);
+        after_first.push(total.saturating_sub(first));
+        println!("turn {turn:>2}: {total:>4} ms total · {first:>4} ms first event · {:>4} ms after · March {target}", total.saturating_sub(first));
+    }
+
+    let mut total_p50 = totals.clone();
+    let mut total_p95 = totals.clone();
+    let mut first_p50 = first_events.clone();
+    let mut first_p95 = first_events.clone();
+    let mut after_p50 = after_first.clone();
+    let mut after_p95 = after_first.clone();
+    println!("\n{} WebSocket chain · {turns} turns · warmup {warm_ms} ms", served_tier.as_deref().unwrap_or("unknown tier"));
+    println!("total       p50 {:>4} ms · p95 {:>4} ms", percentile(&mut total_p50, 50), percentile(&mut total_p95, 95));
+    println!("first event p50 {:>4} ms · p95 {:>4} ms", percentile(&mut first_p50, 50), percentile(&mut first_p95, 95));
+    println!("after event p50 {:>4} ms · p95 {:>4} ms", percentile(&mut after_p50, 50), percentile(&mut after_p95, 95));
+    Ok(())
 }
 
 #[tokio::main]
@@ -352,6 +506,15 @@ async fn main() -> anyhow::Result<()> {
     let model = args.model.clone().or_else(|| std::env::var("CANVAS_MODEL").ok());
     let agent = CanvasAgent::new(reqwest::Client::new(), key, model).with_openai(openai);
     let rpm = args.rpm.unwrap_or(agent.default_rpm() as u64);
+
+    if args.ws_smoke {
+        println!("{:?} · model {} · stateful WebSocket smoke\n", agent.provider().unwrap(), agent.wire_model());
+        return run_ws_smoke(&agent).await;
+    }
+    if let Some(turns) = args.ws_latency {
+        println!("{:?} · model {} · stateful WebSocket latency ({turns} turns)\n", agent.provider().unwrap(), agent.wire_model());
+        return run_ws_latency(&agent, turns).await;
+    }
     println!("{:?} · model {} · {} cases × {} runs · {} pending skipped\n", agent.provider().unwrap(), agent.wire_model(), runnable.len(), args.runs, pending.len());
 
     if args.timing {
@@ -383,20 +546,33 @@ async fn main() -> anyhow::Result<()> {
     let jobs: Vec<(usize, usize)> = (0..runnable.len()).flat_map(|c| (0..args.runs).map(move |r| (c, r))).collect();
     let interval = std::time::Duration::from_millis(60_000 / rpm.max(1));
     println!("pacing {} requests at {} per minute (~{:.1} min)\n", jobs.len(), rpm, jobs.len() as f64 / rpm.max(1) as f64);
-    let handles: Vec<_> = jobs
-        .iter()
-        .enumerate()
-        .map(|(n, &(ci, ri))| {
-            let (agent, case) = (agent.clone(), runnable[ci].clone());
-            tokio::spawn(async move {
-                tokio::time::sleep(interval * n as u32).await;
-                run_once(&agent, &case).await.map(|o| (ci, ri, o))
-            })
-        })
-        .collect();
     let mut results: Vec<(usize, usize, Outcome)> = vec![];
-    for h in handles {
-        results.push(h.await??);
+    if agent.websocket_enabled() {
+        // Probe cases are independent conversations. A live talk shares one chain, but a probe must never see
+        // another case's board or transcript, so reset and run them serially on the persistent transport.
+        for (n, &(ci, ri)) in jobs.iter().enumerate() {
+            if n > 0 {
+                tokio::time::sleep(interval).await;
+            }
+            agent.reset_websocket().await;
+            agent.warm_up().await?;
+            results.push((ci, ri, run_once(&agent, runnable[ci]).await?));
+        }
+    } else {
+        let handles: Vec<_> = jobs
+            .iter()
+            .enumerate()
+            .map(|(n, &(ci, ri))| {
+                let (agent, case) = (agent.clone(), runnable[ci].clone());
+                tokio::spawn(async move {
+                    tokio::time::sleep(interval * n as u32).await;
+                    run_once(&agent, &case).await.map(|o| (ci, ri, o))
+                })
+            })
+            .collect();
+        for h in handles {
+            results.push(h.await??);
+        }
     }
 
     // pass = model answered and every expectation held; error = the model call failed and the agent fell
@@ -427,6 +603,7 @@ async fn main() -> anyhow::Result<()> {
         if fail > 0 || err > 0 || args.verbose {
             if let Some((_, _, o)) = runs.iter().find(|r| !r.2.problems.is_empty() || r.2.source == Source::Rules).or(runs.first()) {
                 println!("        said: {}", case.newest);
+                println!("        transport: {:?} · tier {}{}", o.transport, o.service_tier.as_deref().unwrap_or("?"), o.first_event_ms.map(|ms| format!(" (first event {ms} ms)")).unwrap_or_default());
                 println!("        ops:  {}", serde_json::to_string(&o.ops).unwrap_or_default());
                 for d in o.dropped.iter().chain(o.notes.iter()) {
                     println!("        refused: {d}");

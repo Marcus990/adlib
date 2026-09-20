@@ -48,6 +48,11 @@ pub struct ChunkTiming {
     pub audio_ms: u64,
     pub vad_ms: f64,
     pub asr_ms: f64,
+    /// RMS over speech frames. Diagnostic only: applying gain to reach a target level was tried on
+    /// 09-19 and changed nothing, because Whisper normalises its own log-mel features. Logged so a
+    /// quiet mic is visible as a number rather than inferred from a bad transcript. Takes that
+    /// transcribed well sat at 0.145–0.169; the take that came back as garble sat at 0.050.
+    pub speech_rms: f32,
 }
 
 pub struct Chunker<A: Asr, V: Vad> {
@@ -155,6 +160,7 @@ impl<A: Asr, V: Vad> Chunker<A, V> {
             return Ok(vec![]);
         }
         let t = std::time::Instant::now();
+        let level = speech_rms(&self.buf);
         let text = clean(&self.asr.transcribe(&self.buf)?);
         let asr_ms = t.elapsed().as_secs_f64() * 1000.0;
         if text.is_empty() || text == self.last_curr {
@@ -170,7 +176,7 @@ impl<A: Asr, V: Vad> Chunker<A, V> {
             t_end_ms: Self::ms(self.total),
             is_final: false,
         };
-        Ok(vec![(c, ChunkTiming { audio_ms: Self::ms(self.total), vad_ms, asr_ms })])
+        Ok(vec![(c, ChunkTiming { audio_ms: Self::ms(self.total), vad_ms, asr_ms, speech_rms: level })])
     }
 
     /// `end_sample` is where the speech ends; `drain_to` is how much of the buffer this utterance
@@ -181,6 +187,7 @@ impl<A: Asr, V: Vad> Chunker<A, V> {
         // segmentation, not for giving a transformer acoustic context, and a word's release (plosives,
         // final /s/) lands after the energy-based endpoint — cutting there clips the last word.
         let decode_to = (end_sample + SR * 250 / 1000).min(self.buf.len());
+        let level = speech_rms(&self.buf[..decode_to]);
         let text = clean(&self.asr.transcribe(&self.buf[..decode_to])?);
         let asr_ms = t.elapsed().as_secs_f64() * 1000.0;
         let start_ms = Self::ms(self.buf_start);
@@ -194,7 +201,7 @@ impl<A: Asr, V: Vad> Chunker<A, V> {
             return Ok(None);
         }
         let c = Chunk { id: self.take_id(), text, stable, t_start_ms: start_ms, t_end_ms: end_ms, is_final: true };
-        Ok(Some((c, ChunkTiming { audio_ms: Self::ms(self.total), vad_ms, asr_ms })))
+        Ok(Some((c, ChunkTiming { audio_ms: Self::ms(self.total), vad_ms, asr_ms, speech_rms: level })))
     }
 
     fn take_id(&mut self) -> u64 {
@@ -202,6 +209,21 @@ impl<A: Asr, V: Vad> Chunker<A, V> {
         self.next_id += 1;
         id
     }
+}
+
+/// RMS of the loudest 30% of 20 ms frames — the speech, not the room between words.
+fn speech_rms(pcm: &[f32]) -> f32 {
+    let fr = SR / 50;
+    if pcm.len() < fr * 4 {
+        return 0.0;
+    }
+    let mut frames: Vec<f32> = pcm
+        .chunks_exact(fr)
+        .map(|c| (c.iter().map(|x| x * x).sum::<f32>() / fr as f32).sqrt())
+        .collect();
+    frames.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let hi = &frames[frames.len() * 7 / 10..];
+    if hi.is_empty() { 0.0 } else { hi.iter().sum::<f32>() / hi.len() as f32 }
 }
 
 /// The leading words this decode agrees on with the decode before it.

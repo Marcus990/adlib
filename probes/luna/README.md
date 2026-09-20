@@ -9,10 +9,16 @@ cargo run -p ls-agent --bin ls-agent-probe -- --dry                  # validate 
 cargo run -p ls-agent --bin ls-agent-probe -- --runs 3               # real model; key from env or repo .env
 cargo run -p ls-agent --bin ls-agent-probe -- --group chart-edit -v  # one group, verbose
 cargo run -p ls-agent --bin ls-agent-probe -- --filter diagram-rename --model anthropic/claude-haiku-4.5
+cargo run -p ls-agent --bin ls-agent-probe -- --ws-smoke             # two continued WebSocket turns
+cargo run -p ls-agent --bin ls-agent-probe -- --ws-latency 30        # chained Fast-mode p50/p95
 ```
 
 Flags: `--cases <path>` `--runs N` (default 3; models are not deterministic) `--filter <substr of id>`
-`--group <name>` `--rpm N` (default 18) `--verbose` `--model <id>` (else `CANVAS_MODEL`, else the default).
+`--group <name>` `--rpm N` `--verbose` `--ws-smoke` `--ws-latency N` `--model <id>` (else `CANVAS_MODEL`, else the default).
+OpenAI probes use a fresh Responses WebSocket per independent case; `--ws-smoke` deliberately keeps one chain
+for a chart creation followed by a correction. Set `CANVAS_TRANSPORT=websocket` to exercise the new path. OpenAI
+requests use Fast mode; verbose output shows the returned `priority` service tier.
+Set `CANVAS_SERVICE_TIER=default` only when running a same-workload standard-tier control.
 
 **Rate limit:** a new OpenRouter account is capped at 20 requests/min per model; the runner paces at 18/min,
 so 38 cases × 3 runs takes about 6 minutes. A 429 makes the agent fall back to offline rules; the runner

@@ -57,7 +57,7 @@ It acts only on the newest words; earlier speech is context. Its answer is tool 
 | `remove(id)` · `clear_board` | Take a tile away; clear the screen. |
 
 **When Luna is called:** whenever it is idle, at least 3 new words have arrived (partial phrases count), and the
-rate cap allows (`AGENT_RPM`: 30/min on OpenAI; 18/min on OpenRouter, where a new account is limited to 20/min).
+rate cap allows (`AGENT_RPM`: 500/min on OpenAI; 18/min on OpenRouter, where a new account is limited to 20/min).
 Sentences that arrive while it is busy are merged into the next call, not dropped. After the audio ends, the last
 words get a final call.
 
@@ -88,9 +88,10 @@ The same tools, prompt and parsing go to either; only the request differs (`Canv
 | | OpenAI (`OPENAI_API_KEY`) | OpenRouter (`OPENROUTER_API_KEY`) |
 |---|---|---|
 | model id | `gpt-5.6-luna` | `openai/gpt-5.6-luna` |
+| transport | Chat Completions by default; `CANVAS_TRANSPORT=websocket` uses a warmed, continued Responses connection with HTTP fallback | Chat Completions |
 | token limit | `max_completion_tokens` (`max_tokens` is rejected) | `max_tokens` |
 | reasoning | `reasoning_effort: "none"`. Function tools on chat completions require it (`minimal` is not a value for this model; the alternative is the Responses API) | `reasoning: {effort: "minimal"}` |
-| routing | none (a `provider` block is rejected) | `provider: {sort: "latency"}` |
+| routing | Fast mode (`service_tier: "fast"`; response reports `priority`) | `provider: {sort: "latency"}` |
 | latency measured | 0.8–1.5 s per call, median ~0.95 s | 1.4–2.25 s, median ~1.9 s |
 
 ## Offline fallback (no key, or Luna unreachable)

@@ -169,6 +169,7 @@
   function applyState(s) {
     if (s.mode) mode = s.mode;
     if (s.theme && s.theme !== theme) { theme = s.theme; document.body.classList.toggle('sketch', theme === 'sketch'); if (lastScene) renderScene(lastScene); }
+    if (typeof s.blank === 'boolean') $('blank').classList.toggle('on', s.blank);
     const idle = $('idle');
     idle.classList.toggle('err', s.phase === 'error');
     if (shown.length) idle.classList.add('gone');
@@ -321,6 +322,7 @@
   let resizeT = 0;
   addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => lastScene && renderScene(lastScene), 150); });
   listen('state', e => applyState(e.payload));
+  listen('operator_blank', e => { $('blank').classList.toggle('on', !!e.payload); fe('blank', null, null, String(!!e.payload)); });
   // Canvas mode: the board itself is the summary (it holds diagrams and charts the photo grid can't show).
   listen('talk_end', () => { if (mode === 'canvas') return; toggleGrid(true); fe('grid', null, shown.length, 'talk_end'); });
   listen('render', e => { const t = performance.now(); fe('received', e.payload.chunk_id, 0, e.payload.kind); if (mode !== 'canvas') show(e.payload, t); });
