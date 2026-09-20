@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_ELEMENTS: usize = 4;
 pub const MAX_ANNOTATIONS: usize = 3;
-pub const MAX_NODES: usize = 8;
+pub const MAX_NODES: usize = 10;
 pub const MAX_POINTS: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -25,6 +25,9 @@ pub enum ElementKind {
     Image,
     Diagram,
     Chart,
+    /// A company logo, icon or flag from the symbol library, or a plain name card when the library has none
+    /// (`image_id` empty, `caption` = the name).
+    Logo,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -32,7 +35,7 @@ pub struct Element {
     pub id: String,
     #[serde(default)]
     pub kind: ElementKind,
-    /// Library image id (empty for diagrams and charts).
+    /// Library image id, or the symbol's id for a logo tile (empty for diagrams, charts and name cards).
     pub image_id: String,
     /// Image caption, or the graphic's title.
     pub caption: String,
@@ -63,6 +66,7 @@ pub enum DiagramLayout {
 pub struct Node {
     pub id: String,
     pub label: String,
+    /// An image url (a logo or icon from the symbol library), or a short emoji.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     /// Secondary text: a year on a timeline, a short detail.
@@ -104,6 +108,12 @@ pub enum ChartKind {
 pub struct Point {
     pub label: String,
     pub value: f64,
+    /// An icon or logo drawn with the point: an image url once the pipeline has resolved it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// The brand the model named for this point (a hint the pipeline resolves into `icon`; never drawn as is).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -120,8 +130,12 @@ pub struct Chart {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NodeSpec {
     pub label: String,
+    /// What the model asked for: a generic icon name ("database"); the pipeline replaces it with the image url.
     #[serde(default)]
     pub icon: Option<String>,
+    /// The product or company the node is ("Postgres", "Kafka"): looked up in the logo library by the pipeline.
+    #[serde(default)]
+    pub logo: Option<String>,
     #[serde(default)]
     pub note: Option<String>,
 }
@@ -195,12 +209,17 @@ pub enum Op {
     /// Replace a chart's whole data set. Not offered to the model (it patches with the point ops); kept for setup and tests.
     UpdateChart { id: String, kind: Option<ChartKind>, title: Option<String>, points: Vec<Point> },
     SetPoint { id: String, label: String, value: f64 },
-    AddPoint { id: String, label: String, value: f64 },
+    AddPoint { id: String, label: String, value: f64, #[serde(default)] icon: Option<String>, #[serde(default)] logo: Option<String> },
     RemovePoint { id: String, label: String, #[serde(default)] quote: Option<String> },
     SetChart { id: String, kind: Option<ChartKind>, title: Option<String>, unit: Option<String> },
     /// A photo request. The canvas does not place photos itself: the pipeline searches the library
     /// (or draws one) and renders the result.
     ShowPhoto { subject: String, replace: bool },
+    /// A company / product logo request, looked up by name (not by embedding). The pipeline resolves it.
+    ShowLogo { name: String, #[serde(default)] replace: bool },
+    /// A generic icon or flag request ("teamwork", "database", "flag of Canada"): the concept plus synonyms the
+    /// model offered, looked up by name and tags. The pipeline resolves it.
+    ShowIcon { concept: String, #[serde(default)] alternatives: Vec<String>, #[serde(default)] replace: bool },
     /// The model chose to do nothing, and why (logged).
     NoAction { reason: String },
 }
@@ -252,7 +271,7 @@ fn clean_nodes(specs: &[NodeSpec], existing: &[Node]) -> Vec<(String, Option<Str
         if label.is_empty() || existing.iter().any(|e| same(&e.label, &label)) || out.iter().any(|o| same(&o.0, &label)) {
             continue;
         }
-        let icon = n.icon.as_deref().map(|i| short(i, 4)).filter(|i| !i.is_empty());
+        let icon = n.icon.as_deref().map(|i| short(i, if i.contains("://") { 200 } else { 4 })).filter(|i| !i.is_empty());
         let note = n.note.as_deref().map(|t| short(t, 24)).filter(|t| !t.is_empty());
         out.push((label, icon, note));
     }
@@ -277,7 +296,7 @@ fn clean_points(points: &[Point]) -> Vec<Point> {
         if !p.value.is_finite() || out.iter().any(|o| same(&o.label, &label)) {
             continue;
         }
-        out.push(Point { label, value: p.value });
+        out.push(Point { label, value: p.value, icon: p.icon.clone().filter(|i| !i.is_empty()), logo: p.logo.clone().filter(|i| !i.is_empty()) });
     }
     out.truncate(MAX_POINTS);
     out
@@ -381,6 +400,32 @@ impl Canvas {
         }
         self.push_element(ElementKind::Image, image_id, caption, url, None, None);
         self.bump(format!("fast:render {image_id}"), chunk_id)
+    }
+
+    /// A logo / icon / flag tile (`asset_id` = the library id, `url` its image) or, with an empty `asset_id`, a plain
+    /// name card. Asking for one that is already on the board only refocuses it.
+    pub fn render_logo(&mut self, asset_id: &str, caption: &str, url: &str, chunk_id: u64) -> Scene {
+        let same = |e: &Element| {
+            e.kind == ElementKind::Logo && if asset_id.is_empty() { e.image_id.is_empty() && same(&e.caption, caption) } else { e.image_id == asset_id }
+        };
+        if let Some(id) = self.scene.elements.iter().find(|e| same(e)).map(|e| e.id.clone()) {
+            return self.focus_inner(&id, format!("fast:refocus logo {caption}"), chunk_id);
+        }
+        self.push_element(ElementKind::Logo, asset_id, caption, url, None, None);
+        self.bump(format!("fast:logo {caption}"), chunk_id)
+    }
+
+    /// The words turned out to mean a different symbol than the one just shown ("the flag…" → "…of Canada"): swap the focused
+    /// logo / icon / name card in place (else the newest one), keeping its tile. With none on the board it adds one.
+    pub fn replace_logo(&mut self, asset_id: &str, caption: &str, url: &str, chunk_id: u64) -> Scene {
+        let target = self.scene.elements.iter().find(|e| e.kind == ElementKind::Logo && e.focus).or_else(|| self.scene.elements.iter().rev().find(|e| e.kind == ElementKind::Logo)).map(|e| e.id.clone());
+        let Some(id) = target else { return self.render_logo(asset_id, caption, url, chunk_id) };
+        if let Some(e) = self.scene.elements.iter_mut().find(|e| e.id == id) {
+            e.image_id = asset_id.into();
+            e.caption = caption.into();
+            e.url = url.into();
+        }
+        self.focus_inner(&id, format!("fast:replace logo {caption}"), chunk_id)
     }
 
     /// Add an element, focus it, auto layout; evict the oldest past the cap. Returns its id.
@@ -699,8 +744,8 @@ impl Canvas {
                     Err(why) => self.miss(why),
                 }
             }
-            Op::AddPoint { id, label, value } => {
-                let value = *value;
+            Op::AddPoint { id, label, value, icon, .. } => {
+                let (value, icon) = (*value, icon.clone().filter(|i| !i.is_empty()));
                 let label = short(label, 24);
                 let outcome = match self.scene.elements.iter_mut().find(|e| &e.id == id).and_then(|e| e.chart.as_mut()) {
                     None => Err(format!("add_point: no chart {id}")),
@@ -714,7 +759,7 @@ impl Canvas {
                         }
                         None if c.points.len() >= MAX_POINTS => Err(format!("add_point: {id} already has {MAX_POINTS} points")),
                         None => {
-                            c.points.push(Point { label, value });
+                            c.points.push(Point { label, value, icon, logo: None });
                             c.kind = promote(c.kind, c.points.len());
                             Ok(true)
                         }
@@ -880,10 +925,12 @@ pub fn op_name(op: &Op) -> String {
         Op::AddEdge { id, from, to, .. } => format!("add_edge({id}, {from}→{to})"),
         Op::RemoveEdge { id, from, to } => format!("remove_edge({id}, {from}→{to})"),
         Op::SetPoint { id, label, value } => format!("set_point({id}, {label}={value})"),
-        Op::AddPoint { id, label, value } => format!("add_point({id}, {label}={value})"),
+        Op::AddPoint { id, label, value, .. } => format!("add_point({id}, {label}={value})"),
         Op::RemovePoint { id, label, .. } => format!("remove_point({id}, {label})"),
         Op::SetChart { id, .. } => format!("set_chart({id})"),
         Op::ShowPhoto { subject, replace } => format!("show_photo({subject}{})", if *replace { ", replace" } else { "" }),
+        Op::ShowLogo { name, replace } => format!("show_logo({name}{})", if *replace { ", replace" } else { "" }),
+        Op::ShowIcon { concept, replace, .. } => format!("show_icon({concept}{})", if *replace { ", replace" } else { "" }),
         Op::NoAction { .. } => "no_action".into(),
         Op::DrawChart { kind, points, .. } => format!("draw_chart({kind:?}, {} points)", points.len()).to_lowercase(),
         Op::UpdateChart { id, points, .. } => format!("update_chart({id}, {} points)", points.len()),
@@ -919,6 +966,7 @@ pub fn board_summary(scene: &Scene) -> Vec<String> {
                     let pts: Vec<String> = c.points.iter().map(|p| format!("{} {}{unit}", p.label, num(p.value))).collect();
                     format!("{:?} chart{}: {}{focus}", c.kind, c.title.as_deref().map(|t| format!(" '{t}'")).unwrap_or_default(), pts.join(", ")).to_lowercase()
                 }
+                _ if e.kind == ElementKind::Logo => format!("{}: {}{focus}", if e.image_id.is_empty() { "name card" } else { "logo" }, e.caption),
                 _ => format!("photo: {}{focus}", e.caption.split('(').next().unwrap_or(&e.caption).trim()),
             }
         })
@@ -1165,10 +1213,10 @@ mod tests {
     }
 
     fn ns(labels: &[&str]) -> Vec<NodeSpec> {
-        labels.iter().map(|l| NodeSpec { label: l.to_string(), icon: None, note: None }).collect()
+        labels.iter().map(|l| NodeSpec { label: l.to_string(), icon: None, logo: None, note: None }).collect()
     }
     fn pts(v: &[(&str, f64)]) -> Vec<Point> {
-        v.iter().map(|(l, x)| Point { label: l.to_string(), value: *x }).collect()
+        v.iter().map(|(l, x)| Point { label: l.to_string(), value: *x, icon: None, logo: None }).collect()
     }
 
     #[test]
@@ -1243,10 +1291,10 @@ mod tests {
     fn add_and_remove_point_and_set_chart() {
         let mut c = Canvas::new();
         let stat = c.apply(0, &[Op::DrawChart { kind: ChartKind::Stat, title: Some("Revenue".into()), unit: None, points: pts(&[("Last year", 15000.0)]) }], 1).unwrap().elements[0].id.clone();
-        let s = c.apply(0, &[Op::AddPoint { id: stat.clone(), label: "Year before".into(), value: 12000.0 }], 2).unwrap();
+        let s = c.apply(0, &[Op::AddPoint { id: stat.clone(), label: "Year before".into(), value: 12000.0, icon: None, logo: None }], 2).unwrap();
         assert_eq!(s.elements[0].chart.as_ref().unwrap().kind, ChartKind::Bar, "a second value turns a stat into bars");
         // add_point on a label that exists is a correction, not a duplicate bar
-        c.apply(0, &[Op::AddPoint { id: stat.clone(), label: "last year".into(), value: 16000.0 }], 3).unwrap();
+        c.apply(0, &[Op::AddPoint { id: stat.clone(), label: "last year".into(), value: 16000.0, icon: None, logo: None }], 3).unwrap();
         assert_eq!(points_of(&c, &stat), v(&[("Last year", 16000.0), ("Year before", 12000.0)]));
         c.apply(0, &[Op::RemovePoint { id: stat.clone(), label: "Year before".into(), quote: Some("drop it".into()) }], 4).unwrap();
         assert_eq!(points_of(&c, &stat), v(&[("Last year", 16000.0)]));
@@ -1260,7 +1308,7 @@ mod tests {
         let full: Vec<(String, f64)> = (0..MAX_POINTS).map(|i| (format!("p{i}"), i as f64)).collect();
         let refs: Vec<(&str, f64)> = full.iter().map(|(l, x)| (l.as_str(), *x)).collect();
         let id = chart(&mut c, "Full", &refs);
-        assert!(c.apply(0, &[Op::AddPoint { id, label: "extra".into(), value: 99.0 }], 7).is_none());
+        assert!(c.apply(0, &[Op::AddPoint { id, label: "extra".into(), value: 99.0, icon: None, logo: None }], 7).is_none());
     }
 
     #[test]
@@ -1304,6 +1352,43 @@ mod tests {
         assert_eq!(s.elements.len(), 1, "the photo that arrived meanwhile survives");
         assert_eq!(s.elements[0].image_id, "parrot");
         assert!(!s.elements.iter().any(|e| e.id == a.elements[0].id));
+    }
+
+    #[test]
+    fn logos_and_name_cards_are_tiles_that_dedupe() {
+        let mut c = Canvas::new();
+        add(&mut c, "eagle");
+        let s = c.render_logo("logos:google-icon", "Google", "img://localhost/logos-google-icon.svg", 2);
+        assert_eq!(s.elements.len(), 2);
+        let e = s.elements.last().unwrap();
+        assert_eq!((e.kind, e.image_id.as_str(), e.focus), (ElementKind::Logo, "logos:google-icon", true));
+        // the same asset again only refocuses; a name card dedupes on its (case-insensitive) name
+        add(&mut c, "owl");
+        let s = c.render_logo("logos:google-icon", "Google", "img://x", 3);
+        assert_eq!(s.elements.len(), 3);
+        assert!(s.elements.iter().find(|e| e.image_id == "logos:google-icon").unwrap().focus);
+        c.render_logo("", "Hooli", "", 4);
+        let s = c.render_logo("", "hooli", "", 5);
+        assert_eq!(s.elements.iter().filter(|e| e.kind == ElementKind::Logo && e.image_id.is_empty()).count(), 1);
+        let sum = board_summary(&s);
+        assert!(sum.iter().any(|l| l.starts_with("logo: Google")) && sum.iter().any(|l| l.starts_with("name card: ")), "{sum:?}");
+        // the oldest tile is evicted past four, like any other
+        assert_eq!(s.elements.len(), 4);
+    }
+
+    #[test]
+    fn a_refined_symbol_replaces_the_one_just_shown() {
+        let mut c = Canvas::new();
+        add(&mut c, "eagle");
+        c.render_logo("lucide:flag", "Flag", "img://x/flag.svg", 2);
+        let s = c.replace_logo("circle-flags:ca", "Canada", "img://x/ca.svg", 3);
+        assert_eq!(s.elements.len(), 2, "swapped in place, not added");
+        let e = s.elements.iter().find(|e| e.kind == ElementKind::Logo).unwrap();
+        assert_eq!((e.image_id.as_str(), e.caption.as_str(), e.focus), ("circle-flags:ca", "Canada", true));
+        // a name card can be refined into a logo, and replacing with none on the board just adds
+        let mut d = Canvas::new();
+        assert_eq!(d.replace_logo("", "Hooli", "", 1).elements.len(), 1);
+        assert_eq!(d.replace_logo("logos:google-icon", "Google", "img://g", 2).elements.len(), 1);
     }
 
     #[test]

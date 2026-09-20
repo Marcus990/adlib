@@ -1,0 +1,6 @@
+Let me walk you through our architecture. [[slnc 1500]]
+A browser talks to our API gateway. [[slnc 2500]]
+The gateway calls the authentication service and the orders service. [[slnc 3000]]
+The orders service writes to Postgres, caches in Redis, and publishes events to Kafka. [[slnc 4000]]
+Now, here is the cloud market share. [[slnc 1500]] Amazon Web Services has thirty two percent, Azure has twenty three percent, and Google Cloud has eleven percent. [[slnc 4000]]
+Thanks, everyone. [[slnc 1500]]

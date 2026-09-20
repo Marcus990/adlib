@@ -7,6 +7,7 @@ being said, changing on its own. Design doc: see PLAN.md (link). State of the bu
 mic → VAD + Whisper (local) → transcript → Luna (OpenAI API, or OpenRouter) → board ops / show_photo
                                   Luna sees the whole transcript, the board, and what it changed recently
                        show_photo → CLIP search of the photo library (local) → or draw it → Tauri render
+                       show_logo / show_icon → name lookup in the logo & icon library (local, no embeddings) → or a name card
 ```
 
 ## One-time setup (8 GB Mac: run heavy steps one at a time)
@@ -61,7 +62,7 @@ With no mic named, the app prefers AirPods, then the MacBook mic, and never a vi
   500 requests and 500k tokens a minute, and every call carries the whole transcript), 18 on OpenRouter (a new
   account is capped at 20/min for Luna).
 - `LS_ASSETS` (asset card root, e.g. `/Volumes/NO NAME/assets`) — Marcus's 15k-photo library (OpenAI CLIP ViT-B/32
-  embeddings, see ASSETS_HANDOFF.md). Unset = the local MobileCLIP index (`INDEX`, `CLIP_DIR`).
+  embeddings) and, in `icons/`, 13k logos, icons and flags searched by name (see ASSETS_HANDOFF.md). Unset = the local MobileCLIP index (`INDEX`, `CLIP_DIR`).
 - `CLIP_TEXT_DIR` (default `models/clip-vit-b32`) — `tokenizer.json` + `pytorch_model.bin` from
   openai/clip-vit-base-patch32; the text tower is extracted once into `clip-text-vit-b32.safetensors`.
 - `BASETEN_API_KEY` (+ optional `BASETEN_URL`, `GEN_SIZE`, default 768) — draws a picture when the library has

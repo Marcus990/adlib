@@ -12,5 +12,6 @@ tauri = { version = "2", features = [] }
 ls-contracts = { path = "../../crates/contracts" }
 ls-pipeline = { path = "../../crates/pipeline" }
 ls-canvas = { path = "../../crates/canvas" }
+ls-search = { path = "../../crates/search" }
 serde_json = "1"
 anyhow = "1"

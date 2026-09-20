@@ -6,6 +6,7 @@
 //! LS_ROOT = repo root (defaults to the workspace this binary was built from).
 
 use ls_pipeline::{run, AudioSource, Config, Engine, Logger, RenderSink};
+use ls_search::ImageCache;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -126,7 +127,7 @@ fn main() -> anyhow::Result<()> {
             let id = req.uri().path().trim_start_matches('/').to_string();
             match cache.get(&id) {
                 Some(bytes) => tauri::http::Response::builder()
-                    .header("Content-Type", ls_search_mime(&id))
+                    .header("Content-Type", ImageCache::mime_of(&id))
                     .header("Access-Control-Allow-Origin", "*")
                     .body(bytes.to_vec())
                     .unwrap(),
@@ -175,9 +176,4 @@ fn main() -> anyhow::Result<()> {
             }
         });
     Ok(())
-}
-
-fn ls_search_mime(id: &str) -> &'static str {
-    // Index ids have no extension; the library is JPEG unless the id says otherwise.
-    if id.ends_with(".png") { "image/png" } else if id.ends_with(".webp") { "image/webp" } else { "image/jpeg" }
 }

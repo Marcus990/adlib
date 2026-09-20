@@ -41,7 +41,10 @@ Offline rules (no key): "compare/versus/side by side" → compare; "focus on/thi
 `RenderEvent` stays (logs, eval, replay). New `Scene` is emitted alongside to the web view.
 
 ## Live diagrams and charts (2026-09-19, user choice: "live diagrams" + "charts from speech")
-- Tiles are `kind: image | diagram | chart`. Photos come from `show_photo`; diagrams and charts from Luna's
+- Tiles are `kind: image | diagram | chart | logo`. A `logo` tile is a company logo, an icon or a flag from the symbol
+  library (`image_id` = its id, drawn as a plain image with its name under it), or a **name card** (`image_id` empty, just
+  the name in handwriting) when the library has nothing. `Canvas::render_logo` dedupes on the asset id or the name.
+  Photos come from `show_photo`; diagrams and charts from Luna's
   tools (full list and rules: TRIGGERS.md, "How each decision is made"). Charts are corrected with `set_point`
   (one value), grown with `add_point`, trimmed with `remove_point`; diagrams with `add_nodes`, `update_node`,
   `remove_node`, `add_edge`, `remove_edge`. There is no whole-data-set `update_chart` tool any more: a model that
@@ -51,7 +54,7 @@ Offline rules (no key): "compare/versus/side by side" → compare; "focus on/thi
   a stat with ≥ 2 values becomes bars; ≤ 8 nodes / points; node ids are never reused after a removal.
 - Guards: chart values must be numbers actually spoken (or already on the board); destructive ops need a `quote`
   found in the newest words.
-- Renderer: `app/dist/graphics.js`, SVG per tile, sized to the tile's final px; only new nodes / edges / bars /
+- Renderer: `app/dist/sketch.js` (both themes), SVG per tile, sized to the tile's final px; only new nodes / edges / bars /
   points animate (per-tile `seen` set). Browser preview without Tauri: serve `app/dist`, call `__scene(scene)`.
 - Real-model replay (fixtures/audio/graphics-talk.wav, Haiku 4.5): users 2K → 15K → 40K as bars, pie
   60/30/10, a 4-step flow that became a cycle on "it all runs in a loop"; graphics land 1.1–2.7 s after the
@@ -60,7 +63,7 @@ Offline rules (no key): "compare/versus/side by side" → compare; "focus on/thi
 ## "Live sketch" theme (2026-09-19, default; `LS_THEME=slate` restores the dark cards)
 - Warm paper with fibre grain; photos are taped polaroids (tilt + tape angle seeded by element id) with a
   handwritten caption; diagrams/charts are drawn straight onto the page.
-- `app/dist/sketch.js` (same `render(svg, el, W, H, seen, full)` API as graphics.js): hand-drawn primitives —
+- `app/dist/sketch.js` (`render(svg, el, W, H, seen, full, theme)`; the old separate `graphics.js` is gone, `slate` is now a skin of this renderer): hand-drawn primitives —
   bowed strokes that overshoot their ends, loose ellipses that overlap where they started, clipped hatching,
   two-stroke arrowheads; colour washes deliberately offset from outlines. Seeded PRNG per element/node, so a
   graphic never re-wobbles on re-render. Strokes draw themselves (dash offset); handwriting writes left→right.
@@ -74,3 +77,12 @@ Offline rules (no key): "compare/versus/side by side" → compare; "focus on/thi
 There is none: Luna is called on the newest words and chooses the tool. (Until 2026-09-19 Jev routed each
 sentence to `photo | photo_update | chart | diagram | board | clear | none`; it had no route for "edit what is on
 screen", so value corrections never reached the agent — 0 of 9 phrasings, see `probes/luna/BASELINE.md`.)
+
+
+## Pictures and text (2026-09-20)
+- `Node.icon` and `Point.icon` hold an image url (`img://localhost/<id>.svg`) once the pipeline has resolved Luna's `logo` / `icon` hints
+  (`NodeSpec.logo`, `Point.logo` are hints only and are never sent to the web view). `MAX_NODES` is 10.
+- The web view draws them as `<image>` inside the node, above the label; in a bar/line chart under the axis, above the label; in a pie legend
+  next to the name. The app serves `.svg` with `image/svg+xml` through the shared `ImageCache::mime_of` (the app once had its own copy that
+  labelled SVGs `image/jpeg`, which showed as a broken-image icon).
+- Text fitting, the technical-diagram layout and the icon rules: see TRIGGERS.md, "Diagrams and charts".

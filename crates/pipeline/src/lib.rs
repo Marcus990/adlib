@@ -9,6 +9,7 @@ use ls_canvas::{Canvas, ElementKind, Op, Scene};
 use ls_contracts::{Chunk, Match, Rect, RenderEvent};
 use ls_gen::ImageGen;
 use ls_hear::{audio, whisper, ChunkTiming, Chunker, ChunkerConfig, SR};
+use ls_search::icons::IconSearch;
 use ls_search::{assets, Clip, ImageCache, Index, Searcher, TextEncoder};
 use serde_json::{json, Value};
 use std::collections::{HashSet, VecDeque};
@@ -44,6 +45,8 @@ pub struct Config {
     pub log_path: PathBuf,
     /// Generated images are kept here and reused on the next run (AS13).
     pub gen_dir: PathBuf,
+    /// `LS_THEME` (`sketch` default, or `slate`): monochrome icons are recoloured to read on it.
+    pub theme: String,
     /// Lowest photo score a library match needs (`TAU`). The label gate does the real rejecting on the asset card.
     pub tau: f32,
     /// Most agent calls per minute (`AGENT_RPM`). Default: 30 on OpenAI, 18 on OpenRouter (a new account is capped at 20/min).
@@ -87,6 +90,7 @@ impl Config {
             api_key: env("OPENROUTER_API_KEY"),
             openai_key: env("OPENAI_API_KEY"),
             log_path: root.join("logs").join(format!("run-{stamp}.jsonl")),
+            theme: env("LS_THEME").unwrap_or_else(|| "sketch".into()),
             tau,
             agent_rpm: env("AGENT_RPM").and_then(|v| v.parse().ok()),
             chunker: {
@@ -154,6 +158,8 @@ pub struct Engine {
     pub gen: ImageGen,
     /// Distinct library subjects, for the offline fallback (no key / Luna down).
     pub vocab: Vec<String>,
+    /// Logos, icons and flags (`LS_ASSETS/icons`): searched by name and alias, not by embedding.
+    pub icons: Option<Arc<IconSearch>>,
 }
 
 impl Engine {
@@ -176,7 +182,14 @@ impl Engine {
         let http = reqwest::Client::builder().pool_idle_timeout(Duration::from_secs(300)).tcp_keepalive(Duration::from_secs(30)).build()?;
         let agent = CanvasAgent::new(http.clone(), cfg.api_key.clone(), cfg.canvas_model.clone()).with_openai(cfg.openai_key.clone());
         let gen = ImageGen::new(http, cfg.gen_key.clone(), cfg.gen_url.clone(), cfg.gen_size);
-        Ok(Self { cfg, clip, searcher, cache, agent, gen, vocab })
+        let icons = cfg.assets.as_ref().map(|d| d.join("icons")).filter(|d| d.join("lookup.json").exists()).and_then(|d| match IconSearch::load(&d) {
+            Ok(i) => Some(Arc::new(i)),
+            Err(e) => {
+                eprintln!("symbol library not loaded ({}): {e:#}", d.display());
+                None
+            }
+        });
+        Ok(Self { cfg, clip, searcher, cache, agent, gen, vocab, icons })
     }
 
     /// Warm-up: CLIP text path, image prefetch, the image-generation deployment.
@@ -190,7 +203,7 @@ impl Engine {
             let g = self.gen.clone();
             tokio::spawn(async move { g.warm_up().await });
         }
-        log.log(json!({"ev": "warm_up", "ms": t.elapsed().as_millis() as u64, "prefetched": n, "remote": self.agent.has_remote()}));
+        log.log(json!({"ev": "warm_up", "ms": t.elapsed().as_millis() as u64, "prefetched": n, "remote": self.agent.has_remote(), "symbols": self.icons.is_some()}));
     }
 }
 
@@ -273,9 +286,11 @@ fn scene_log(scene: &Scene) -> Value {
         .iter()
         .map(|e| match (&e.diagram, &e.chart) {
             (Some(d), _) => json!({"id": e.id, "kind": "diagram", "layout": d.layout, "title": d.title,
-                "nodes": d.nodes.iter().map(|n| n.label.clone()).collect::<Vec<_>>(), "edges": d.edges.len()}),
+                "nodes": d.nodes.iter().map(|n| n.label.clone()).collect::<Vec<_>>(), "edges": d.edges.len(),
+                "pictures": d.nodes.iter().filter(|n| n.icon.is_some()).count()}),
             (_, Some(c)) => json!({"id": e.id, "kind": "chart", "chart": c.kind, "title": c.title, "unit": c.unit,
-                "points": c.points.iter().map(|p| json!([p.label, p.value])).collect::<Vec<_>>()}),
+                "points": c.points.iter().map(|p| json!([p.label, p.value])).collect::<Vec<_>>(), "pictures": c.points.iter().filter(|p| p.icon.is_some()).count()}),
+            _ if e.kind == ElementKind::Logo => json!({"id": e.id, "kind": "logo", "asset": e.image_id, "title": e.caption}),
             _ => json!({"id": e.id, "kind": "image", "image_id": e.image_id}),
         })
         .collect();
@@ -306,6 +321,130 @@ fn push_change(changes: &mut VecDeque<Change>, at_s: u64, what: String) {
 fn offline_photo(text: &str, vocab: &[String]) -> Option<String> {
     let after = ls_query::after_last_cue(text, 10)?;
     ls_query::named_subject(&after.join(" "), vocab)
+}
+
+/// A `show_photo` subject that is really a symbol request ("Google logo", "an icon for teamwork"): the tool the model
+/// should have used. Diffusion models draw these badly and the CLIP search cannot find them.
+fn symbol_tool(subject: &str) -> Option<&'static str> {
+    let words: Vec<String> = subject.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(String::from).collect();
+    let has = |ws: &[&str]| words.iter().any(|w| ws.contains(&w.as_str()));
+    if has(&["logo", "logos", "wordmark", "brand"]) {
+        Some("show_logo")
+    } else if has(&["icon", "icons"]) {
+        Some("show_icon")
+    } else {
+        None
+    }
+}
+
+/// Monochrome icons draw in `currentColor`, which is black inside an `<img>`: write a copy in the theme's ink.
+fn themed_copy(src: &std::path::Path, dir: &std::path::Path, id: &str, theme: &str) -> Option<PathBuf> {
+    let out = dir.join("symbols").join(format!("{}-{theme}.svg", slug(id)));
+    if !out.exists() {
+        let svg = std::fs::read_to_string(src).ok()?;
+        let ink = if theme == "slate" { "#f1f3f7" } else { "#2b2723" };
+        std::fs::create_dir_all(out.parent()?).ok()?;
+        std::fs::write(&out, svg.replace("currentColor", ink)).ok()?;
+    }
+    Some(out)
+}
+
+/// Make a symbol reachable by the web view: register its file with the image cache (monochrome icons in the theme's ink)
+/// and return its title and `img://` url.
+fn symbol_asset(engine: &Engine, id: &str) -> Option<(String, String)> {
+    let icons = engine.icons.as_ref()?;
+    let (path, entry) = (icons.path_of(id)?, icons.entry(id)?);
+    let served = if entry.monochrome { themed_copy(&path, &engine.cfg.gen_dir, id, &engine.cfg.theme).unwrap_or(path) } else { path };
+    let cache_id = format!("{}.svg", slug(id));
+    engine.cache.add(&cache_id, served);
+    Some((entry.title.clone(), format!("img://localhost/{cache_id}")))
+}
+
+/// Turn the model's `logo` / `icon` hints on diagram nodes and chart points into picture urls, before the ops reach
+/// the canvas. Pictures appear on most nodes of a diagram or on none (an uneven scatter looks like a mistake), added nodes
+/// match the diagram they join, and a hint that finds nothing exact is dropped.
+fn attach_pictures(engine: &Engine, canvas: &Canvas, ops: &mut [Op], log: &Logger) {
+    let Some(icons) = engine.icons.as_ref() else {
+        // no symbol library: never leave a raw hint word in a node (it would be drawn as an emoji)
+        for op in ops.iter_mut() {
+            match op {
+                Op::DrawDiagram { nodes, .. } | Op::AddNodes { nodes, .. } => nodes.iter_mut().for_each(|n| { n.icon = None; n.logo = None; }),
+                Op::DrawChart { points, .. } => points.iter_mut().for_each(|p| { p.icon = None; p.logo = None; }),
+                Op::AddPoint { icon, logo, .. } => { *icon = None; *logo = None; }
+                _ => {}
+            }
+        }
+        return;
+    };
+    let url = |hit: Option<ls_search::icons::Hit>| hit.and_then(|h| symbol_asset(engine, &h.id).map(|(_, u)| u));
+    let has_pictures = |id: &str, node: bool| {
+        canvas.scene().elements.iter().find(|e| e.id == id).is_some_and(|e| if node { e.diagram.as_ref().is_some_and(|d| d.nodes.iter().any(|n| n.icon.is_some())) } else { e.chart.as_ref().is_some_and(|c| c.points.iter().any(|p| p.icon.is_some())) })
+    };
+    for op in ops.iter_mut() {
+        match op {
+            Op::DrawDiagram { nodes, .. } => {
+                let found: Vec<Option<String>> = nodes.iter().map(|n| url(icons.picture_for(n.logo.as_deref(), n.icon.as_deref(), &n.label, true))).collect();
+                let keep = !nodes.is_empty() && found.iter().filter(|f| f.is_some()).count() * 10 >= nodes.len() * 6;
+                log.log(json!({"ev": "pictures", "op": "draw_diagram", "kept": keep, "nodes": nodes.iter().zip(&found).map(|(n, f)| json!([n.label, n.logo, n.icon, f.is_some()])).collect::<Vec<_>>()}));
+                for (n, f) in nodes.iter_mut().zip(found) {
+                    n.icon = if keep { f } else { None };
+                    n.logo = None;
+                }
+            }
+            Op::AddNodes { id, nodes, .. } => {
+                let join = has_pictures(id, true);
+                for n in nodes.iter_mut() {
+                    let found = if join { url(icons.picture_for(n.logo.as_deref(), n.icon.as_deref(), &n.label, true)) } else { None };
+                    log.log(json!({"ev": "pictures", "op": "add_nodes", "label": n.label, "logo": n.logo, "icon": n.icon, "diagram_has_pictures": join, "found": found.is_some()}));
+                    n.icon = found;
+                    n.logo = None;
+                }
+            }
+            // charts: only a named product gets a logo; the label is never turned into an icon
+            Op::DrawChart { points, .. } => {
+                let found: Vec<Option<String>> = points.iter().map(|p| url(icons.picture_for(p.logo.as_deref(), None, &p.label, false))).collect();
+                let keep = !points.is_empty() && found.iter().filter(|f| f.is_some()).count() * 10 >= points.len() * 6;
+                log.log(json!({"ev": "pictures", "op": "draw_chart", "kept": keep, "points": points.iter().zip(&found).map(|(p, f)| json!([p.label, p.logo, f.is_some()])).collect::<Vec<_>>()}));
+                for (p, f) in points.iter_mut().zip(found) {
+                    p.icon = if keep { f } else { None };
+                    p.logo = None;
+                }
+            }
+            Op::AddPoint { id, label, icon, logo, .. } => {
+                let join = has_pictures(id, false);
+                *icon = if join { url(icons.picture_for(logo.as_deref(), None, label, false)) } else { None };
+                log.log(json!({"ev": "pictures", "op": "add_point", "label": label, "logo": logo, "chart_has_pictures": join, "found": icon.is_some()}));
+                *logo = None;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Resolve a logo / icon / flag request against the symbol library and put the result on the board. When there is no
+/// library, or nothing in it fits, a plain card with the asked-for name goes up instead: the screen is never left
+/// blank and nothing is invented. `queries[0]` is what was asked for; the rest are the model's synonyms.
+#[allow(clippy::too_many_arguments)]
+fn show_symbol(engine: &Engine, canvas: &mut Canvas, sink: &dyn RenderSink, log: &Logger, summary: &mut Summary, changes: &mut VecDeque<Change>, tool: &str, queries: &[String], replace: bool, call: u64, chunk_id: u64, heard_at: u64) {
+    let asked = queries.first().map(|q| q.trim().to_string()).unwrap_or_default();
+    let kinds: &[&str] = if tool == "show_logo" { &["logo"] } else { &["icon", "flag"] };
+    let (pick, ranked) = engine.icons.as_ref().map_or((None, vec![]), |i| i.resolve(kinds, queries));
+    let resolved = pick.as_ref().and_then(|h| symbol_asset(engine, &h.id).map(|(title, url)| (h.id.clone(), title, url)));
+    let (asset, title, url) = resolved.clone().unwrap_or((String::new(), asked.clone(), String::new()));
+    let scene = if replace { canvas.replace_logo(&asset, &title, &url, chunk_id) } else { canvas.render_logo(&asset, &title, &url, chunk_id) };
+    let now = log.now_ms();
+    let lat = now.saturating_sub(heard_at);
+    log.log(json!({"ev": "symbol", "call": call, "tool": tool, "queries": queries, "library": engine.icons.is_some(),
+        "pick": pick.as_ref().map(|h| json!({"id": h.id, "score": h.score, "how": h.how})),
+        "candidates": ranked.iter().take(3).map(|h| json!([h.id, h.score, h.how])).collect::<Vec<_>>(), "name_card": resolved.is_none()}));
+    summary.renders += 1;
+    summary.render_latencies_ms.push(lat);
+    summary.shown.push(if asset.is_empty() { format!("card:{title}") } else { asset.clone() });
+    log.log(json!({"ev": "render", "chunk_id": chunk_id, "kind": "logo", "image_id": asset, "how": if resolved.is_some() { "symbol library" } else { "name card" }, "speech_to_render_ms": lat}));
+    log.log(scene_log(&scene));
+    sink.scene(&scene);
+    sink.status(&json!({"type": "outcome", "chunk_id": chunk_id, "outcome": "rendered", "image_id": if asset.is_empty() { title.clone() } else { asset.clone() }, "latency_ms": lat}));
+    push_change(changes, now / 1000, format!("{tool} {title}{}", if resolved.is_some() { "" } else { " (name card: not in the library)" }));
 }
 
 /// Put a photo on the board (a new tile, or swapping the focused photo) and log and announce it.
@@ -509,9 +648,12 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                             ops.retain(|o| !matches!(o, Op::ClearBoard { .. }));
                             dropped.push("clear_board: the board was cleared less than 6 s ago".into());
                         }
+                        attach_pictures(&engine, &canvas, &mut ops, &log);
                         let no_action: Vec<String> = ops.iter().filter_map(|o| if let Op::NoAction { reason } = o { Some(reason.clone()) } else { None }).collect();
                         let photos: Vec<(String, bool)> = ops.iter().filter_map(|o| if let Op::ShowPhoto { subject, replace } = o { Some((subject.clone(), *replace)) } else { None }).collect();
-                        let board_ops: Vec<Op> = ops.iter().filter(|o| !matches!(o, Op::NoAction { .. } | Op::ShowPhoto { .. })).cloned().collect();
+                        let logos: Vec<(String, bool)> = ops.iter().filter_map(|o| if let Op::ShowLogo { name, replace } = o { Some((name.clone(), *replace)) } else { None }).collect();
+                        let icons: Vec<(Vec<String>, bool)> = ops.iter().filter_map(|o| if let Op::ShowIcon { concept, alternatives, replace } = o { Some((std::iter::once(concept.clone()).chain(alternatives.iter().cloned()).collect(), *replace)) } else { None }).collect();
+                        let board_ops: Vec<Op> = ops.iter().filter(|o| !matches!(o, Op::NoAction { .. } | Op::ShowPhoto { .. } | Op::ShowLogo { .. } | Op::ShowIcon { .. })).cloned().collect();
                         // Ops address tiles by id, so they apply even though photos may have landed meanwhile;
                         // a clear removes only what Luna saw.
                         let applied = canvas.apply_seen(&seen, &board_ops, chunk_id);
@@ -526,7 +668,8 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                         log.log(json!({"ev": "agent", "call": call, "chunk_id": chunk_id, "source": format!("{source:?}"), "ms": ms, "error": error,
                             "ops": ops, "applied": names, "refused": refused, "no_action": no_action}));
                         sink.status(&json!({"type": "agent", "call": call, "chunk_id": chunk_id, "source": format!("{source:?}"), "ms": ms,
-                            "ops": ops.len(), "applied": names, "refused": refused, "no_action": no_action, "photos": photos.iter().map(|p| p.0.clone()).collect::<Vec<_>>()}));
+                            "ops": ops.len(), "applied": names, "refused": refused, "no_action": no_action,
+                            "photos": photos.iter().map(|p| p.0.clone()).chain(logos.iter().map(|n| format!("logo {}", n.0))).chain(icons.iter().map(|q| format!("icon {}", q.0[0]))).collect::<Vec<_>>()}));
                         for n in names {
                             push_change(&mut changes, now / 1000, n);
                         }
@@ -534,8 +677,21 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                             log.log(scene_log(&scene));
                             sink.scene(&scene);
                         }
+                        // Logos and icons are looked up by name (no embeddings, no model): instant, and they never go to generation.
+                        for (name, replace) in logos {
+                            show_symbol(&engine, &mut canvas, &*sink, &log, &mut summary, &mut changes, "show_logo", &[name], replace, call, chunk_id, heard_at);
+                        }
+                        for (queries, replace) in icons {
+                            show_symbol(&engine, &mut canvas, &*sink, &log, &mut summary, &mut changes, "show_icon", &queries, replace, call, chunk_id, heard_at);
+                        }
                         // show_photo: search the library now; a gap goes on to generation when the search lands.
                         for (subject, replace) in photos {
+                            // A symbol asked for as a photo ("Google logo"): it belongs in the symbol library.
+                            if let Some(tool) = symbol_tool(&subject) {
+                                log.log(json!({"ev": "photo_rerouted", "call": call, "subject": &subject, "to": tool}));
+                                show_symbol(&engine, &mut canvas, &*sink, &log, &mut summary, &mut changes, tool, &[subject], false, call, chunk_id, heard_at);
+                                continue;
+                            }
                             // The same subject asked for again within 25 s ("planet Earth" then "planet Earth from
                             // space") is the same picture. A replace is a different request.
                             if !replace && recent_photos.iter().any(|(s, t): &(String, Instant)| t.elapsed() < Duration::from_secs(25) && similar(s, &subject)) {
