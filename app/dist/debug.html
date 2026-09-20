@@ -86,12 +86,13 @@
         $('curr').textContent = s.text;
         if (s.final) add('final', '▪ ' + s.text);
         break;
-      case 'decide':
-        add('decide', `#${s.chunk_id} ${SRC[s.source] || s.source}: ${s.action} p=${s.p.toFixed(2)} (${s.ms} ms)`, true);
+      case 'agent': {
+        const did = (s.applied || []).concat((s.photos || []).map(p => 'show_photo ' + p));
+        const why = (s.no_action && s.no_action.length) ? ' — nothing: ' + s.no_action.join('; ') : '';
+        const bad = (s.refused && s.refused.length) ? '  ✗ ' + s.refused.join('; ') : '';
+        add('decide', `#${s.chunk_id} Luna${s.source === 'Rules' ? ' (offline rules)' : ''} ${s.ms} ms: ${did.length ? did.join(', ') : 'no change'}${why}${bad}`, !did.length);
         break;
-      case 'search':
-        add('search', `#${s.chunk_id} ${JSON.stringify(s.phrases)} → ${s.best ?? '—'} ${s.score?.toFixed(3) ?? ''} (query ${s.query_ms} ms${s.fallback ? ', local' : ''}, search ${s.search_ms} ms)`, true);
-        break;
+      }
       case 'outcome':
         if (s.outcome === 'rendered') {
           nchg++; $('nchg').textContent = nchg;

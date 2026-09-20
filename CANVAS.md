@@ -3,23 +3,24 @@
 User decisions: **library images + annotations**, **evolving board** (≈1–4 elements that build up and
 regroup), **fast gate + agent** (today's ~1 s path puts the image up; an agent refines layout 1–2 s later),
 **model bake-off** (OpenRouter tool calling, model-agnostic; pick Claude Haiku 4.5 vs Gemini Flash-Lite on
-real timings once the key exists).
+real timings once the key exists). *The "fast gate + agent" split was replaced by one decision-maker on
+2026-09-19 (Flow, below); the model is now `openai/gpt-5.6-luna`.*
 
-## Flow
+## Flow (2026-09-19 refactor: Luna decides everything)
 ```
-speech → Jev display-intent gate ‖ query → search → stage (hold/pending/newest-wins)   ← unchanged
-          │ Rendered(render|update|clear)
+speech → Whisper (partial + final phrases) → transcript
+          │ whenever Luna is idle, ≥ 3 new words, under the rate cap
           ▼
-   Canvas (Rust, crates/canvas): fast op → Scene v+1 → emit "scene"      (≈ today's latency)
-          │ (debounced ~300 ms, only if the board changed)
+   Luna (OpenRouter chat + tools) sees: whole transcript · board with ids · recent changes · newest words
+          → tool calls: show_photo / draw_chart / set_point / … / remove / clear_board / no_action
           ▼
-   Canvas agent (OpenRouter chat + tools; offline rule fallback) sees Scene + recent transcript
-          → tool calls (focus / remove / arrange / annotate / clear_annotations)
-          → validated ops applied iff scene.version unchanged → Scene v+2 → emit "scene"
+   Rust: guards (quote for destructive ops, spoken numbers) → Canvas ops by id → Scene v+1 → emit "scene"
+          show_photo → CLIP search of the library → (nothing?) image generation → Canvas render → "scene"
 ```
-- The fast path never waits for the agent; a stale agent answer (scene changed meanwhile) is dropped.
 - The web view renders the whole Scene each time; elements animate between rects (CSS transitions),
   annotations are an SVG overlay. Rust owns all state.
+- There is no separate "fast path": a photo is a `show_photo` request that Luna makes and Rust fulfils. The old
+  Jev gate, the phrase model and the stage's hold/confirm rules were removed (see TRIGGERS.md).
 
 ## Scene
 - `Element { id, image_id, caption, rect (0..1), z, focus }` — ≤ 4 images (oldest evicted).
@@ -27,13 +28,12 @@ speech → Jev display-intent gate ‖ query → search → stage (hold/pending/
 - `layout`: auto | hero | compare | grid — the layout engine turns (elements, layout, focus) into rects.
   auto: 1 → full; 2 → side by side; 3 → hero + 2; 4 → 2×2. hero: focus big, others stacked; compare: 2 up.
 
-## Fast-path mapping (deterministic, no LLM)
-- render → add image, focus it, layout auto (evict oldest past 4)
-- update → replace the focused image in place (keeps position)
-- clear → empty the board (and annotations)
-
-## Agent tools (validated; unknown ids ignored)
-- `focus(id)`, `remove(id)`, `arrange(layout)`, `annotate(kind, targets, label?)`, `clear_annotations()`
+## Board operations (validated; unknown ids or labels are refused and logged)
+- Photos: `render` adds a tile and focuses it (oldest evicted past 4), `update` replaces the focused photo in place
+  (for `show_photo` mode `replace`); `clear` empties the board.
+- Agent ops address tiles by id (`e1`), diagram nodes by id or label (`n2` / "Build"), chart points by label.
+  Because they are id-addressed they apply even if the board changed while Luna was thinking; `clear_board`
+  clears only the tiles Luna saw. `Canvas::take_notes()` returns why an op was refused.
 Offline rules (no key): "compare/versus/side by side" → compare; "focus on/this one/zoom" → focus latest;
 "notice/look at the/see how" → highlight latest; "let's move on/next topic/new section" → clear board.
 
@@ -41,21 +41,16 @@ Offline rules (no key): "compare/versus/side by side" → compare; "focus on/thi
 `RenderEvent` stays (logs, eval, replay). New `Scene` is emitted alongside to the web view.
 
 ## Live diagrams and charts (2026-09-19, user choice: "live diagrams" + "charts from speech")
-- Tiles are `kind: image | diagram | chart` (`Element.diagram` / `Element.chart`). Images still come from the
-  fast path; diagrams and charts only from the agent.
-- Agent tools (10 total): `draw_diagram(layout: flow|cycle|hub|timeline, title?, nodes[{label, icon?, note?}],
-  edges?[{from, to, label?}])`, `extend_diagram(id, nodes, edges?)`, `draw_chart(kind: bar|line|pie|stat, title?,
-  unit?, points[{label, value}])`, `update_chart(id, kind?, title?, points)` (full data set, replaces).
+- Tiles are `kind: image | diagram | chart`. Photos come from `show_photo`; diagrams and charts from Luna's
+  tools (full list and rules: TRIGGERS.md, "How each decision is made"). Charts are corrected with `set_point`
+  (one value), grown with `add_point`, trimmed with `remove_point`; diagrams with `add_nodes`, `update_node`,
+  `remove_node`, `add_edge`, `remove_edge`. There is no whole-data-set `update_chart` tool any more: a model that
+  sent only the changed point used to wipe the rest of the chart.
 - Canvas rules: omitted edges = chain (flow/timeline), chain + closing edge (cycle), spokes (hub); a redraw
   sharing ≥ half the nodes of a diagram on the board replaces it in place; same chart title → replace data;
-  a stat with ≥ 3 values becomes bars; ≤ 8 nodes / points; additive ops apply even if the board changed
-  while the agent was thinking (layout ops still need the version to match).
-- Triggers: `has_graphic_cue` (digits, number words, "first/then/finally", "process", "cycle", "grew"…) in new
-  words → agent call when the sentence completes (final chunk or Whisper closes it with . ? !). The agent sees
-  the last 5 finished phrases + the newest speech + the board (incl. node labels / chart points).
-- Code-level guards (prompt rules weren't reliable): chart values must be numbers actually spoken (digits or
-  words, `spoken_numbers`) or already on the board — drops invented remainders; `clear_board` only when the
-  newest words close a section (`has_section_cue`).
+  a stat with ≥ 2 values becomes bars; ≤ 8 nodes / points; node ids are never reused after a removal.
+- Guards: chart values must be numbers actually spoken (or already on the board); destructive ops need a `quote`
+  found in the newest words.
 - Renderer: `app/dist/graphics.js`, SVG per tile, sized to the tile's final px; only new nodes / edges / bars /
   points animate (per-tile `seen` set). Browser preview without Tauri: serve `app/dist`, call `__scene(scene)`.
 - Real-model replay (fixtures/audio/graphics-talk.wav, Haiku 4.5): users 2K → 15K → 40K as bars, pie
@@ -75,8 +70,7 @@ Offline rules (no key): "compare/versus/side by side" → compare; "focus on/thi
   `demo.photos() / demo.charts() / demo.diagrams() / demo.board() / demo.full('pie')`; `?theme=slate` for the old look.
 
 
-## Routing (2026-09-19)
-Jev decides the kind of visual, not keyword lists: `photo | photo_update | chart | diagram | board | clear | none`
-(one choice, alongside the intent probability, in the same ~212 ms call). The agent is called only when Jev asks
-for chart/diagram/board, and it receives `needs: "chart"|"diagram"|"board"` in its user message. The photo path
-runs only on `photo`/`photo_update`. Keyword triggers remain for the offline path.
+## Routing
+There is none: Luna is called on the newest words and chooses the tool. (Until 2026-09-19 Jev routed each
+sentence to `photo | photo_update | chart | diagram | board | clear | none`; it had no route for "edit what is on
+screen", so value corrections never reached the agent — 0 of 9 phrasings, see `probes/luna/BASELINE.md`.)

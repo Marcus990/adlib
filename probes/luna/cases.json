@@ -1,0 +1,1743 @@
+[
+ {
+  "id": "chart-correct-explicit",
+  "group": "chart-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Let's look at our growth this year.",
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "Actually, let's correct March from seventy to eighty.",
+  "expect": {
+   "elements": 1,
+   "charts": {
+    "e1": {
+     "points": {
+      "Jan": 40,
+      "Feb": 55,
+      "Mar": 80
+     },
+     "kind": "bar"
+    }
+   }
+  }
+ },
+ {
+  "id": "chart-correct-sorry",
+  "group": "chart-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Let's look at our growth this year.",
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "Sorry, March was eighty.",
+  "expect": {
+   "elements": 1,
+   "charts": {
+    "e1": {
+     "points": {
+      "Jan": 40,
+      "Feb": 55,
+      "Mar": 80
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "chart-correct-i-meant",
+  "group": "chart-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Let's look at our growth this year.",
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "I meant to say February was sixty, not fifty five.",
+  "expect": {
+   "elements": 1,
+   "charts": {
+    "e1": {
+     "points": {
+      "Jan": 40,
+      "Feb": 60,
+      "Mar": 70
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "chart-correct-make-that",
+  "group": "chart-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Let's look at our growth this year.",
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "Make that March ninety.",
+  "expect": {
+   "elements": 1,
+   "charts": {
+    "e1": {
+     "points": {
+      "Jan": 40,
+      "Feb": 55,
+      "Mar": 90
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "chart-correct-not-a-but-b",
+  "group": "chart-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Let's look at our growth this year.",
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "It's not forty in January, it's forty five.",
+  "expect": {
+   "elements": 1,
+   "charts": {
+    "e1": {
+     "points": {
+      "Jan": 45,
+      "Feb": 55,
+      "Mar": 70
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "chart-correct-digits",
+  "group": "chart-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Let's look at our growth this year.",
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "Correction: Feb is 62.",
+  "expect": {
+   "elements": 1,
+   "charts": {
+    "e1": {
+     "points": {
+      "Jan": 40,
+      "Feb": 62,
+      "Mar": 70
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "chart-correct-ambiguous-target",
+  "group": "chart-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Let's look at our growth this year.",
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "Sorry, that should be seventy five.",
+  "expect": {
+   "elements": 1,
+   "charts": {
+    "e1": {
+     "points": {
+      "Jan": 40,
+      "Feb": 55,
+      "Mar": 75
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "chart-correct-late-in-talk",
+  "group": "chart-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Welcome, everyone.",
+   "Today I want to talk about how the product has grown.",
+   "We had forty users in January, fifty five in February, and seventy in March.",
+   "That growth has been steady.",
+   "We also hired a lot of people.",
+   "The team is now spread across three offices.",
+   "Support tickets have gone down.",
+   "Customers seem happier.",
+   "Anyway, that's the overview."
+  ],
+  "newest": "Going back to the users chart, January was actually forty five.",
+  "expect": {
+   "elements": 1,
+   "charts": {
+    "e1": {
+     "points": {
+      "Jan": 45,
+      "Feb": 55,
+      "Mar": 70
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "chart-firm-up-misheard",
+  "group": "chart-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 15
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "We had forty users in January.",
+   "And in February we had fifteen."
+  ],
+  "newest": "And in February we had fifty users.",
+  "expect": {
+   "elements": 1,
+   "charts": {
+    "e1": {
+     "points": {
+      "Jan": 40,
+      "Feb": 50
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "chart-add-point",
+  "group": "chart-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Let's look at our growth this year.",
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "And in April we hit ninety five.",
+  "expect": {
+   "elements": 1,
+   "charts": {
+    "e1": {
+     "values": [
+      40,
+      55,
+      70,
+      95
+     ]
+    }
+   }
+  }
+ },
+ {
+  "id": "chart-stat-grows-to-bar",
+  "group": "chart-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "stat",
+     "title": "Revenue",
+     "unit": null,
+     "points": [
+      {
+       "label": "Last year",
+       "value": 15000
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Last year revenue was fifteen thousand dollars."
+  ],
+  "newest": "And the year before that it was twelve thousand.",
+  "expect": {
+   "elements": 1,
+   "charts": {
+    "e1": {
+     "values": [
+      12000,
+      15000
+     ],
+     "kind": "bar"
+    }
+   }
+  }
+ },
+ {
+  "id": "chart-remove-point-drop",
+  "group": "chart-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Let's look at our growth this year.",
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "Let's drop February from the chart.",
+  "expect": {
+   "elements": 1,
+   "charts": {
+    "e1": {
+     "points": {
+      "Jan": 40,
+      "Mar": 70
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "chart-remove-point-take-out",
+  "group": "chart-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Let's look at our growth this year.",
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "Actually, take March out, we don't have that data yet.",
+  "expect": {
+   "elements": 1,
+   "charts": {
+    "e1": {
+     "points": {
+      "Jan": 40,
+      "Feb": 55
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "chart-retitle",
+  "group": "chart-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Let's look at our growth this year.",
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "Let's call this chart monthly signups.",
+  "expect": {
+   "elements": 1,
+   "charts": {
+    "e1": {
+     "title_contains": "signups",
+     "points": {
+      "Jan": 40,
+      "Feb": 55,
+      "Mar": 70
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "chart-change-to-line",
+  "group": "chart-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Let's look at our growth this year.",
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "Can we see that as a line chart instead?",
+  "expect": {
+   "elements": 1,
+   "charts": {
+    "e1": {
+     "kind": "line",
+     "points": {
+      "Jan": 40,
+      "Feb": 55,
+      "Mar": 70
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "chart-two-correct-recent",
+  "group": "chart-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   },
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Revenue",
+     "unit": "$M",
+     "points": [
+      {
+       "label": "Jan",
+       "value": 10
+      },
+      {
+       "label": "Feb",
+       "value": 12
+      },
+      {
+       "label": "Mar",
+       "value": 15
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "We had forty users in January, fifty five in February, and seventy in March.",
+   "Revenue went from ten million, to twelve million, to fifteen million."
+  ],
+  "newest": "Sorry, March revenue was eighteen million.",
+  "expect": {
+   "elements": 2,
+   "charts": {
+    "e1": {
+     "points": {
+      "Jan": 40,
+      "Feb": 55,
+      "Mar": 70
+     }
+    },
+    "e2": {
+     "points": {
+      "Jan": 10,
+      "Feb": 12,
+      "Mar": 18
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "chart-two-correct-named",
+  "group": "chart-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   },
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Revenue",
+     "unit": "$M",
+     "points": [
+      {
+       "label": "Jan",
+       "value": 10
+      },
+      {
+       "label": "Feb",
+       "value": 12
+      },
+      {
+       "label": "Mar",
+       "value": 15
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "We had forty users in January, fifty five in February, and seventy in March.",
+   "Revenue went from ten million, to twelve million, to fifteen million."
+  ],
+  "newest": "Correction to the users chart: February should be sixty.",
+  "expect": {
+   "elements": 2,
+   "charts": {
+    "e1": {
+     "points": {
+      "Jan": 40,
+      "Feb": 60,
+      "Mar": 70
+     }
+    },
+    "e2": {
+     "points": {
+      "Jan": 10,
+      "Feb": 12,
+      "Mar": 15
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "chart-new-pie-beside-bar",
+  "group": "chart-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "Sixty percent are students, thirty percent teachers, and ten percent parents.",
+  "expect": {
+   "elements": 2,
+   "charts": {
+    "e1": {
+     "points": {
+      "Jan": 40,
+      "Feb": 55,
+      "Mar": 70
+     }
+    },
+    "e2": {
+     "kind": "pie"
+    }
+   }
+  }
+ },
+ {
+  "id": "guard-no-redraw-after-mention",
+  "group": "chart-guard",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "We had forty users in January, fifty five in February, and seventy in March.",
+   "That growth has been steady."
+  ],
+  "newest": "Anyway, that's a great start for us.",
+  "expect": {
+   "no_change": true
+  }
+ },
+ {
+  "id": "guard-unrelated-number",
+  "group": "chart-guard",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Let's look at our growth this year.",
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "Our office has forty desks.",
+  "expect": {
+   "no_change": true
+  }
+ },
+ {
+  "id": "guard-correction-without-number",
+  "group": "chart-guard",
+  "board": [
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Let's look at our growth this year.",
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "Let's fix March, it was much higher.",
+  "expect": {
+   "no_change": true
+  }
+ },
+ {
+  "id": "diagram-add-step",
+  "group": "diagram-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_diagram",
+     "layout": "flow",
+     "title": "Deploy pipeline",
+     "nodes": [
+      {
+       "label": "Commit"
+      },
+      {
+       "label": "Build"
+      },
+      {
+       "label": "Test"
+      },
+      {
+       "label": "Deploy"
+      }
+     ],
+     "edges": []
+    }
+   }
+  ],
+  "history": [
+   "Our pipeline has four steps: commit, build, test and deploy."
+  ],
+  "newest": "And after deploy we monitor it.",
+  "expect": {
+   "elements": 1,
+   "diagrams": {
+    "e1": {
+     "nodes_include": [
+      "Commit",
+      "Build",
+      "Test",
+      "Deploy"
+     ],
+     "node_count": 5
+    }
+   }
+  }
+ },
+ {
+  "id": "diagram-rename-node",
+  "group": "diagram-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_diagram",
+     "layout": "flow",
+     "title": "Deploy pipeline",
+     "nodes": [
+      {
+       "label": "Commit"
+      },
+      {
+       "label": "Build"
+      },
+      {
+       "label": "Test"
+      },
+      {
+       "label": "Deploy"
+      }
+     ],
+     "edges": []
+    }
+   }
+  ],
+  "history": [
+   "Our pipeline has four steps: commit, build, test and deploy."
+  ],
+  "newest": "Actually, call the second step compile, not build.",
+  "expect": {
+   "elements": 1,
+   "diagrams": {
+    "e1": {
+     "nodes_include": [
+      "Compile",
+      "Commit",
+      "Test",
+      "Deploy"
+     ],
+     "nodes_exclude": [
+      "Build"
+     ],
+     "node_count": 4
+    }
+   }
+  }
+ },
+ {
+  "id": "diagram-remove-node",
+  "group": "diagram-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_diagram",
+     "layout": "flow",
+     "title": "Deploy pipeline",
+     "nodes": [
+      {
+       "label": "Commit"
+      },
+      {
+       "label": "Build"
+      },
+      {
+       "label": "Test"
+      },
+      {
+       "label": "Deploy"
+      }
+     ],
+     "edges": []
+    }
+   }
+  ],
+  "history": [
+   "Our pipeline has four steps: commit, build, test and deploy."
+  ],
+  "newest": "Let's take the test step out of the diagram.",
+  "expect": {
+   "elements": 1,
+   "diagrams": {
+    "e1": {
+     "nodes_include": [
+      "Commit",
+      "Build",
+      "Deploy"
+     ],
+     "nodes_exclude": [
+      "Test"
+     ],
+     "node_count": 3
+    }
+   }
+  }
+ },
+ {
+  "id": "diagram-firm-up-misheard",
+  "group": "diagram-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_diagram",
+     "layout": "flow",
+     "title": "Deploy pipeline",
+     "nodes": [
+      {
+       "label": "Commit"
+      },
+      {
+       "label": "Bill"
+      },
+      {
+       "label": "Test"
+      },
+      {
+       "label": "Deploy"
+      }
+     ],
+     "edges": []
+    }
+   }
+  ],
+  "history": [
+   "We commit, bill, test and deploy."
+  ],
+  "newest": "So we commit, build, test and deploy.",
+  "expect": {
+   "elements": 1,
+   "diagrams": {
+    "e1": {
+     "nodes_include": [
+      "Commit",
+      "Build",
+      "Test",
+      "Deploy"
+     ],
+     "nodes_exclude": [
+      "Bill"
+     ],
+     "node_count": 4
+    }
+   }
+  }
+ },
+ {
+  "id": "diagram-recap-not-duplicate",
+  "group": "diagram-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_diagram",
+     "layout": "flow",
+     "title": "Deploy pipeline",
+     "nodes": [
+      {
+       "label": "Commit"
+      },
+      {
+       "label": "Build"
+      },
+      {
+       "label": "Test"
+      },
+      {
+       "label": "Deploy"
+      }
+     ],
+     "edges": []
+    }
+   }
+  ],
+  "history": [
+   "Our pipeline has four steps."
+  ],
+  "newest": "So to recap, we commit, build, test, and deploy.",
+  "expect": {
+   "elements": 1,
+   "diagrams": {
+    "e1": {
+     "nodes_include": [
+      "Commit",
+      "Build",
+      "Test",
+      "Deploy"
+     ],
+     "node_count": 4
+    }
+   }
+  }
+ },
+ {
+  "id": "diagram-rework-as-cycle",
+  "group": "diagram-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_diagram",
+     "layout": "flow",
+     "title": "Deploy pipeline",
+     "nodes": [
+      {
+       "label": "Commit"
+      },
+      {
+       "label": "Build"
+      },
+      {
+       "label": "Test"
+      },
+      {
+       "label": "Deploy"
+      }
+     ],
+     "edges": []
+    }
+   }
+  ],
+  "history": [
+   "Our pipeline has four steps: commit, build, test and deploy."
+  ],
+  "newest": "It's really a loop, the whole thing repeats after deploy.",
+  "expect": {
+   "elements": 1,
+   "diagrams": {
+    "e1": {
+     "layout": "cycle"
+    }
+   }
+  }
+ },
+ {
+  "id": "diagram-guard-no-redraw",
+  "group": "diagram-edit",
+  "board": [
+   {
+    "op": {
+     "op": "draw_diagram",
+     "layout": "flow",
+     "title": "Deploy pipeline",
+     "nodes": [
+      {
+       "label": "Commit"
+      },
+      {
+       "label": "Build"
+      },
+      {
+       "label": "Test"
+      },
+      {
+       "label": "Deploy"
+      }
+     ],
+     "edges": []
+    }
+   }
+  ],
+  "history": [
+   "Our pipeline has four steps: commit, build, test and deploy."
+  ],
+  "newest": "That pipeline is really important to us.",
+  "expect": {
+   "no_change": true
+  }
+ },
+ {
+  "id": "board-remove-photo",
+  "group": "board",
+  "board": [
+   {
+    "photo": "eagle"
+   },
+   {
+    "photo": "owl"
+   },
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Here is an eagle.",
+   "And here is an owl.",
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "Take the eagle away.",
+  "expect": {
+   "absent": [
+    "e1"
+   ],
+   "present": [
+    "e2",
+    "e3"
+   ],
+   "elements": 2
+  }
+ },
+ {
+  "id": "board-remove-chart",
+  "group": "board",
+  "board": [
+   {
+    "photo": "eagle"
+   },
+   {
+    "photo": "owl"
+   },
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Here is an eagle.",
+   "And here is an owl.",
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "Get rid of the chart.",
+  "expect": {
+   "absent": [
+    "e3"
+   ],
+   "present": [
+    "e1",
+    "e2"
+   ],
+   "elements": 2
+  }
+ },
+ {
+  "id": "board-guard-no-tidying",
+  "group": "board",
+  "board": [
+   {
+    "photo": "eagle"
+   },
+   {
+    "photo": "owl"
+   },
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Here is an eagle.",
+   "And here is an owl.",
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "Owls are nocturnal hunters.",
+  "expect": {
+   "no_change": true
+  }
+ },
+ {
+  "id": "board-clear-explicit",
+  "group": "board",
+  "board": [
+   {
+    "photo": "eagle"
+   },
+   {
+    "photo": "owl"
+   },
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Here is an eagle.",
+   "And here is an owl.",
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "Okay, let's move on to the next topic.",
+  "expect": {
+   "cleared": true
+  }
+ },
+ {
+  "id": "board-clear-repeated",
+  "group": "board",
+  "board": [
+   {
+    "photo": "eagle"
+   },
+   {
+    "photo": "owl"
+   },
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Here is an eagle.",
+   "And here is an owl.",
+   "We had forty users in January, fifty five in February, and seventy in March.",
+   "Let's move on."
+  ],
+  "newest": "Let's move on to something new.",
+  "expect": {
+   "cleared": true
+  }
+ },
+ {
+  "id": "board-clear-already-empty",
+  "group": "board",
+  "board": [],
+  "history": [
+   "Let's move on."
+  ],
+  "newest": "Let's move on.",
+  "expect": {
+   "no_change": true,
+   "elements": 0
+  }
+ },
+ {
+  "id": "board-guard-move-on-figure-of-speech",
+  "group": "board",
+  "board": [
+   {
+    "photo": "eagle"
+   },
+   {
+    "photo": "owl"
+   },
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Here is an eagle.",
+   "And here is an owl.",
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "Many people move on from Java after a few years.",
+  "expect": {
+   "no_change": true
+  }
+ },
+ {
+  "id": "board-arrange-compare",
+  "group": "board",
+  "board": [
+   {
+    "photo": "eagle"
+   },
+   {
+    "photo": "owl"
+   }
+  ],
+  "history": [
+   "Here is an eagle.",
+   "And here is an owl."
+  ],
+  "newest": "Let's compare them side by side.",
+  "expect": {
+   "layout": "compare",
+   "elements": 2
+  }
+ },
+ {
+  "id": "board-focus-zoom",
+  "group": "board",
+  "board": [
+   {
+    "photo": "eagle"
+   },
+   {
+    "photo": "owl"
+   },
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Here is an eagle.",
+   "And here is an owl.",
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "Let's zoom in on the owl.",
+  "expect": {
+   "focus": "e2",
+   "elements": 3
+  }
+ },
+ {
+  "id": "board-annotate",
+  "group": "board",
+  "board": [
+   {
+    "photo": "eagle"
+   },
+   {
+    "photo": "owl"
+   },
+   {
+    "op": {
+     "op": "draw_chart",
+     "kind": "bar",
+     "title": "Users",
+     "unit": null,
+     "points": [
+      {
+       "label": "Jan",
+       "value": 40
+      },
+      {
+       "label": "Feb",
+       "value": 55
+      },
+      {
+       "label": "Mar",
+       "value": 70
+      }
+     ]
+    }
+   }
+  ],
+  "history": [
+   "Here is an eagle.",
+   "And here is an owl.",
+   "We had forty users in January, fifty five in February, and seventy in March."
+  ],
+  "newest": "Pay attention to the owl.",
+  "expect": {
+   "annotated": [
+    "e2"
+   ],
+   "elements": 3
+  }
+ },
+ {
+  "id": "photo-new",
+  "group": "photo",
+  "board": [],
+  "history": [],
+  "newest": "Here's what a golden eagle looks like.",
+  "expect": {
+   "photo": {
+    "subject_contains": "eagle",
+    "mode": "add"
+   }
+  }
+ },
+ {
+  "id": "photo-figure-of-speech",
+  "group": "photo",
+  "board": [],
+  "history": [],
+  "newest": "He watches everything like an eagle.",
+  "expect": {
+   "no_photo": true
+  }
+ },
+ {
+  "id": "photo-replace-variant",
+  "group": "photo",
+  "board": [
+   {
+    "photo": "red rose"
+   }
+  ],
+  "history": [
+   "Here is a red rose."
+  ],
+  "newest": "Actually, show me the white one.",
+  "expect": {
+   "photo": {
+    "subject_contains": "white rose",
+    "mode": "replace"
+   }
+  }
+ },
+ {
+  "id": "photo-already-shown",
+  "group": "photo",
+  "board": [
+   {
+    "photo": "eagle"
+   }
+  ],
+  "history": [
+   "Here is an eagle."
+  ],
+  "newest": "The eagle has amazing eyesight.",
+  "expect": {
+   "no_photo": true
+  }
+ }
+]

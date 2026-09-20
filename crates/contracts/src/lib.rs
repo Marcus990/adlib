@@ -1,9 +1,5 @@
-//! Shared pipeline contracts (design doc §8, "Hour 0: contracts every agent builds against").
-//!
-//! These types are the integration boundary between the five tracks. Field names and
-//! shapes follow the design doc exactly; only derives were added (Debug/Clone/PartialEq
-//! everywhere, Deserialize where replay and logging need to read them back).
-//! Any change here must be recorded in PROGRESS.md and applied to every consumer.
+//! Shared pipeline types: what Hear emits (`Chunk`), a photo-search hit (`Match`) and what the web view is
+//! told to render (`RenderEvent`). (The Jev / phrase-model / stage types were removed with the Luna refactor.)
 
 use serde::{Deserialize, Serialize};
 
@@ -21,73 +17,6 @@ pub struct Chunk {
     pub t_start_ms: u64,
     pub t_end_ms: u64,
     pub is_final: bool,
-}
-
-/// What is on screen (or pending), including the transcript that triggered it (§7.1).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct Displayed {
-    pub image_id: Option<String>,
-    pub caption: Option<String>,
-    pub trigger_text: String,
-    pub shown_at_ms: u64,
-    /// Canvas mode: one line per tile on the board (photos, charts with values, diagrams with steps),
-    /// so Jev can tell when the talk is already illustrated. `caption` stays the focused photo.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub on_screen: Vec<String>,
-}
-
-// ---- Branch 1: Jev (whether) ----
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum Action {
-    #[default]
-    NoChange,
-    NewRender,
-    Update,
-    Clear,
-}
-
-/// Which path owns this sentence. Jev routes; the pipeline dispatches. One sentence, one visual — before
-/// this, a sentence with numbers drew a chart *and* generated pictures of "first year" and "200 users".
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum Visual {
-    /// A concrete thing to look at → library photo, or generated when the library has none.
-    Photo,
-    /// Quantities → the canvas agent draws a chart.
-    Chart,
-    /// Steps, cycles, parts, cause and effect → the canvas agent draws a diagram.
-    Diagram,
-    /// About what is already on screen: compare, zoom, point at it, clear, remove.
-    Board,
-    #[default]
-    None,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct ChangeDecision {
-    pub chunk_id: u64,
-    pub seq: u64,
-    pub action: Action,
-    pub p: f32,
-    /// Jev's routing answer and its probability (0 when Jev was unavailable).
-    #[serde(default)]
-    pub visual: Visual,
-    #[serde(default)]
-    pub p_visual: f32,
-}
-
-// ---- Branch 2: query model + search (what) ----
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct QueryResult {
-    pub chunk_id: u64,
-    pub phrases: Vec<String>,
-    pub from_fallback: bool,
-    /// The speech named one library subject outright, so the phrase model was skipped (≈0.45 s saved).
-    #[serde(default)]
-    pub named: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -129,12 +58,6 @@ pub struct RenderEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn action_serializes_snake_case() {
-        assert_eq!(serde_json::to_string(&Action::NewRender).unwrap(), "\"new_render\"");
-        assert_eq!(serde_json::from_str::<Action>("\"no_change\"").unwrap(), Action::NoChange);
-    }
 
     #[test]
     fn render_event_json_shape() {

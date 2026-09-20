@@ -10,8 +10,6 @@ ls-hear = { path = "../hear" }
 ls-search = { path = "../search" }
 ls-query = { path = "../query" }
 ls-gen = { path = "../gen" }
-ls-decide = { path = "../decide" }
-ls-stage = { path = "../stage" }
 ls-canvas = { path = "../canvas" }
 ls-agent = { path = "../agent" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }

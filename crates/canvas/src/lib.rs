@@ -173,27 +173,53 @@ pub struct Scene {
     pub chunk_id: u64,
 }
 
-/// One validated agent operation (tool call).
+/// One validated agent operation (tool call). Ops address things by id (tiles `e1`, diagram nodes `n1`) and
+/// chart points by label. Destructive ops carry the `quote` the model says asked for them; the agent layer
+/// checks it against the newest speech.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
     Focus { id: String },
-    Remove { id: String },
+    Remove { id: String, #[serde(default)] quote: Option<String> },
     Arrange { layout: Layout },
     Annotate { kind: AnnotationKind, targets: Vec<String>, label: Option<String> },
     ClearAnnotations,
-    ClearBoard,
+    ClearBoard { #[serde(default)] quote: Option<String> },
     DrawDiagram { layout: DiagramLayout, title: Option<String>, nodes: Vec<NodeSpec>, edges: Vec<EdgeSpec> },
-    ExtendDiagram { id: String, nodes: Vec<NodeSpec>, edges: Vec<EdgeSpec> },
+    AddNodes { id: String, nodes: Vec<NodeSpec>, edges: Vec<EdgeSpec> },
+    UpdateNode { id: String, node: String, label: Option<String>, note: Option<String> },
+    RemoveNode { id: String, node: String, #[serde(default)] quote: Option<String> },
+    AddEdge { id: String, from: String, to: String, label: Option<String> },
+    RemoveEdge { id: String, from: String, to: String },
     DrawChart { kind: ChartKind, title: Option<String>, unit: Option<String>, points: Vec<Point> },
+    /// Replace a chart's whole data set. Not offered to the model (it patches with the point ops); kept for setup and tests.
     UpdateChart { id: String, kind: Option<ChartKind>, title: Option<String>, points: Vec<Point> },
+    SetPoint { id: String, label: String, value: f64 },
+    AddPoint { id: String, label: String, value: f64 },
+    RemovePoint { id: String, label: String, #[serde(default)] quote: Option<String> },
+    SetChart { id: String, kind: Option<ChartKind>, title: Option<String>, unit: Option<String> },
+    /// A photo request. The canvas does not place photos itself: the pipeline searches the library
+    /// (or draws one) and renders the result.
+    ShowPhoto { subject: String, replace: bool },
+    /// The model chose to do nothing, and why (logged).
+    NoAction { reason: String },
 }
 
 impl Op {
-    /// Content-adding ops don't depend on the board's arrangement, so they still apply when the fast
-    /// path changed the board while the agent was thinking (a 2 s chart must not be thrown away).
-    pub fn is_additive(&self) -> bool {
-        matches!(self, Op::DrawDiagram { .. } | Op::ExtendDiagram { .. } | Op::DrawChart { .. } | Op::UpdateChart { .. })
+    /// Changes what a chart or diagram *shows* (as opposed to layout, focus, photos or removals).
+    pub fn is_graphic(&self) -> bool {
+        matches!(
+            self,
+            Op::DrawDiagram { .. } | Op::AddNodes { .. } | Op::UpdateNode { .. } | Op::RemoveNode { .. } | Op::AddEdge { .. } | Op::RemoveEdge { .. }
+                | Op::DrawChart { .. } | Op::UpdateChart { .. } | Op::SetPoint { .. } | Op::AddPoint { .. } | Op::RemovePoint { .. } | Op::SetChart { .. }
+        )
+    }
+    /// The words the model quoted as its authority for a destructive op, if this op needs one.
+    pub fn quote(&self) -> Option<Option<&str>> {
+        match self {
+            Op::Remove { quote, .. } | Op::ClearBoard { quote } | Op::RemoveNode { quote, .. } | Op::RemovePoint { quote, .. } => Some(quote.as_deref()),
+            _ => None,
+        }
     }
 }
 
@@ -203,6 +229,20 @@ fn short(s: &str, n: usize) -> String {
 
 fn same(a: &str, b: &str) -> bool {
     a.trim().eq_ignore_ascii_case(b.trim())
+}
+
+/// Index of the point a spoken label means: exact (case-insensitive), then letters-and-digits only, then one
+/// label a prefix of the other ("Mar" ↔ "March"), then one contained in the other. `None` if nothing is close.
+fn find_point(points: &[Point], label: &str) -> Option<usize> {
+    let norm = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase();
+    let want = norm(label);
+    if want.is_empty() {
+        return None;
+    }
+    let pass = |f: &dyn Fn(&str, &str) -> bool| points.iter().position(|p| f(&norm(&p.label), &want));
+    pass(&|have, want| have == want)
+        .or_else(|| pass(&|have, want| want.len() >= 3 && have.len() >= 3 && (have.starts_with(want) || want.starts_with(have))))
+        .or_else(|| pass(&|have, want| want.len() >= 3 && have.len() >= 3 && (have.contains(want) || want.contains(have))))
 }
 
 fn clean_nodes(specs: &[NodeSpec], existing: &[Node]) -> Vec<(String, Option<String>, Option<String>)> {
@@ -250,7 +290,8 @@ impl Diagram {
             if self.nodes.len() >= MAX_NODES {
                 break;
             }
-            let id = format!("n{}", self.nodes.len() + 1);
+            let next = self.nodes.iter().filter_map(|n| n.id.strip_prefix('n').and_then(|d| d.parse::<usize>().ok())).max().unwrap_or(0) + 1;
+            let id = format!("n{next}");
             self.nodes.push(Node { id: id.clone(), label, icon, note });
             added.push(id);
         }
@@ -301,6 +342,10 @@ impl Diagram {
 pub struct Canvas {
     scene: Scene,
     next_id: u64,
+    /// Why ops were refused or did nothing (missing target, no such point, chart full…). Drained by [`Canvas::take_notes`].
+    notes: Vec<String>,
+    /// Names of the ops the last `apply` changed something with.
+    applied: Vec<String>,
 }
 
 impl Canvas {
@@ -395,24 +440,65 @@ impl Canvas {
 
     // ---- agent path ----
 
-    /// Apply validated ops iff the scene is still at `expected_version` (else the agent reasoned
-    /// about a stale board). Returns the new scene if anything changed.
-    /// Content-adding ops (diagrams, charts) apply even when stale; see [`Op::is_additive`].
-    pub fn apply(&mut self, expected_version: u64, ops: &[Op], chunk_id: u64) -> Option<Scene> {
-        let stale = self.scene.version != expected_version;
+    /// Apply validated ops. Ops address tiles by id, so a board that changed while the agent was thinking
+    /// (a photo landed, another op applied) does not make them stale: each op applies if its target still
+    /// exists, and says why in [`Canvas::take_notes`] if not. `expected_version` is kept for callers that
+    /// only know the version; a stale `clear_board` then clears everything, use [`Canvas::apply_seen`] to
+    /// clear only what the agent saw. Returns the new scene if anything changed.
+    pub fn apply(&mut self, _expected_version: u64, ops: &[Op], chunk_id: u64) -> Option<Scene> {
+        self.apply_inner(None, ops, chunk_id)
+    }
+
+    /// Like [`Canvas::apply`], for ops decided against `seen`: a `clear_board` removes only the tiles that were
+    /// on the board then, so a photo that arrived while the agent was thinking survives the clear.
+    pub fn apply_seen(&mut self, seen: &Scene, ops: &[Op], chunk_id: u64) -> Option<Scene> {
+        self.apply_inner(Some(seen), ops, chunk_id)
+    }
+
+    /// Reasons ops were refused since the last call.
+    pub fn take_notes(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.notes)
+    }
+
+    /// Names of the ops the last `apply` / `apply_seen` actually changed something with (`set_point(e1, Mar=80)`).
+    pub fn take_applied(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.applied)
+    }
+
+    fn apply_inner(&mut self, seen: Option<&Scene>, ops: &[Op], chunk_id: u64) -> Option<Scene> {
         let mut applied = vec![];
         for op in ops {
-            if stale && !op.is_additive() {
-                continue;
-            }
-            if self.apply_one(op) {
+            let changed = match (op, seen) {
+                (Op::ClearBoard { .. }, Some(seen)) if seen.version != self.scene.version => {
+                    let before = self.scene.elements.len();
+                    self.scene.elements.retain(|e| !seen.elements.iter().any(|s| s.id == e.id));
+                    let gone: Vec<String> = seen.elements.iter().map(|e| e.id.clone()).collect();
+                    self.scene.annotations.retain(|a| !a.targets.iter().any(|t| gone.contains(t)));
+                    if self.scene.elements.is_empty() {
+                        self.scene.layout = Layout::Auto;
+                    }
+                    self.scene.elements.len() != before
+                }
+                _ => self.apply_one(op),
+            };
+            if changed {
                 applied.push(op_name(op));
             }
         }
+        self.applied = applied.clone();
         if applied.is_empty() {
             return None;
         }
         Some(self.bump(format!("agent:{}", applied.join(", ")), chunk_id))
+    }
+
+    fn miss(&mut self, why: String) -> bool {
+        self.notes.push(why);
+        false
+    }
+
+    fn chart_labels(&self, id: &str) -> String {
+        self.scene.elements.iter().find(|e| e.id == id).and_then(|e| e.chart.as_ref()).map(|c| c.points.iter().map(|p| p.label.as_str()).collect::<Vec<_>>().join(", ")).unwrap_or_default()
     }
 
     fn has(&self, id: &str) -> bool {
@@ -427,7 +513,7 @@ impl Canvas {
                 }
                 true
             }
-            Op::Remove { id } if self.has(id) => {
+            Op::Remove { id, .. } if self.has(id) => {
                 self.scene.elements.retain(|e| &e.id != id);
                 self.scene.annotations.retain(|a| !a.targets.contains(id));
                 if !self.scene.elements.iter().any(|e| e.focus) {
@@ -462,7 +548,7 @@ impl Canvas {
                 self.scene.annotations.clear();
                 true
             }
-            Op::ClearBoard if !self.scene.elements.is_empty() => {
+            Op::ClearBoard { .. } if !self.scene.elements.is_empty() => {
                 self.scene.elements.clear();
                 self.scene.annotations.clear();
                 self.scene.layout = Layout::Auto;
@@ -506,8 +592,8 @@ impl Canvas {
                 }
                 true
             }
-            Op::ExtendDiagram { id, nodes, edges } => {
-                let Some(e) = self.scene.elements.iter_mut().find(|e| &e.id == id && e.diagram.is_some()) else { return false };
+            Op::AddNodes { id, nodes, edges } => {
+                let Some(e) = self.scene.elements.iter_mut().find(|e| &e.id == id && e.diagram.is_some()) else { return self.miss(format!("add_nodes: no diagram {id}")) };
                 let d = e.diagram.as_mut().unwrap();
                 let before = d.nodes.len();
                 let added = d.add_nodes(nodes);
@@ -585,6 +671,173 @@ impl Canvas {
                 }
                 changed
             }
+            Op::SetPoint { id, label, value } => {
+                let value = *value;
+                let outcome = match self.scene.elements.iter_mut().find(|e| &e.id == id).and_then(|e| e.chart.as_mut()) {
+                    None => Err(format!("set_point: no chart {id}")),
+                    Some(_) if !value.is_finite() => Err(format!("set_point: {value} is not a number")),
+                    Some(c) => match find_point(&c.points, label) {
+                        None => Err(String::new()),
+                        Some(i) if c.points[i].value == value => Ok(false),
+                        Some(i) => {
+                            c.points[i].value = value;
+                            Ok(true)
+                        }
+                    },
+                };
+                match outcome {
+                    Ok(changed) => {
+                        if changed {
+                            self.focus_only(id);
+                        }
+                        changed
+                    }
+                    Err(why) if why.is_empty() => {
+                        let have = self.chart_labels(id);
+                        self.miss(format!("set_point: no point like {label:?} in {id} (has: {have})"))
+                    }
+                    Err(why) => self.miss(why),
+                }
+            }
+            Op::AddPoint { id, label, value } => {
+                let value = *value;
+                let label = short(label, 24);
+                let outcome = match self.scene.elements.iter_mut().find(|e| &e.id == id).and_then(|e| e.chart.as_mut()) {
+                    None => Err(format!("add_point: no chart {id}")),
+                    Some(_) if !value.is_finite() || label.is_empty() => Err(format!("add_point: bad point {label:?} {value}")),
+                    // Already there → a correction, whatever the model called it.
+                    Some(c) => match find_point(&c.points, &label) {
+                        Some(i) => {
+                            let changed = c.points[i].value != value;
+                            c.points[i].value = value;
+                            Ok(changed)
+                        }
+                        None if c.points.len() >= MAX_POINTS => Err(format!("add_point: {id} already has {MAX_POINTS} points")),
+                        None => {
+                            c.points.push(Point { label, value });
+                            c.kind = promote(c.kind, c.points.len());
+                            Ok(true)
+                        }
+                    },
+                };
+                match outcome {
+                    Ok(changed) => {
+                        if changed {
+                            self.focus_only(id);
+                        }
+                        changed
+                    }
+                    Err(why) => self.miss(why),
+                }
+            }
+            Op::RemovePoint { id, label, .. } => {
+                let outcome = match self.scene.elements.iter_mut().find(|e| &e.id == id).and_then(|e| e.chart.as_mut()) {
+                    None => Err(format!("remove_point: no chart {id}")),
+                    Some(c) => match find_point(&c.points, label) {
+                        None => Err(String::new()),
+                        Some(_) if c.points.len() <= 1 => Err(format!("remove_point: {label:?} is the last point of {id}; remove the chart instead")),
+                        Some(i) => {
+                            c.points.remove(i);
+                            Ok(())
+                        }
+                    },
+                };
+                match outcome {
+                    Ok(()) => {
+                        self.focus_only(id);
+                        true
+                    }
+                    Err(why) if why.is_empty() => {
+                        let have = self.chart_labels(id);
+                        self.miss(format!("remove_point: no point like {label:?} in {id} (has: {have})"))
+                    }
+                    Err(why) => self.miss(why),
+                }
+            }
+            Op::SetChart { id, kind, title, unit } => {
+                let Some(e) = self.scene.elements.iter_mut().find(|e| &e.id == id && e.chart.is_some()) else { return self.miss(format!("set_chart: no chart {id}")) };
+                let before = e.chart.clone();
+                let c = e.chart.as_mut().unwrap();
+                if let Some(k) = kind {
+                    c.kind = promote(*k, c.points.len());
+                }
+                if let Some(t) = title.as_deref().map(|t| short(t, 48)).filter(|t| !t.is_empty()) {
+                    c.title = Some(t.clone());
+                    e.caption = t;
+                }
+                if let Some(u) = unit.as_deref() {
+                    let u = short(u, 16);
+                    c.unit = Some(u).filter(|u| !u.is_empty());
+                }
+                let changed = e.chart != before;
+                if changed {
+                    self.focus_only(id);
+                }
+                changed
+            }
+            Op::UpdateNode { id, node, label, note } => {
+                let Some(d) = self.scene.elements.iter_mut().find(|e| &e.id == id).and_then(|e| e.diagram.as_mut()) else { return self.miss(format!("update_node: no diagram {id}")) };
+                let Some(nid) = resolve(&d.nodes, node) else { return self.miss(format!("update_node: no node {node:?} in {id}")) };
+                let taken = |d: &Diagram, l: &str| d.nodes.iter().any(|n| n.id != nid && same(&n.label, l));
+                let mut changed = false;
+                let n = d.nodes.iter().position(|n| n.id == nid).unwrap();
+                if let Some(l) = label.as_deref().map(|l| short(l, 32)).filter(|l| !l.is_empty()) {
+                    if taken(d, &l) {
+                        self.notes.push(format!("update_node: another node in {id} is already called {l:?}"));
+                    } else if d.nodes[n].label != l {
+                        d.nodes[n].label = l;
+                        changed = true;
+                    }
+                }
+                if let Some(t) = note.as_deref() {
+                    let t = Some(short(t, 24)).filter(|t| !t.is_empty());
+                    if d.nodes[n].note != t {
+                        d.nodes[n].note = t;
+                        changed = true;
+                    }
+                }
+                if changed {
+                    self.focus_only(id);
+                }
+                changed
+            }
+            Op::RemoveNode { id, node, .. } => {
+                let Some(d) = self.scene.elements.iter_mut().find(|e| &e.id == id).and_then(|e| e.diagram.as_mut()) else { return self.miss(format!("remove_node: no diagram {id}")) };
+                let Some(nid) = resolve(&d.nodes, node) else { return self.miss(format!("remove_node: no node {node:?} in {id}")) };
+                if d.nodes.len() <= 1 {
+                    return self.miss(format!("remove_node: {node:?} is the last node of {id}; remove the diagram instead"));
+                }
+                d.nodes.retain(|n| n.id != nid);
+                d.edges.retain(|e| e.from != nid && e.to != nid);
+                if d.auto_edges {
+                    d.edges.clear();
+                    d.auto_link(0);
+                }
+                self.focus_only(id);
+                true
+            }
+            Op::AddEdge { id, from, to, label } => {
+                let Some(d) = self.scene.elements.iter_mut().find(|e| &e.id == id).and_then(|e| e.diagram.as_mut()) else { return self.miss(format!("add_edge: no diagram {id}")) };
+                let n = d.add_edges(&[EdgeSpec { from: from.clone(), to: to.clone(), label: label.clone() }]);
+                if n == 0 {
+                    return self.miss(format!("add_edge: {from:?} → {to:?} not added to {id} (unknown node, same node, or already there)"));
+                }
+                d.auto_edges = false;
+                self.focus_only(id);
+                true
+            }
+            Op::RemoveEdge { id, from, to } => {
+                let Some(d) = self.scene.elements.iter_mut().find(|e| &e.id == id).and_then(|e| e.diagram.as_mut()) else { return self.miss(format!("remove_edge: no diagram {id}")) };
+                let (Some(f), Some(t)) = (resolve(&d.nodes, from), resolve(&d.nodes, to)) else { return self.miss(format!("remove_edge: unknown node in {from:?} → {to:?}")) };
+                let before = d.edges.len();
+                d.edges.retain(|e| !(e.from == f && e.to == t));
+                if d.edges.len() == before {
+                    return self.miss(format!("remove_edge: no edge {from:?} → {to:?} in {id}"));
+                }
+                d.auto_edges = false;
+                self.focus_only(id);
+                true
+            }
             _ => false,
         }
     }
@@ -611,16 +864,27 @@ impl Canvas {
     }
 }
 
-fn op_name(op: &Op) -> String {
+/// A short label for logs: `set_point(e1, Mar=80)`.
+pub fn op_name(op: &Op) -> String {
     match op {
         Op::Focus { id } => format!("focus({id})"),
-        Op::Remove { id } => format!("remove({id})"),
+        Op::Remove { id, .. } => format!("remove({id})"),
         Op::Arrange { layout } => format!("arrange({layout:?})").to_lowercase(),
         Op::Annotate { kind, .. } => format!("annotate({kind:?})").to_lowercase(),
         Op::ClearAnnotations => "clear_annotations".into(),
-        Op::ClearBoard => "clear_board".into(),
+        Op::ClearBoard { .. } => "clear_board".into(),
         Op::DrawDiagram { layout, nodes, .. } => format!("draw_diagram({layout:?}, {} nodes)", nodes.len()).to_lowercase(),
-        Op::ExtendDiagram { id, nodes, .. } => format!("extend_diagram({id}, +{})", nodes.len()),
+        Op::AddNodes { id, nodes, .. } => format!("add_nodes({id}, +{})", nodes.len()),
+        Op::UpdateNode { id, node, .. } => format!("update_node({id}, {node})"),
+        Op::RemoveNode { id, node, .. } => format!("remove_node({id}, {node})"),
+        Op::AddEdge { id, from, to, .. } => format!("add_edge({id}, {from}→{to})"),
+        Op::RemoveEdge { id, from, to } => format!("remove_edge({id}, {from}→{to})"),
+        Op::SetPoint { id, label, value } => format!("set_point({id}, {label}={value})"),
+        Op::AddPoint { id, label, value } => format!("add_point({id}, {label}={value})"),
+        Op::RemovePoint { id, label, .. } => format!("remove_point({id}, {label})"),
+        Op::SetChart { id, .. } => format!("set_chart({id})"),
+        Op::ShowPhoto { subject, replace } => format!("show_photo({subject}{})", if *replace { ", replace" } else { "" }),
+        Op::NoAction { .. } => "no_action".into(),
         Op::DrawChart { kind, points, .. } => format!("draw_chart({kind:?}, {} points)", points.len()).to_lowercase(),
         Op::UpdateChart { id, points, .. } => format!("update_chart({id}, {} points)", points.len()),
     }
@@ -770,7 +1034,7 @@ pub fn rule_ops(curr: &str, scene: &Scene) -> Vec<Op> {
     let focused = scene.elements.iter().find(|e| e.focus).map(|e| e.id.clone());
     let mut ops = vec![];
     if has(&["let's move on", "moving on", "next topic", "new section", "set that aside", "start fresh"]) && n > 0 {
-        return vec![Op::ClearBoard];
+        return vec![Op::ClearBoard { quote: None }];
     }
     if has(&["compare", "versus", " vs ", "side by side", "next to each other", "both of these"]) && n >= 2 && scene.layout != Layout::Compare {
         ops.push(Op::Arrange { layout: Layout::Compare });
@@ -866,8 +1130,10 @@ mod tests {
         add(&mut c, "eagle");
         let s = add(&mut c, "owl");
         let ids: Vec<String> = s.elements.iter().map(|e| e.id.clone()).collect();
-        // stale version → dropped
-        assert!(c.apply(s.version - 1, &[Op::Arrange { layout: Layout::Compare }], 3).is_none());
+        // an older version no longer matters: ops address tiles by id and apply if their target exists
+        let stale = c.apply(s.version - 1, &[Op::Arrange { layout: Layout::Compare }], 3).expect("arrange applies on a changed board");
+        assert_eq!(stale.layout, Layout::Compare);
+        let s = c.scene().clone();
         // unknown id ignored; valid ops applied
         let out = c
             .apply(
@@ -884,7 +1150,7 @@ mod tests {
         assert_eq!(out.annotations[0].label.as_ref().unwrap().len(), 40);
         assert!(out.reason.starts_with("agent:"));
         // removing an annotated element removes its annotation
-        let out = c.apply(out.version, &[Op::Remove { id: ids[0].clone() }], 4).unwrap();
+        let out = c.apply(out.version, &[Op::Remove { id: ids[0].clone(), quote: None }], 4).unwrap();
         assert_eq!(out.elements.len(), 1);
         assert!(out.annotations.is_empty());
         assert!(out.elements[0].focus);
@@ -916,7 +1182,7 @@ mod tests {
         assert_eq!(d.nodes.len(), 2, "duplicate label dropped");
         assert_eq!(d.edges, vec![Edge { from: "n1".into(), to: "n2".into(), label: None }], "chain implied by order");
         let id = e.id.clone();
-        let s = c.apply(s.version, &[Op::ExtendDiagram { id: id.clone(), nodes: ns(&["Decide", "Show"]), edges: vec![] }], 2).unwrap();
+        let s = c.apply(s.version, &[Op::AddNodes { id: id.clone(), nodes: ns(&["Decide", "Show"]), edges: vec![] }], 2).unwrap();
         let d = s.elements[0].diagram.as_ref().unwrap();
         assert_eq!(d.nodes.len(), 4);
         assert_eq!(d.edges.len(), 3);
@@ -935,7 +1201,7 @@ mod tests {
         let d = s.elements[0].diagram.as_ref().unwrap();
         assert!(d.edges.iter().any(|e| e.from == "n3" && e.to == "n1"), "cycle closes");
         let id = s.elements[0].id.clone();
-        let s = c.apply(s.version, &[Op::ExtendDiagram { id, nodes: ns(&["Learn"]), edges: vec![] }], 2).unwrap();
+        let s = c.apply(s.version, &[Op::AddNodes { id, nodes: ns(&["Learn"]), edges: vec![] }], 2).unwrap();
         let d = s.elements[0].diagram.as_ref().unwrap();
         assert!(d.edges.iter().any(|e| e.from == "n4" && e.to == "n1") && !d.edges.iter().any(|e| e.from == "n3" && e.to == "n1"), "{:?}", d.edges);
         let s = c.apply(s.version, &[Op::DrawDiagram { layout: DiagramLayout::Flow, title: None, nodes: ns(&["Rain", "Flood", "Drought"]),
@@ -946,8 +1212,102 @@ mod tests {
         assert!(c.apply(s.version, &[Op::DrawDiagram { layout: DiagramLayout::Hub, title: None, nodes: ns(&["alone"]), edges: vec![] }], 4).is_none(), "one node is not a diagram");
     }
 
+    fn chart(c: &mut Canvas, title: &str, points: &[(&str, f64)]) -> String {
+        c.apply(0, &[Op::DrawChart { kind: ChartKind::Bar, title: Some(title.into()), unit: None, points: pts(points) }], 1).unwrap().elements.last().unwrap().id.clone()
+    }
+    fn points_of(c: &Canvas, id: &str) -> Vec<(String, f64)> {
+        c.scene().elements.iter().find(|e| e.id == id).unwrap().chart.as_ref().unwrap().points.iter().map(|p| (p.label.clone(), p.value)).collect()
+    }
+    fn v(pairs: &[(&str, f64)]) -> Vec<(String, f64)> {
+        pairs.iter().map(|(l, x)| (l.to_string(), *x)).collect()
+    }
+
     #[test]
-    fn charts_draw_merge_and_survive_a_stale_board() {
+    fn set_point_corrects_one_value_and_matches_labels_loosely() {
+        let mut c = Canvas::new();
+        let id = chart(&mut c, "Users", &[("January", 40.0), ("February", 55.0), ("March", 70.0)]);
+        // "Mar" is March; the other bars are untouched
+        let s = c.apply(0, &[Op::SetPoint { id: id.clone(), label: "Mar".into(), value: 80.0 }], 2).unwrap();
+        assert!(s.reason.contains("set_point"));
+        assert_eq!(points_of(&c, &id), v(&[("January", 40.0), ("February", 55.0), ("March", 80.0)]));
+        assert!(c.apply(0, &[Op::SetPoint { id: id.clone(), label: "march".into(), value: 80.0 }], 2).is_none(), "same value: no change");
+        // an unknown label is refused, with a reason, and changes nothing
+        assert!(c.apply(0, &[Op::SetPoint { id: id.clone(), label: "December".into(), value: 1.0 }], 2).is_none());
+        let notes = c.take_notes();
+        assert!(notes.iter().any(|n| n.contains("December") && n.contains("January")), "{notes:?}");
+        assert!(c.take_notes().is_empty(), "notes drain");
+        assert_eq!(points_of(&c, &id).len(), 3);
+    }
+
+    #[test]
+    fn add_and_remove_point_and_set_chart() {
+        let mut c = Canvas::new();
+        let stat = c.apply(0, &[Op::DrawChart { kind: ChartKind::Stat, title: Some("Revenue".into()), unit: None, points: pts(&[("Last year", 15000.0)]) }], 1).unwrap().elements[0].id.clone();
+        let s = c.apply(0, &[Op::AddPoint { id: stat.clone(), label: "Year before".into(), value: 12000.0 }], 2).unwrap();
+        assert_eq!(s.elements[0].chart.as_ref().unwrap().kind, ChartKind::Bar, "a second value turns a stat into bars");
+        // add_point on a label that exists is a correction, not a duplicate bar
+        c.apply(0, &[Op::AddPoint { id: stat.clone(), label: "last year".into(), value: 16000.0 }], 3).unwrap();
+        assert_eq!(points_of(&c, &stat), v(&[("Last year", 16000.0), ("Year before", 12000.0)]));
+        c.apply(0, &[Op::RemovePoint { id: stat.clone(), label: "Year before".into(), quote: Some("drop it".into()) }], 4).unwrap();
+        assert_eq!(points_of(&c, &stat), v(&[("Last year", 16000.0)]));
+        assert!(c.apply(0, &[Op::RemovePoint { id: stat.clone(), label: "Last year".into(), quote: None }], 5).is_none(), "the last point stays");
+        assert!(c.take_notes().iter().any(|n| n.contains("last point")));
+        let s = c.apply(0, &[Op::SetChart { id: stat.clone(), kind: Some(ChartKind::Line), title: Some("Signups".into()), unit: Some("users".into()) }], 6).unwrap();
+        let ch = s.elements[0].chart.as_ref().unwrap();
+        assert_eq!((ch.kind, ch.title.as_deref(), ch.unit.as_deref()), (ChartKind::Line, Some("Signups"), Some("users")));
+        assert_eq!(s.elements[0].caption, "Signups");
+        // a full chart takes no more points
+        let full: Vec<(String, f64)> = (0..MAX_POINTS).map(|i| (format!("p{i}"), i as f64)).collect();
+        let refs: Vec<(&str, f64)> = full.iter().map(|(l, x)| (l.as_str(), *x)).collect();
+        let id = chart(&mut c, "Full", &refs);
+        assert!(c.apply(0, &[Op::AddPoint { id, label: "extra".into(), value: 99.0 }], 7).is_none());
+    }
+
+    #[test]
+    fn diagram_nodes_can_be_renamed_removed_and_relinked() {
+        let mut c = Canvas::new();
+        let id = c.apply(0, &[Op::DrawDiagram { layout: DiagramLayout::Flow, title: None, nodes: ns(&["Commit", "Build", "Test", "Deploy"]), edges: vec![] }], 1).unwrap().elements[0].id.clone();
+        let labels = |c: &Canvas| c.scene().elements[0].diagram.as_ref().unwrap().nodes.iter().map(|n| n.label.clone()).collect::<Vec<_>>();
+        c.apply(0, &[Op::UpdateNode { id: id.clone(), node: "build".into(), label: Some("Compile".into()), note: None }], 2).unwrap();
+        assert_eq!(labels(&c), ["Commit", "Compile", "Test", "Deploy"]);
+        // removing a node re-chains the rest
+        c.apply(0, &[Op::RemoveNode { id: id.clone(), node: "Test".into(), quote: Some("take the test step out".into()) }], 3).unwrap();
+        let d = c.scene().elements[0].diagram.as_ref().unwrap();
+        assert_eq!(d.nodes.len(), 3);
+        assert_eq!(d.edges.len(), 2, "chain closed over the gap");
+        // a new node never reuses the id of a removed one
+        c.apply(0, &[Op::AddNodes { id: id.clone(), nodes: ns(&["Monitor"]), edges: vec![] }], 4).unwrap();
+        let ids: Vec<String> = c.scene().elements[0].diagram.as_ref().unwrap().nodes.iter().map(|n| n.id.clone()).collect();
+        assert_eq!(ids.len(), ids.iter().collect::<std::collections::HashSet<_>>().len(), "unique node ids: {ids:?}");
+        // an unknown node is refused with a reason
+        assert!(c.apply(0, &[Op::UpdateNode { id: id.clone(), node: "Nope".into(), label: Some("X".into()), note: None }], 5).is_none());
+        assert!(c.take_notes().iter().any(|n| n.contains("Nope")));
+        c.apply(0, &[Op::AddEdge { id: id.clone(), from: "Commit".into(), to: "Monitor".into(), label: Some("also".into()) }], 6).unwrap();
+        c.apply(0, &[Op::RemoveEdge { id, from: "Commit".into(), to: "Monitor".into() }], 7).unwrap();
+    }
+
+    #[test]
+    fn removes_and_clears_apply_by_id_on_a_changed_board() {
+        let mut c = Canvas::new();
+        let a = add(&mut c, "eagle");
+        add(&mut c, "owl");
+        let seen = c.scene().clone();
+        // while the agent thinks, a photo lands and the board version moves on
+        add(&mut c, "parrot");
+        let owl = seen.elements[1].id.clone();
+        c.apply_seen(&seen, &[Op::Remove { id: owl.clone(), quote: Some("take the owl away".into()) }], 5).unwrap();
+        assert!(!c.scene().elements.iter().any(|e| e.id == owl), "remove applies although the board changed");
+        // an id that is already gone is refused, not applied to something else
+        assert!(c.apply_seen(&seen, &[Op::Remove { id: owl, quote: None }], 6).is_none());
+        // clear removes what the agent saw, and only that
+        let s = c.apply_seen(&seen, &[Op::ClearBoard { quote: Some("move on".into()) }], 7).unwrap();
+        assert_eq!(s.elements.len(), 1, "the photo that arrived meanwhile survives");
+        assert_eq!(s.elements[0].image_id, "parrot");
+        assert!(!s.elements.iter().any(|e| e.id == a.elements[0].id));
+    }
+
+    #[test]
+    fn charts_draw_merge_and_survive_a_changed_board() {
         let mut c = Canvas::new();
         let s = c.apply(0, &[Op::DrawChart { kind: ChartKind::Bar, title: Some("Users".into()), unit: None, points: pts(&[("2024", 2000.0), ("2025", f64::NAN)]) }], 1).unwrap();
         assert_eq!(s.elements[0].chart.as_ref().unwrap().points.len(), 1, "non-finite dropped");
@@ -959,7 +1319,7 @@ mod tests {
         let ch = s.elements.iter().find(|e| e.id == id).unwrap().chart.as_ref().unwrap();
         assert_eq!(ch.points, pts(&[("2024", 2500.0), ("2025", 15000.0)]), "update replaces the data set");
         assert!(c.apply(s.version, &[Op::UpdateChart { id: id.clone(), kind: None, title: None, points: vec![] }], 2).is_none(), "empty update ignored");
-        assert_eq!(s.layout, Layout::Auto, "non-additive op skipped on a stale board");
+        assert_eq!(s.layout, Layout::Grid, "an arrange from an older board still applies");
         // same title → a corrected redraw replaces that chart's data instead of adding a second chart
         let s = c.apply(s.version, &[Op::DrawChart { kind: ChartKind::Line, title: Some("users".into()), unit: None, points: pts(&[("2024", 2000.0), ("2025", 15000.0), ("2026", 40000.0)]) }], 3).unwrap();
         assert_eq!(s.elements.len(), 2);
@@ -1045,7 +1405,7 @@ mod tests {
         let mut c = Canvas::new();
         let s = c.apply(0, &[Op::DrawDiagram { layout: DiagramLayout::Flow, title: Some("Our pipeline".into()), nodes: ns(&["Record audio"]), edges: vec![] }], 1).unwrap();
         let id = s.elements[0].id.clone();
-        let s = c.apply(s.version, &[Op::ExtendDiagram { id, nodes: ns(&["Transcribe"]), edges: vec![] }], 2).unwrap();
+        let s = c.apply(s.version, &[Op::AddNodes { id, nodes: ns(&["Transcribe"]), edges: vec![] }], 2).unwrap();
         let d = s.elements[0].diagram.as_ref().unwrap();
         assert_eq!((d.nodes.len(), d.edges.len()), (2, 1), "the chain continues from the first step");
         assert!(c.apply(s.version, &[Op::DrawDiagram { layout: DiagramLayout::Cycle, title: None, nodes: ns(&["Alone"]), edges: vec![] }], 3).is_none());
@@ -1066,7 +1426,7 @@ mod tests {
         let s = add(&mut c, "owl");
         assert_eq!(rule_ops("let's compare these two birds", &s), vec![Op::Arrange { layout: Layout::Compare }]);
         assert!(matches!(rule_ops("notice the beak", &s)[0], Op::Annotate { kind: AnnotationKind::Highlight, .. }));
-        assert_eq!(rule_ops("ok, moving on", &s), vec![Op::ClearBoard]);
+        assert_eq!(rule_ops("ok, moving on", &s), vec![Op::ClearBoard { quote: None }]);
         assert!(rule_ops("they live in forests", &s).is_empty());
     }
 }

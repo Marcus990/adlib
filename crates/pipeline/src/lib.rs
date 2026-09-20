@@ -1,16 +1,17 @@
-//! Orchestration: Hear → (Decide ‖ Query→Search) → Stage → RenderSink, with a JSONL timing log
-//! for every stage of every chunk (design doc §4, §6). Used by the Tauri app and by `ls-replay`.
+//! Orchestration: Hear → transcript → Luna (the canvas agent) → board, with a JSONL log of every step.
+//! Luna decides everything that happens on screen: it sees the whole transcript, the board and what it changed
+//! recently, and answers with tool calls. Photos are `show_photo` requests: the pipeline embeds Luna's phrase
+//! with CLIP, searches the library, and draws the picture (image generation) when the library has nothing.
+//! Used by the Tauri app and by `ls-replay`.
 
-use ls_agent::CanvasAgent;
-use ls_canvas::{Canvas, Scene};
-use ls_contracts::{Chunk, RenderEvent};
-use ls_decide::{Decider, Source};
+use ls_agent::{AgentInput, CanvasAgent, Change, Sentence};
+use ls_canvas::{Canvas, ElementKind, Op, Scene};
+use ls_contracts::{Chunk, Match, Rect, RenderEvent};
 use ls_gen::ImageGen;
 use ls_hear::{audio, whisper, ChunkTiming, Chunker, ChunkerConfig, SR};
-use ls_query::QueryClient;
 use ls_search::{assets, Clip, ImageCache, Index, Searcher, TextEncoder};
-use ls_stage::{Outcome, SearchOutcome, Stage, StageConfig};
 use serde_json::{json, Value};
+use std::collections::{HashSet, VecDeque};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,17 +38,16 @@ pub struct Config {
     pub gen_size: Option<u32>,
     pub index_path: PathBuf,
     pub api_key: Option<String>,
-    pub query_model: Option<String>,
-    pub jev_model: Option<String>,
     pub log_path: PathBuf,
     /// Generated images are kept here and reused on the next run (AS13).
     pub gen_dir: PathBuf,
-    pub stage: StageConfig,
+    /// Lowest photo score a library match needs (`TAU`). The label gate does the real rejecting on the asset card.
+    pub tau: f32,
+    /// Most agent calls per minute (`AGENT_RPM`, default 18): a new OpenRouter account is capped at 20/min for Luna.
+    pub agent_rpm: u32,
     pub chunker: ChunkerConfig,
-    /// Canvas mode (evolving board + agent). LS_MODE=single keeps one full-screen image.
     /// Words the talk uses that Whisper mangles (TALK_TERMS / talk-terms.txt) — passed as its initial prompt.
     pub talk_terms: Vec<String>,
-    pub canvas: bool,
     pub canvas_model: Option<String>,
 }
 
@@ -58,27 +58,10 @@ impl Config {
         let env = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
         let p = |k: &str, d: &str| env(k).map(PathBuf::from).unwrap_or_else(|| root.join(d));
         let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-        let mut stage = StageConfig::default();
-        if env("LS_ASSETS").is_some() {
-            // CLIP ViT-B/32 image–text cosines sit far lower than MobileCLIP's (handoff §2 AS3).
-            // Measured on the card: labelled hits 0.23–0.32, so τ is only a floor — the label gate does
-            // the real rejecting (a broad library scores ≈ 0.29 for anything, including nonsense).
-            stage.tau = 0.22;
-        }
-        if let Some(t) = env("TAU").and_then(|v| v.parse().ok()) {
-            stage.tau = t;
-        }
-        if env("CONFIRM").as_deref() == Some("0") {
-            stage.confirm_partials = false;
-        }
-        // Board mode: a new photo adds a tile instead of replacing one, so the single-image anti-flicker hold
-        // (4 s) only delayed back-to-back subjects ("owls and penguins" waited up to 3.3 s). HOLD_MS overrides.
-        if env("LS_MODE").map(|m| m != "single").unwrap_or(true) {
-            stage.hold_render_ms = 1500;
-        }
-        if let Some(h) = env("HOLD_MS").and_then(|v| v.parse().ok()) {
-            stage.hold_render_ms = h;
-        }
+        // MobileCLIP cosines sit around 0.52 for a real match; CLIP ViT-B/32 on the asset card far lower
+        // (labelled hits 0.23–0.32, a broad library scores ≈ 0.29 for anything), so there τ is only a floor and
+        // the label gate does the real rejecting.
+        let tau = env("TAU").and_then(|v| v.parse().ok()).unwrap_or(if env("LS_ASSETS").is_some() { 0.22 } else { 0.52 });
         Self {
             // small.en: 16% WER / 10 of 10 keywords on the noisy fixture vs base.en 46% / 4 of 10, at
             // 423 ms p50 with the audio-context floor (PROGRESS 09-19). Falls back to base.en if absent.
@@ -99,10 +82,9 @@ impl Config {
             clip_dir: p("CLIP_DIR", "models/mobileclip-s2"),
             index_path: p("INDEX", "dev-library/index.json"),
             api_key: env("OPENROUTER_API_KEY"),
-            query_model: env("QUERY_MODEL"),
-            jev_model: env("JEV_MODEL"),
             log_path: root.join("logs").join(format!("run-{stamp}.jsonl")),
-            stage,
+            tau,
+            agent_rpm: env("AGENT_RPM").and_then(|v| v.parse().ok()).unwrap_or(18),
             chunker: {
                 let mut c = ChunkerConfig::default();
                 c.tick_ms = 600; // small.en p90 ≈ 640 ms per pass; a 500 ms tick would fall behind
@@ -115,7 +97,6 @@ impl Config {
                 .or_else(|| std::fs::read_to_string(root.join("talk-terms.txt")).ok())
                 .map(|v| v.split([',', '\n']).map(|t| t.trim().to_string()).filter(|t| !t.is_empty() && !t.starts_with('#')).collect())
                 .unwrap_or_default(),
-            canvas: env("LS_MODE").map(|m| m != "single").unwrap_or(true),
             canvas_model: env("CANVAS_MODEL"),
         }
     }
@@ -165,10 +146,10 @@ pub struct Engine {
     pub clip: Arc<dyn TextEncoder>,
     pub searcher: Arc<Searcher>,
     pub cache: ImageCache,
-    pub decider: Decider,
-    pub query: QueryClient,
     pub agent: CanvasAgent,
     pub gen: ImageGen,
+    /// Distinct library subjects, for the offline fallback (no key / Luna down).
+    pub vocab: Vec<String>,
 }
 
 impl Engine {
@@ -179,8 +160,7 @@ impl Engine {
             Some(dir) => (Arc::new(assets::ClipText::load(&cfg.clip_text_dir)?), assets::load_index(dir)?),
             None => (Arc::new(Clip::load(&cfg.clip_dir)?), Index::load(&cfg.index_path)?),
         };
-        // Prompts and the named-subject shortcut get distinct labels, not 15k captions.
-        let captions = index.vocab(200);
+        let vocab = index.vocab(200);
         let cache = ImageCache::new(&index, 256 * 1024 * 1024);
         let mut searcher = Searcher::new(index);
         if cfg.assets.is_some() {
@@ -190,28 +170,23 @@ impl Engine {
         }
         let searcher = Arc::new(searcher);
         let http = reqwest::Client::builder().pool_idle_timeout(Duration::from_secs(300)).tcp_keepalive(Duration::from_secs(30)).build()?;
-        let query_model = cfg.query_model.clone().unwrap_or_else(|| ls_query::DEFAULT_MODEL.to_string());
-        let decider = Decider::new(http.clone(), cfg.api_key.clone(), cfg.jev_model.clone(), query_model.clone(), captions.clone());
-        let query = QueryClient::new(http.clone(), cfg.api_key.clone(), Some(query_model), captions);
         let agent = CanvasAgent::new(http.clone(), cfg.api_key.clone(), cfg.canvas_model.clone());
         let gen = ImageGen::new(http, cfg.gen_key.clone(), cfg.gen_url.clone(), cfg.gen_size);
-        Ok(Self { cfg, clip, searcher, cache, decider, query, agent, gen })
+        Ok(Self { cfg, clip, searcher, cache, agent, gen, vocab })
     }
 
-    /// Warm-up (design doc §6 lever 5): CLIP text path, image prefetch, both HTTPS connections.
+    /// Warm-up: CLIP text path, image prefetch, the image-generation deployment.
     pub async fn warm_up(&self, log: &Logger) {
         let t = Instant::now();
         let _ = self.clip.embed_text("warm up");
         // Prefetch only a small curated library; the asset card holds ~15k photos (LRU on demand).
         let n = if self.searcher.index.entries.len() <= 256 { self.cache.prefetch_all() } else { 0 };
-        tokio::join!(self.decider.warm_up(), self.query.warm_up());
         if self.gen.enabled() {
             // The deployment scales to zero (146 s cold); wake it without blocking startup.
             let g = self.gen.clone();
             tokio::spawn(async move { g.warm_up().await });
         }
-        log.log(json!({"ev": "warm_up", "ms": t.elapsed().as_millis() as u64, "prefetched": n,
-            "remote": self.decider.has_remote()}));
+        log.log(json!({"ev": "warm_up", "ms": t.elapsed().as_millis() as u64, "prefetched": n, "remote": self.agent.has_remote()}));
     }
 }
 
@@ -221,22 +196,26 @@ enum Msg {
     HearDone,
     HearError(String),
     Status(Value),
-    Decision(ls_contracts::ChangeDecision, Source, u64, u64),
-    Search(SearchOutcome, ls_contracts::QueryResult, Vec<ls_search::PhraseHit>, u64, u64, u64),
-    /// Canvas agent answer: (scene version it reasoned about, ops, source, chunk id, ms).
-    Agent(u64, Vec<ls_canvas::Op>, ls_agent::Source, u64, u64),
-    /// A generated image arrived: chunk it was asked for, subject, JPEG bytes (None = failed), ms.
-    Generated(u64, String, Option<Vec<u8>>, u64),
+    /// Luna answered.
+    Agent { seen: Scene, proposal: ls_agent::Proposal, call: u64, chunk_id: u64, ms: u64, heard_at: u64 },
+    /// A photo search for a `show_photo` request finished.
+    Photo { subject: String, replace: bool, chunk_id: u64, heard_at: u64, best: Option<Match>, search_ms: u64 },
+    /// A generated image arrived (None = failed or refused).
+    Generated { subject: String, replace: bool, chunk_id: u64, heard_at: u64, bytes: Option<Vec<u8>>, ms: u64, asked: Instant },
 }
 
 #[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct Summary {
     pub chunks: usize,
+    /// Photos placed on the board.
     pub renders: usize,
+    /// Speech → photo on screen, per photo.
     pub render_latencies_ms: Vec<u64>,
-    pub outcomes: std::collections::BTreeMap<String, usize>,
-    pub decide_sources: std::collections::BTreeMap<String, usize>,
-    pub query_fallbacks: usize,
+    pub agent_calls: usize,
+    /// Calls where the model failed and the offline rules answered.
+    pub agent_fallbacks: usize,
+    pub ops_applied: usize,
+    pub ops_refused: usize,
     /// Photos drawn by the generation fallback because the library had nothing.
     pub generated: usize,
     pub shown: Vec<String>,
@@ -250,20 +229,6 @@ impl Summary {
         }
         v.sort();
         Some(v[((v.len() - 1) as f64 * p).round() as usize])
-    }
-}
-
-fn outcome_name(o: &Outcome) -> &'static str {
-    match o {
-        Outcome::Rendered(_) => "rendered",
-        Outcome::Pending => "pending",
-        Outcome::NoChange => "no_change",
-        Outcome::BelowProbability => "below_probability",
-        Outcome::LibraryGap => "library_gap",
-        Outcome::Duplicate => "duplicate",
-        Outcome::Stale => "stale",
-        Outcome::TimedOut => "timed_out",
-        Outcome::Unconfirmed => "unconfirmed",
     }
 }
 
@@ -311,6 +276,51 @@ fn scene_log(scene: &Scene) -> Value {
         })
         .collect();
     json!({"ev": "scene", "version": scene.version, "reason": scene.reason, "n": scene.elements.len(), "layout": scene.layout, "tiles": tiles})
+}
+
+
+/// Words in `curr` beyond what `prev` already had (a growing partial repeats the words it started with).
+fn new_words_in(curr: &str, prev: &str) -> usize {
+    let p = prev.trim_end_matches(|c: char| !c.is_alphanumeric());
+    let tail = if !p.is_empty() && curr.starts_with(p) { &curr[p.len()..] } else { curr };
+    word_count(tail)
+}
+
+fn word_count(s: &str) -> usize {
+    s.split_whitespace().filter(|w| w.chars().any(|c| c.is_alphanumeric())).count()
+}
+
+fn push_change(changes: &mut VecDeque<Change>, at_s: u64, what: String) {
+    changes.push_back(Change { at_s, what });
+    while changes.len() > 10 {
+        changes.pop_front();
+    }
+}
+
+/// No key or Luna down: the old presenter-cue heuristic. A cue ("here's…", "take a look at…") followed by a
+/// library subject shows that subject; anything else shows nothing.
+fn offline_photo(text: &str, vocab: &[String]) -> Option<String> {
+    let after = ls_query::after_last_cue(text, 10)?;
+    ls_query::named_subject(&after.join(" "), vocab)
+}
+
+/// Put a photo on the board (a new tile, or swapping the focused photo) and log and announce it.
+#[allow(clippy::too_many_arguments)]
+fn show_photo(canvas: &mut Canvas, sink: &dyn RenderSink, log: &Logger, summary: &mut Summary, changes: &mut VecDeque<Change>, replace: bool, image_id: &str, caption: &str, chunk_id: u64, heard_at: u64, how: &str) {
+    let url = format!("img://localhost/{image_id}");
+    let swap = replace && canvas.scene().elements.iter().any(|e| e.focus && e.kind == ElementKind::Image);
+    let (scene, kind) = if swap { (canvas.update(image_id, caption, &url, chunk_id), "update") } else { (canvas.render(image_id, caption, &url, chunk_id), "render") };
+    let now = log.now_ms();
+    let lat = now.saturating_sub(heard_at);
+    summary.renders += 1;
+    summary.render_latencies_ms.push(lat);
+    summary.shown.push(image_id.to_string());
+    log.log(json!({"ev": "render", "chunk_id": chunk_id, "kind": kind, "image_id": image_id, "how": how, "speech_to_render_ms": lat}));
+    log.log(scene_log(&scene));
+    sink.render(&RenderEvent { kind, image_id: Some(image_id.to_string()), url: Some(url), rect: Rect::FULL, chunk_id, ts_ms: now });
+    sink.scene(&scene);
+    sink.status(&json!({"type": "outcome", "chunk_id": chunk_id, "outcome": "rendered", "image_id": image_id, "latency_ms": lat}));
+    push_change(changes, now / 1000, format!("show_photo {caption} ({how})"));
 }
 
 /// Run one talk until the audio ends (WAV) or `stop` is set (mic).
@@ -419,87 +429,40 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
         });
     }
 
-    let mut stage = Stage::new(cfg.stage);
     let mut summary = Summary::default();
-    let mut prev_final = String::new();
     let mut audio_t0: u64 = 0;
-    let mut chunk_end_wall: std::collections::HashMap<u64, u64> = Default::default();
     let mut hear_done_at: Option<Instant> = None;
     let mut tick = tokio::time::interval(Duration::from_millis(50));
 
-    let handle_outcome = |chunk_id: u64, o: Outcome, now: u64, summary: &mut Summary, ends: &std::collections::HashMap<u64, u64>, gaps: &mut Vec<u64>| -> Option<RenderEvent> {
-        *summary.outcomes.entry(outcome_name(&o).into()).or_default() += 1;
-        if matches!(o, Outcome::LibraryGap) {
-            gaps.push(chunk_id); // nothing in the library → maybe generate it
-        }
-        match &o {
-            Outcome::Rendered(ev) => {
-                sink.render(ev);
-                let lat = ends.get(&chunk_id).map(|e| now.saturating_sub(*e));
-                summary.renders += 1;
-                if let Some(l) = lat {
-                    summary.render_latencies_ms.push(l);
-                }
-                summary.shown.push(ev.image_id.clone().unwrap_or_else(|| "(clear)".into()));
-                log.log(json!({"ev": "render", "chunk_id": chunk_id, "kind": ev.kind, "image_id": ev.image_id,
-                    "speech_to_render_ms": lat}));
-                sink.status(&json!({"type": "outcome", "chunk_id": chunk_id, "outcome": "rendered", "image_id": ev.image_id, "latency_ms": lat}));
-                Some(ev.clone())
-            }
-            other => {
-                log.log(json!({"ev": "join", "chunk_id": chunk_id, "outcome": outcome_name(other)}));
-                if !matches!(other, Outcome::NoChange) {
-                    sink.status(&json!({"type": "outcome", "chunk_id": chunk_id, "outcome": outcome_name(other)}));
-                }
-                None
-            }
-        }
-    };
-
-    // ---- canvas mode state ----
+    // ---- what Luna is shown ----
     let mut canvas = Canvas::new();
-    let mut chunk_text: std::collections::HashMap<u64, String> = Default::default();
+    let mut transcript: Vec<Sentence> = vec![];
+    let mut speaking_now = String::new();
+    let mut seen_upto = 0usize; // transcript[..seen_upto] went to Luna in an earlier call
+    let mut last_speaking = String::new(); // the phrase in progress as of the last call
+    let mut changes: VecDeque<Change> = VecDeque::new();
+    // ---- when it is called ----
+    let min_gap = if engine.agent.has_remote() { Duration::from_millis(60_000 / cfg.agent_rpm.max(1) as u64) } else { Duration::ZERO };
     let mut agent_busy = false;
-    let mut agent_next: Option<(String, String, u64, Option<&'static str>)> = None;
-    let mut last_curr = String::new();
-    // The agent sees the last few finished phrases (a process or a set of numbers spans sentences).
-    let mut recent: std::collections::VecDeque<String> = Default::default();
-    // A number / structure word was heard; ask the agent once the sentence is complete.
-    let mut graphic_pending = false;
-    let mut last_sent = String::new(); // newest speech last sent to the agent (don't resend an identical final)
+    let mut last_call: Option<Instant> = None;
+    let mut call_no = 0u64;
+    let mut last_chunk_id = 0u64;
+    let mut dirty_since: Option<u64> = None; // when words Luna has not seen first arrived
+    // ---- photos ----
     let mut last_clear: Option<Instant> = None;
-    let mut subject_of: std::collections::HashMap<u64, String> = Default::default();
-    let mut generating: std::collections::HashSet<String> = Default::default();
-    let mut recent_subjects: Vec<(String, Instant)> = vec![];
-    // A sentence belongs to one path: numbers and structure are the agent's (chart/diagram), things are
-    // the photo path's. Without this, "in the first year we had 200 users" drew a chart *and* generated
-    // pictures of "first year" and "200 users" (09-19).
-    let mut graphic_chunks: std::collections::HashSet<u64> = Default::default();
-    // How sure Jev was that this sentence wants a photo; drawing one needs more than showing a stock one.
-    let mut photo_conf: std::collections::HashMap<u64, f32> = Default::default();
-    // Chunks whose transcript Whisper has finalised; generation only draws from these.
-    let mut final_chunks: std::collections::HashSet<u64> = Default::default();
+    let mut inflight = 0usize; // photo searches + generations still running
+    let mut generating: HashSet<String> = HashSet::new();
+    let mut recent_photos: Vec<(String, Instant)> = vec![];
     let caption_of = |id: &str| -> String {
         // Card photos from COCO have no label at all; "photo" keeps board summaries readable.
         match engine.searcher.index.entries.iter().find(|e| e.id == id) {
-            Some(e) if !e.caption.trim().is_empty() => e.caption.clone(),
+            Some(e) if !e.caption.trim().is_empty() => e.caption.split('(').next().unwrap_or(&e.caption).trim().to_string(),
             Some(_) => "photo".into(),
             None => id.to_string(),
         }
     };
-    let spawn_agent = |scene: Scene, prev: String, curr: String, chunk_id: u64, hint: Option<&'static str>| {
-        let (e, tx, log) = (engine.clone(), tx.clone(), log.clone());
-        tokio::spawn(async move {
-            let t = log.now_ms();
-            let (ops, src) = e.agent.propose_hinted(&scene, &prev, &curr, hint).await;
-            let _ = tx.send(Msg::Agent(scene.version, ops, src, chunk_id, log.now_ms() - t));
-        });
-    };
 
     loop {
-        let mut fresh: Vec<RenderEvent> = vec![];
-        let mut gaps: Vec<u64> = vec![];
-        let mut agent_trigger: Option<(String, String, u64, Option<&'static str>)> = None;
         tokio::select! {
             msg = rx.recv() => {
                 let Some(msg) = msg else { break };
@@ -513,119 +476,122 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                     Msg::Status(v) => sink.status(&v),
                     Msg::Chunk(c, tm, wall) => {
                         summary.chunks += 1;
-                        chunk_end_wall.insert(c.id, audio_t0 + c.t_end_ms);
                         log.log(json!({"ev": "chunk", "chunk": c, "audio_ms": tm.audio_ms, "vad_ms": tm.vad_ms.round(),
                             "asr_ms": tm.asr_ms.round(), "emitted_ms": wall, "asr_lag_ms": wall.saturating_sub(audio_t0 + c.t_end_ms)}));
                         sink.status(&json!({"type": "chunk", "text": c.text, "final": c.is_final}));
-                        stage.on_chunk(&c);
-                        chunk_text.insert(c.id, c.text.clone());
-                        if chunk_text.len() > 256 {
-                            let min = *chunk_text.keys().min().unwrap();
-                            chunk_text.remove(&min);
-                        }
-                        // Only words not seen in the previous update of this phrase can carry a new cue.
-                        let new_words = c.text.strip_prefix(last_curr.trim_end_matches(|ch: char| !ch.is_alphanumeric())).unwrap_or(&c.text).to_string();
-                        last_curr = if c.is_final { String::new() } else { c.text.clone() };
-                        let context = recent.iter().cloned().collect::<Vec<_>>().join(" ");
-                        // Keyword triggers are the offline path only: with Jev available, routing decides.
-                        let jev_routes = engine.decider.has_remote();
-                        if cfg.canvas && !jev_routes && !canvas.scene().elements.is_empty() && ls_canvas::has_layout_cue(&new_words) {
-                            agent_trigger = Some((context.clone(), c.text.clone(), c.id, None));
-                        }
-                        if cfg.canvas && ls_canvas::has_graphic_cue(&c.text) {
-                            graphic_chunks.insert(c.id);
-                        }
-                        if cfg.canvas && ls_canvas::has_graphic_cue(&new_words) {
-                            graphic_pending = true;
-                        }
-                        // Early graphics call: a number/structure word was heard and Whisper closed the sentence
-                        // mid-phrase. This is only a head start — the finished phrase is always sent too (below),
-                        // so a premature "And then we." can no longer use the trigger up (09-19).
-                        if cfg.canvas && !jev_routes && graphic_pending && !c.is_final && c.text.trim_end().ends_with(['.', '?', '!']) {
-                            graphic_pending = false;
-                            last_sent = c.text.clone();
-                            agent_trigger = Some((context.clone(), c.text.clone(), c.id, None));
-                        }
-                        // Every finished phrase goes to the agent: fixed trigger words missed natural phrasing
-                        // ("in parallel we also run…", "and then once…", "remove the eagle", 09-19). The word lists
-                        // above are just mid-sentence shortcuts; the agent's guards still apply.
-                        if cfg.canvas && !jev_routes && c.is_final && c.text.split_whitespace().count() >= 3 && c.text != last_sent {
-                            graphic_pending = false;
-                            last_sent = c.text.clone();
-                            agent_trigger = Some((context, c.text.clone(), c.id, None));
-                        }
+                        last_chunk_id = c.id;
                         if c.is_final {
-                            final_chunks.insert(c.id);
-                            recent.push_back(c.text.clone());
-                            while recent.len() > 5 {
-                                recent.pop_front();
+                            let t = c.text.trim();
+                            if !t.is_empty() {
+                                transcript.push(Sentence { at_s: log.now_ms() / 1000, text: t.to_string() });
                             }
-                        }
-                        let mut displayed = stage.displayed();
-                        if cfg.canvas {
-                            displayed.on_screen = ls_canvas::board_summary(canvas.scene());
-                        }
-                        let prev = prev_final.clone();
-                        if c.is_final {
-                            prev_final = c.text.clone();
-                        }
-                        // Jev sees the last few finals (~25 s), not just one (~9 s): a topic recurs across
-                        // sentences while an analogy's vehicle is named once and dropped, and with a
-                        // one-sentence window "watch like the eagle" is indistinguishable from "here's an
-                        // eagle". The phrase model keeps the tight window so its grounding check stays tight.
-                        let context = recent.iter().filter(|t| **t != c.text).cloned().collect::<Vec<_>>().join(" ");
-                        // Branch 1: whether.
-                        {
-                            let (e, tx, c, d, prev, log) = (engine.clone(), tx.clone(), c.clone(), displayed.clone(), context, log.clone());
-                            tokio::spawn(async move {
-                                let t = log.now_ms();
-                                let (dec, src) = e.decider.decide(c.id, c.id, &prev, &c.text, &d, t).await;
-                                let _ = tx.send(Msg::Decision(dec, src, t, log.now_ms()));
-                            });
-                        }
-                        // Branch 2: what.
-                        {
-                            let (e, tx, c, d, prev, log) = (engine.clone(), tx.clone(), c.clone(), displayed, prev, log.clone());
-                            tokio::spawn(async move {
-                                let t = log.now_ms();
-                                // "so", "uh", "and over your": nothing to look for. Asked anyway, the phrase
-                                // model answers filler with library words, which then satisfy names() and
-                                // bypass the label gate. Skipping also frees a core for Whisper. The empty
-                                // result must still be sent or the decision half orphans and times out.
-                                if c.text.split_whitespace().filter(|w| w.len() > 2).count() < 2 {
-                                    let empty = ls_contracts::QueryResult { chunk_id: c.id, phrases: vec![], from_fallback: false, named: false };
-                                    let n = log.now_ms();
-                                    let _ = tx.send(Msg::Search(SearchOutcome { chunk_id: c.id, best: None }, empty, vec![], t, n, n));
-                                    return;
-                                }
-                                // The speech names one library subject outright → search it now; the phrase
-                                // model (≈0.45 s, mostly network) is only needed to interpret the speech.
-                                let q = match ls_query::named_subject(&c.text, e.query.vocab()) {
-                                    Some(s) => ls_contracts::QueryResult { chunk_id: c.id, phrases: vec![s], from_fallback: false, named: true },
-                                    None => e.query.query(c.id, &prev, &c.text, &d).await,
-                                };
-                                let tq = log.now_ms();
-                                let (e2, phrases, on_screen) = (e.clone(), q.phrases.clone(), d.image_id.clone());
-                                let res = tokio::task::spawn_blocking(move || e2.searcher.best_match_avoiding(&*e2.clip, c.id, &phrases, on_screen.as_deref())).await;
-                                let (mut best, hits) = match res {
-                                    Ok(Ok(v)) => v,
-                                    _ => (None, vec![]),
-                                };
-                                // The library only had a *related* thing (phrase 2+: "flower" for
-                                // "sunflower"). With generation available, the exact subject is better than a
-                                // near-miss, so report a gap and let the finished phrase draw it.
-                                if e.gen.enabled() {
-                                    if let (Some(m), Some(first)) = (&best, q.phrases.first()) {
-                                        if &m.phrase != first && !ls_gen::ImageGen::refuses(first) {
-                                            best = None;
-                                        }
-                                    }
-                                }
-                                let _ = tx.send(Msg::Search(SearchOutcome { chunk_id: c.id, best }, q, hits, t, tq, log.now_ms()));
-                            });
+                            speaking_now.clear();
+                        } else {
+                            speaking_now = c.text.clone();
                         }
                     }
-                    Msg::Generated(chunk_id, subject, bytes, ms) => {
+                    Msg::Agent { seen, proposal, call, chunk_id, ms, heard_at } => {
+                        agent_busy = false;
+                        let now = log.now_ms();
+                        summary.agent_calls += 1;
+                        if proposal.source == ls_agent::Source::Rules {
+                            summary.agent_fallbacks += 1;
+                        }
+                        let ls_agent::Proposal { mut ops, source, mut dropped, error } = proposal;
+                        // One clear per section cue: the partial and the final of "let's move on…" both asked
+                        // to clear, wiping a photo that had just appeared (09-19).
+                        if last_clear.is_some_and(|t: Instant| t.elapsed() < Duration::from_secs(6)) && ops.iter().any(|o| matches!(o, Op::ClearBoard { .. })) {
+                            ops.retain(|o| !matches!(o, Op::ClearBoard { .. }));
+                            dropped.push("clear_board: the board was cleared less than 6 s ago".into());
+                        }
+                        let no_action: Vec<String> = ops.iter().filter_map(|o| if let Op::NoAction { reason } = o { Some(reason.clone()) } else { None }).collect();
+                        let photos: Vec<(String, bool)> = ops.iter().filter_map(|o| if let Op::ShowPhoto { subject, replace } = o { Some((subject.clone(), *replace)) } else { None }).collect();
+                        let board_ops: Vec<Op> = ops.iter().filter(|o| !matches!(o, Op::NoAction { .. } | Op::ShowPhoto { .. })).cloned().collect();
+                        // Ops address tiles by id, so they apply even though photos may have landed meanwhile;
+                        // a clear removes only what Luna saw.
+                        let applied = canvas.apply_seen(&seen, &board_ops, chunk_id);
+                        let names = canvas.take_applied();
+                        let mut refused = dropped;
+                        refused.extend(canvas.take_notes());
+                        if names.iter().any(|n| n.starts_with("clear_board")) {
+                            last_clear = Some(Instant::now());
+                        }
+                        summary.ops_applied += names.len();
+                        summary.ops_refused += refused.len();
+                        log.log(json!({"ev": "agent", "call": call, "chunk_id": chunk_id, "source": format!("{source:?}"), "ms": ms, "error": error,
+                            "ops": ops, "applied": names, "refused": refused, "no_action": no_action}));
+                        sink.status(&json!({"type": "agent", "call": call, "chunk_id": chunk_id, "source": format!("{source:?}"), "ms": ms,
+                            "ops": ops.len(), "applied": names, "refused": refused, "no_action": no_action, "photos": photos.iter().map(|p| p.0.clone()).collect::<Vec<_>>()}));
+                        for n in names {
+                            push_change(&mut changes, now / 1000, n);
+                        }
+                        if let Some(scene) = applied {
+                            log.log(scene_log(&scene));
+                            sink.scene(&scene);
+                        }
+                        // show_photo: search the library now; a gap goes on to generation when the search lands.
+                        for (subject, replace) in photos {
+                            // The same subject asked for again within 25 s ("planet Earth" then "planet Earth from
+                            // space") is the same picture. A replace is a different request.
+                            if !replace && recent_photos.iter().any(|(s, t): &(String, Instant)| t.elapsed() < Duration::from_secs(25) && similar(s, &subject)) {
+                                log.log(json!({"ev": "photo_skipped", "call": call, "subject": &subject, "reason": "asked for a moment ago"}));
+                                continue;
+                            }
+                            recent_photos.push((subject.clone(), Instant::now()));
+                            recent_photos.retain(|(_, t)| t.elapsed() < Duration::from_secs(60));
+                            inflight += 1;
+                            let (e, tx, log2) = (engine.clone(), tx.clone(), log.clone());
+                            tokio::spawn(async move {
+                                let t = log2.now_ms();
+                                let (e2, s2) = (e.clone(), subject.clone());
+                                let res = tokio::task::spawn_blocking(move || e2.searcher.best_match(&*e2.clip, chunk_id, &[s2]).map(|(m, _)| m)).await;
+                                let best = match res {
+                                    Ok(Ok(m)) => m,
+                                    _ => None,
+                                };
+                                let _ = tx.send(Msg::Photo { subject, replace, chunk_id, heard_at, best, search_ms: log2.now_ms() - t });
+                            });
+                        }
+                        let _ = seen;
+                    }
+                    Msg::Photo { subject, replace, chunk_id, heard_at, best, search_ms } => {
+                        inflight -= 1;
+                        log.log(json!({"ev": "photo_search", "chunk_id": chunk_id, "subject": &subject, "search_ms": search_ms,
+                            "best": best.as_ref().map(|m| json!({"id": m.image_id, "score": m.score, "caption": m.caption}))}));
+                        match best.filter(|m| m.score >= cfg.tau) {
+                            Some(m) => {
+                                let caption = caption_of(&m.image_id);
+                                show_photo(&mut canvas, &*sink, &log, &mut summary, &mut changes, replace, &m.image_id, &caption, chunk_id, heard_at, "library");
+                            }
+                            None => {
+                                // Nothing in the library is about this subject → draw it (handoff AS12).
+                                sink.status(&json!({"type": "outcome", "chunk_id": chunk_id, "outcome": "library_gap"}));
+                                // Luna names the subject itself, so a short one ("owl") is a real subject; only what a
+                                // diffusion model draws badly (logos, text, vague words) is refused.
+                                if !engine.gen.enabled() || ImageGen::refuses(&subject) || subject.trim().is_empty() {
+                                    let why = if !engine.gen.enabled() { "generation is off (no BASETEN_API_KEY)" } else { "refused: a logo, text or too vague to draw" };
+                                    log.log(json!({"ev": "gap", "chunk_id": chunk_id, "subject": &subject, "generation": why}));
+                                } else if generating.insert(subject.clone()) {
+                                    inflight += 1;
+                                    let cached = cfg.gen_dir.join(format!("{}.jpg", slug(&subject)));
+                                    let (e, tx, log2) = (engine.clone(), tx.clone(), log.clone());
+                                    tokio::spawn(async move {
+                                        let asked = Instant::now();
+                                        if cached.exists() {
+                                            // generated earlier in this talk (or a rehearsal): reuse, no call
+                                            let _ = tx.send(Msg::Generated { subject, replace, chunk_id, heard_at, bytes: None, ms: 0, asked });
+                                            return;
+                                        }
+                                        let t = log2.now_ms();
+                                        let bytes = e.gen.generate(&subject).await;
+                                        let _ = tx.send(Msg::Generated { subject, replace, chunk_id, heard_at, bytes, ms: log2.now_ms() - t, asked });
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    Msg::Generated { subject, replace, chunk_id, heard_at, bytes, ms, asked } => {
+                        inflight -= 1;
                         generating.remove(&subject);
                         let path = cfg.gen_dir.join(format!("{}.jpg", slug(&subject)));
                         if let Some(b) = bytes {
@@ -634,220 +600,61 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                         }
                         // Show it only if the subject is still in what was actually said: a mis-transcribed
                         // partial ("a single scene") is gone by the time its picture lands (09-19).
-                        let still_said = chunk_text.get(&chunk_id).is_some_and(|t| {
-                            let t = t.to_lowercase();
-                            subject.to_lowercase().split_whitespace().filter(|w| w.len() > 3).all(|w| t.contains(w.trim_end_matches('s')))
-                        });
-                        let fresh_enough = !graphic_chunks.contains(&chunk_id)
-                            && still_said
-                            && chunk_end_wall.get(&chunk_id).is_some_and(|e| log.now_ms().saturating_sub(*e) < 12_000);
-                        log.log(json!({"ev": "generated", "chunk_id": chunk_id, "subject": subject, "ms": ms,
-                            "ok": path.exists(), "used": path.exists() && fresh_enough}));
-                        if path.exists() && fresh_enough {
+                        let said: String = transcript.iter().rev().take(6).map(|s| s.text.as_str()).chain(std::iter::once(speaking_now.as_str())).collect::<Vec<_>>().join(" ").to_lowercase();
+                        let still_said = subject.to_lowercase().split_whitespace().filter(|w| w.len() > 3).all(|w| said.contains(w.trim_end_matches('s')));
+                        let fresh_enough = asked.elapsed() < Duration::from_secs(15);
+                        log.log(json!({"ev": "generated", "chunk_id": chunk_id, "subject": &subject, "ms": ms, "ok": path.exists(), "used": path.exists() && still_said && fresh_enough}));
+                        if path.exists() && still_said && fresh_enough {
                             let id = format!("gen-{}", slug(&subject));
                             engine.cache.add(&id, path);
                             summary.generated += 1;
-                            summary.shown.push(id.clone());
                             sink.status(&json!({"type": "generated", "chunk_id": chunk_id, "subject": subject, "ms": ms}));
-                            if cfg.canvas {
-                                let scene = canvas.render(&id, &subject, &format!("img://localhost/{id}"), chunk_id);
-                                stage.sync_current(Some((id.clone(), subject.clone())));
-                                log.log(scene_log(&scene));
-                                sink.scene(&scene);
-                            } else {
-                                sink.render(&RenderEvent { kind: "render", image_id: Some(id), url: Some(format!("img://localhost/gen-{}", slug(&subject))),
-                                    rect: ls_contracts::Rect::FULL, chunk_id, ts_ms: log.now_ms() });
-                            }
-                        }
-                    }
-                    Msg::Agent(version, mut ops, src, chunk_id, ms) => {
-                        agent_busy = false;
-                        // One clear per section cue: the partial and the final of "let's move on to one
-                        // last thing…" both asked to clear, wiping a photo that had just appeared (09-19).
-                        if last_clear.is_some_and(|t: Instant| t.elapsed() < Duration::from_secs(6)) {
-                            ops.retain(|o| !matches!(o, ls_canvas::Op::ClearBoard));
-                        }
-                        if ops.iter().any(|o| matches!(o, ls_canvas::Op::ClearBoard)) {
-                            last_clear = Some(Instant::now());
-                        }
-                        let applied = canvas.apply(version, &ops, chunk_id);
-                        log.log(json!({"ev": "agent", "chunk_id": chunk_id, "source": format!("{src:?}"), "ms": ms,
-                            "ops": ops, "applied": applied.is_some(), "stale": version != canvas.scene().version && applied.is_none()}));
-                        sink.status(&json!({"type": "agent", "chunk_id": chunk_id, "source": format!("{src:?}"), "ms": ms,
-                            "ops": ops.len(), "applied": applied.as_ref().map(|s| s.reason.clone())}));
-                        if applied.is_some() && ops.iter().any(|o| matches!(o, ls_canvas::Op::DrawChart { .. } | ls_canvas::Op::UpdateChart { .. } | ls_canvas::Op::DrawDiagram { .. } | ls_canvas::Op::ExtendDiagram { .. })) {
-                            graphic_chunks.insert(chunk_id); // this sentence got its visual
-                        }
-                        if let Some(scene) = applied {
-                            let images = || scene.elements.iter().filter(|e| e.kind == ls_canvas::ElementKind::Image);
-                            let focused = images().find(|e| e.focus).or_else(|| images().last());
-                            stage.sync_current(focused.map(|e| (e.image_id.clone(), e.caption.clone())));
-                            log.log(scene_log(&scene));
-                            sink.scene(&scene);
-                        }
-                        if let Some((p, c, id, h)) = agent_next.take() {
-                            agent_busy = true;
-                            spawn_agent(canvas.scene().clone(), p, c, id, h);
-                        }
-                    }
-                    Msg::Decision(mut d, src, t_start, t_end) => {
-                        *summary.decide_sources.entry(format!("{src:?}")).or_default() += 1;
-                        log.log(json!({"ev": "decide", "chunk_id": d.chunk_id, "action": d.action, "p": d.p,
-                            "visual": d.visual, "p_visual": d.p_visual,
-                            "source": format!("{src:?}"), "start_ms": t_start, "ms": t_end - t_start}));
-                        sink.status(&json!({"type": "decide", "chunk_id": d.chunk_id, "action": d.action, "p": d.p,
-                            "visual": d.visual, "source": format!("{src:?}"), "ms": t_end - t_start}));
-                        // ---- Jev routes the sentence; each path owns it alone (one sentence, one visual) ----
-                        if cfg.canvas && matches!(src, Source::Jev) && d.p_visual >= 0.5 {
-                            use ls_contracts::Visual;
-                            match d.visual {
-                                Visual::Photo => {
-                                    photo_conf.insert(d.chunk_id, d.p_visual);
-                                }
-                                Visual::Chart | Visual::Diagram | Visual::Board => {
-                                    d.action = ls_contracts::Action::NoChange; // the photo path stands down
-                                    graphic_chunks.insert(d.chunk_id);
-                                    if let Some(text) = chunk_text.get(&d.chunk_id).cloned() {
-                                        let hint = match d.visual {
-                                            Visual::Chart => "chart",
-                                            Visual::Diagram => "diagram",
-                                            _ => "board",
-                                        };
-                                        agent_trigger = Some((recent.iter().cloned().collect::<Vec<_>>().join(" "), text, d.chunk_id, Some(hint)));
-                                    }
-                                }
-                                Visual::None => d.action = ls_contracts::Action::NoChange,
-                            }
-                        }
-                        let now = log.now_ms();
-                        if let Some(o) = stage.on_decision(d.clone(), now) {
-                            fresh.extend(handle_outcome(d.chunk_id, o, now, &mut summary, &chunk_end_wall, &mut gaps));
-                        }
-                    }
-                    Msg::Search(s, q, hits, t_start, t_query, t_end) => {
-                        if let Some(p) = q.phrases.first() {
-                            subject_of.insert(s.chunk_id, p.clone());
-                            if subject_of.len() > 256 {
-                                let min = *subject_of.keys().min().unwrap();
-                                subject_of.remove(&min);
-                            }
-                        }
-                        if q.from_fallback {
-                            summary.query_fallbacks += 1;
-                        }
-                        log.log(json!({"ev": "search", "chunk_id": s.chunk_id, "phrases": q.phrases, "fallback": q.from_fallback, "named": q.named,
-                            "query_ms": t_query - t_start, "search_ms": t_end - t_query,
-                            "best": s.best.as_ref().map(|m| json!({"id": m.image_id, "score": m.score, "phrase": m.phrase})),
-                            "hits": hits.iter().map(|h| json!({"phrase": h.phrase, "id": h.id, "score": h.score})).collect::<Vec<_>>()}));
-                        sink.status(&json!({"type": "search", "chunk_id": s.chunk_id, "phrases": q.phrases, "fallback": q.from_fallback,
-                            "best": s.best.as_ref().map(|m| m.image_id.clone()), "score": s.best.as_ref().map(|m| m.score),
-                            "query_ms": t_query - t_start, "search_ms": t_end - t_query}));
-                        let now = log.now_ms();
-                        let id = s.chunk_id;
-                        if let Some(o) = stage.on_search(s, now) {
-                            fresh.extend(handle_outcome(id, o, now, &mut summary, &chunk_end_wall, &mut gaps));
+                            show_photo(&mut canvas, &*sink, &log, &mut summary, &mut changes, replace, &id, &subject, chunk_id, heard_at, "drawn");
                         }
                     }
                 }
             }
-            _ = tick.tick() => {
-                let now = log.now_ms();
-                for (id, o) in stage.tick(now) {
-                    fresh.extend(handle_outcome(id, o, now, &mut summary, &chunk_end_wall, &mut gaps));
-                }
-                // After the audio ends, drain in-flight work and any pending visual (≤ hold), then stop.
-                if let Some(t) = hear_done_at {
-                    if t.elapsed() > Duration::from_millis(cfg.stage.hold_render_ms + 1500) {
-                        break;
-                    }
-                }
-            }
-        }
-        // ---- nothing in the library → draw it (handoff AS12); never blocks this loop ----
-        for id in gaps {
-            let Some(subject) = subject_of.get(&id).cloned() else { continue };
-            if !engine.gen.enabled() || ls_gen::ImageGen::refuses(&subject) || subject.trim().len() < 4 {
-                continue;
-            }
-            // Numbers/structure → the agent draws a chart or diagram for this sentence; don't also draw a
-            // picture of "first year" or "200 users".
-            if graphic_chunks.contains(&id) {
-                continue;
-            }
-            // Drawing asserts "this is the thing you meant", so it needs Jev to be sure it wanted a photo
-            // at all (a library photo is cheaper to be wrong about). Offline (no routing) → allowed.
-            // 0.8 was unsatisfiable: every chunk that ever reached a gap scored 0.68–0.69, so generation
-            // has been silently dead since routing shipped. Skips are logged now — a feature that is off
-            // must not look identical to a feature that is on.
-            let conf = photo_conf.get(&id).copied().unwrap_or(0.0);
-            if engine.decider.has_remote() && conf < 0.7 {
-                log.log(json!({"ev": "gen_skipped", "chunk_id": id, "subject": &subject, "reason": "p_visual", "p_visual": conf}));
-                continue;
-            }
-            // Never draw from a transcript that is still moving. Every one of the six junk generations on
-            // 09-19 ("Paris" from "parrots", "200 users", "second year") came from a partial that a later
-            // chunk corrected; a final costs ~1 s and blocks all of them.
-            if engine.decider.has_remote() && !final_chunks.contains(&id) {
-                log.log(json!({"ev": "gen_skipped", "chunk_id": id, "subject": &subject, "reason": "not_final"}));
-                continue;
-            }
-            // "planet Earth from space" right after "planet Earth" is the same picture.
-            if recent_subjects.iter().any(|(s, t): &(String, Instant)| t.elapsed() < Duration::from_secs(25) && similar(s, &subject)) {
-                continue;
-            }
-            if !generating.insert(subject.clone()) {
-                continue;
-            }
-            recent_subjects.push((subject.clone(), Instant::now()));
-            recent_subjects.retain(|(_, t)| t.elapsed() < Duration::from_secs(60));
-            let cached = cfg.gen_dir.join(format!("{}.jpg", slug(&subject)));
-            let (e, tx, log2) = (engine.clone(), tx.clone(), log.clone());
-            tokio::spawn(async move {
-                if cached.exists() {
-                    // generated earlier in this talk (or a rehearsal) — reuse, no call
-                    let _ = tx.send(Msg::Generated(id, subject, None, 0));
-                    return;
-                }
-                let t = log2.now_ms();
-                let bytes = e.gen.generate(&subject).await;
-                let _ = tx.send(Msg::Generated(id, subject, bytes, log2.now_ms() - t));
-            });
+            _ = tick.tick() => {}
         }
 
-        // ---- canvas mode: fast path onto the board, then (maybe) the agent ----
-        if cfg.canvas {
-            for ev in fresh {
-                let scene = match (ev.kind, ev.image_id.as_deref()) {
-                    ("clear", _) | (_, None) => {
-                        last_clear = Some(Instant::now());
-                        canvas.clear(ev.chunk_id)
+        // ---- ask Luna when there are words it has not seen, it is idle, and the rate cap allows ----
+        let fresh_words = transcript[seen_upto..].iter().map(|s| word_count(&s.text)).sum::<usize>() + new_words_in(&speaking_now, &last_speaking);
+        if fresh_words > 0 && dirty_since.is_none() {
+            dirty_since = Some(log.now_ms());
+        }
+        let draining = hear_done_at.is_some();
+        let due = last_call.is_none_or(|t| t.elapsed() >= min_gap);
+        if !agent_busy && due && fresh_words >= if draining { 1 } else { 3 } {
+            call_no += 1;
+            agent_busy = true;
+            last_call = Some(Instant::now());
+            let heard_at = dirty_since.take().unwrap_or_else(|| log.now_ms());
+            let (e, tx, log2) = (engine.clone(), tx.clone(), log.clone());
+            let (seen, tr, new_from, speaking, ch, now_s, call, chunk_id) =
+                (canvas.scene().clone(), transcript.clone(), seen_upto, speaking_now.clone(), changes.iter().cloned().collect::<Vec<_>>(), log.now_ms() / 1000, call_no, last_chunk_id);
+            log.log(json!({"ev": "agent_call", "call": call, "chunk_id": chunk_id, "sentences": tr.len(), "new_sentences": tr.len() - new_from,
+                "speaking_words": word_count(&speaking), "tiles": seen.elements.len()}));
+            seen_upto = transcript.len();
+            last_speaking = speaking_now.clone();
+            tokio::spawn(async move {
+                let t = log2.now_ms();
+                let input = AgentInput { scene: &seen, transcript: &tr, new_from, speaking_now: &speaking, changes: &ch, now_s };
+                let mut proposal = e.agent.propose(&input).await;
+                if proposal.source == ls_agent::Source::Rules {
+                    if let Some(subject) = offline_photo(&input.newest_text(), &e.vocab) {
+                        proposal.ops.push(Op::ShowPhoto { subject, replace: false });
                     }
-                    ("update", Some(id)) => canvas.update(id, &caption_of(id), ev.url.as_deref().unwrap_or_default(), ev.chunk_id),
-                    (_, Some(id)) => canvas.render(id, &caption_of(id), ev.url.as_deref().unwrap_or_default(), ev.chunk_id),
-                };
-                log.log(scene_log(&scene));
-                sink.scene(&scene);
-                if !scene.elements.is_empty() {
-                    let text = chunk_text.get(&ev.chunk_id).cloned().unwrap_or_default();
-                    agent_trigger = Some((recent.iter().cloned().collect::<Vec<_>>().join(" "), text, ev.chunk_id, None));
                 }
-            }
-            if let Some(t) = agent_trigger {
-                if agent_busy {
-                    // Latest wins; runs when the in-flight call returns. The agent is ~3× slower than the
-                    // chunk rate, so this drops roughly 38% of routed sentences — log it rather than let
-                    // a starved queue look like a quiet one.
-                    if let Some(dropped) = agent_next.replace(t) {
-                        log.log(json!({"ev": "agent_dropped", "chunk_id": dropped.2, "hint": dropped.3}));
-                    }
-                } else {
-                    agent_busy = true;
-                    spawn_agent(canvas.scene().clone(), t.0, t.1, t.2, t.3);
-                }
+                let _ = tx.send(Msg::Agent { seen, proposal, call, chunk_id, ms: log2.now_ms() - t, heard_at });
+            });
+        }
+        // After the audio ends, finish what is in flight and answer the last words, then stop.
+        if let Some(t) = hear_done_at {
+            if (!agent_busy && inflight == 0 && fresh_words == 0) || t.elapsed() > Duration::from_secs(25) {
+                break;
             }
         }
     }
-    log.log(json!({"ev": "summary", "summary": &summary, "p50": summary.pct(0.5), "p95": summary.pct(0.95),
-        "cache": engine.cache.stats()}));
+    log.log(json!({"ev": "summary", "summary": &summary, "p50": summary.pct(0.5), "p95": summary.pct(0.95), "cache": engine.cache.stats()}));
     Ok(summary)
 }

@@ -4,17 +4,17 @@ A presenter talks; the screen shows one full-bleed image from a local library th
 being said, changing on its own. Design doc: see PLAN.md (link). State of the build: PROGRESS.md / TODO.md.
 
 ```
-mic → VAD + Whisper (local) → ┬→ Jev "change?" (OpenRouter)            ┐
-                              └→ query model "what?" (OpenRouter) → MobileCLIP search (local)
-                                                                        → join + stage rules (Rust) → Tauri render
+mic → VAD + Whisper (local) → transcript → Luna (OpenRouter tool-calling model) → board ops / show_photo
+                                  Luna sees the whole transcript, the board, and what it changed recently
+                       show_photo → CLIP search of the photo library (local) → or draw it → Tauri render
 ```
 
 ## One-time setup (8 GB Mac: run heavy steps one at a time)
 
 1. Models (already downloaded into `models/`): `ggml-base.en.bin`, `ggml-silero-v5.1.2.bin`,
    `mobileclip-s2/{open_clip_model.safetensors,tokenizer.json}`.
-2. `.env` — copy `.env.example`, set `OPENROUTER_API_KEY`. Without it the app still runs, using the local
-   fallbacks (vocabulary heuristic for "change?", noun phrases for "what?").
+2. `.env` — copy `.env.example`, set `OPENROUTER_API_KEY`. Without it the app still runs on the offline rules
+   (layout cues, and a presenter cue + library subject for photos).
 3. Build: `CARGO_BUILD_JOBS=2 cargo build --release`
 4. Image library: a folder of jpg/png/webp + optional `captions.tsv` (`id<TAB>caption`, id = file stem).
    Index it (one image at a time, ~1.5 s each):
@@ -44,20 +44,25 @@ With no mic named, the app prefers AirPods, then the MacBook mic, and never a vi
   - `f` toggles full screen on the stage window; `g` toggles the grid of every image shown so far
     (the "deck that built itself"; it also appears automatically when a replay ends).
 - Rehearsal replay of a recording: `LS_SOURCE=wav:talk.wav ./target/release/live-slides`
+- End-to-end check: `./target/release/ls-replay fixtures/audio/luna-edit-talk.wav`, then
+  `python3 scripts/e2e_check.py logs/run-….jsonl` (nine board milestones, in order).
+- Agent probes (no audio): `cargo run -p ls-agent --bin ls-agent-probe -- --runs 3` (see probes/luna/README.md).
 - Headless (no UI) replay with a summary: `./target/release/ls-replay talk.wav`
-- Every run writes `logs/run-<epoch>.jsonl`: chunk (asr/vad ms, lag), decide (source, action, p, ms),
-  search (phrases, fallback, query/search ms, best + score), join outcome, render (speech→render ms),
-  frontend_ack (decode + receive→paint ms).
+- Every run writes `logs/run-<epoch>.jsonl`: chunk (asr/vad ms, lag), agent_call / agent (Luna's ops, what applied,
+  what was refused and why, `no_action` reasons, ms), photo_search (subject, best + score), generated, render
+  (speech→render ms), scene (the board after each change), frontend_ack (decode + receive→paint ms).
 
 ## Tuning knobs
-- `LS_ASSETS` (asset card root, e.g. `/Volumes/NO NAME/assets`) — switches photo search to Marcus's 15k-photo
-  library (OpenAI CLIP ViT-B/32 embeddings, see ASSETS_HANDOFF.md). Unset = the local MobileCLIP index.
+- `CANVAS_MODEL` (default `openai/gpt-5.6-luna`) — the model that decides everything. `CANVAS_TIMEOUT_MS` (6000): one
+  retry, shorter, on a timeout / 429 / 5xx, then the offline rules. `AGENT_RPM` (18) — calls per minute; a new
+  OpenRouter account is capped at 20/min for Luna.
+- `LS_ASSETS` (asset card root, e.g. `/Volumes/NO NAME/assets`) — Marcus's 15k-photo library (OpenAI CLIP ViT-B/32
+  embeddings, see ASSETS_HANDOFF.md). Unset = the local MobileCLIP index (`INDEX`, `CLIP_DIR`).
 - `CLIP_TEXT_DIR` (default `models/clip-vit-b32`) — `tokenizer.json` + `pytorch_model.bin` from
   openai/clip-vit-base-patch32; the text tower is extracted once into `clip-text-vit-b32.safetensors`.
 - `BASETEN_API_KEY` (+ optional `BASETEN_URL`, `GEN_SIZE`, default 768) — draws a picture when the library has
   nothing. ~2 s warm; the deployment is woken at launch because a cold start takes ~146 s.
-- `LABEL_MIN` (0.92) / `UNLABELLED_MIN` (off) — how strictly a card photo must match the query.
+- `TAU` — lowest photo score accepted (0.22 on the asset card, 0.52 with MobileCLIP; recalibrate per library with
+  `ls-calibrate`). `LABEL_MIN` (0.92) / `UNLABELLED_MIN` (off) — how strictly a card photo must match.
 - `LS_THEME` (`sketch` = paper + hand-drawn graphics, default; `slate` = dark cards).
-- `TAU` (image score threshold, default 0.52 — recalibrate per library with `ls-calibrate` (labels TSV: phrase<TAB>image_id or -)).
-- Stage holds/probabilities: `crates/stage` `StageConfig` (4 s render hold, 1.5 s update, p ≥ 0.6/0.7).
-- Chunking: `crates/hear` `ChunkerConfig` (0.75 s tick, 0.6 s pause, 8 s max).
+- Chunking: `crates/hear` `ChunkerConfig` (0.6 s tick, 0.6 s pause, 8 s max).

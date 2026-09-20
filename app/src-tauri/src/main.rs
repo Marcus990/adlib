@@ -111,7 +111,7 @@ fn main() -> anyhow::Result<()> {
     let root = root().canonicalize()?;
     let cfg = Config::from_env(&root);
     let remote = cfg.api_key.is_some();
-    let mode = if cfg.canvas { "canvas" } else { "single" };
+    let mode = "canvas";
     let log = Logger::create(&cfg.log_path)?;
     eprintln!("log: {}  remote: {}", cfg.log_path.display(), remote);
     let (src, src_label) = source();

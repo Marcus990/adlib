@@ -6,99 +6,99 @@ A quick guide for presenters (top) and for whoever tunes it (bottom). Canvas mod
 
 | You want | Say something like | Notes |
 |---|---|---|
-| A photo | Just talk about it: "Penguins can't fly, but they're great swimmers." | Naming a library subject outright is fastest (≈0.2–0.4 s after the word). It must be in the library. |
+| A photo | Just talk about it: "Penguins can't fly, but they're great swimmers." | From the photo library; if the library has nothing about it, one is drawn (about 2 s more). Logos, brands, charts and text are never drawn. |
 | Swap the photo in focus | "Actually, make that the white rose instead." | A different variant of what's shown. |
 | Two photos together | "…a red rose and a white rose side by side." | |
 | A chart | Say the numbers: "two hundred users… five hundred… fifteen hundred", "fifty percent are students…" | Only numbers you actually say get charted. |
-| Fix a number | "Sorry, actually it was six hundred." | |
+| Fix a number | "Sorry, actually it was six hundred." / "Let's correct March from seventy to eighty." / "Make that ninety." | Fixes that one value; the rest of the chart stays. If you name no month, it is the one you just talked about. |
+| Add a number | "And in April we hit ninety five." | Adds to the chart already on screen. |
+| Take one bar / step out | "Drop February." / "Let's take the test step out." | |
+| Rename or restyle | "Call this chart monthly signups." / "Show that as a line chart." | |
 | A before → after | "Setup time dropped from twenty minutes to two minutes." | |
 | A process diagram | "First we record audio. Then… Next… Finally…" | Grows one step per sentence; can start with one step. |
 | A loop | "…and it all runs in a loop." | Turns the process into a cycle. |
 | Parts of a whole | "The system is made up of three parts: the ears, the brain and the canvas." | |
 | A timeline | "In 2019 we… In 2021 we… In 2023…" | |
 | Compare / zoom / point | "Let's compare them side by side." "Zoom in on the owl." "Notice the eyes." | |
-| Remove one thing | "Let's remove the eagle." / "Get rid of the white rose." | Name the thing. |
+| Remove a picture | "Take the eagle away." / "Get rid of the chart." | Name the thing. |
 | Clear the board | "Let's move on." / "Next topic." | Once per section. |
 
 **Tips**
-- Pause a beat at the end of a sentence — charts, diagrams and board commands are decided when a sentence finishes.
+- The screen reacts to your newest words within about 2–3 seconds; a pause at the end of a sentence helps it settle.
 - Say "fifty percent", not "half" (see *Numbers* below).
 - Filler ("um, okay, where was I") and greetings show nothing, by design.
 - Things not in the library can't be shown. Dev library: baseball, basketball, bowling, cactus, chalk, dahlia,
   dandelion, drum, eagle, earth, eight ball, flower, football, fortune cookie, gingerbread man, golf, guitar, hockey,
   leaf, lightning, lotus, medal, nest, owl, parrot, penguin, piano, poppy, red rose, sand dollar, smack, snowflake,
   soccer, sunflower, target, tennis, turntable, violin, white rose, yellow daisy, yin-yang, zebra, zen.
-- Product names get misheard by the transcriber (Jev → "JET", Tauri → "Tori"); a vocabulary hint is not in yet.
+- Product names get misheard by the transcriber; list them in `talk-terms.txt` (or `TALK_TERMS`) to give it a hint.
 
 ## How each decision is made
 
-**Jev routes every sentence (2026-09-19).** One call per transcript update (~0.6 s apart, ~212 ms each) asks
-two questions: *should the screen change at all* (yes/no probability) and *what does this sentence need* —
-`photo` · `photo_update` · `chart` · `diagram` · `board` · `clear` · `none`. The pipeline dispatches on that
-answer, and **one sentence gets one visual**: a sentence with numbers goes to the chart path and the photo path
-stands down (before this, "in the first year we had 200 users" drew a chart *and* generated pictures of "first
-year" and "200 users"). Drawing a picture that doesn't exist in the library needs Jev to be ≥ 0.8 sure the
-sentence wanted a photo at all.
+**One decision-maker: Luna** (`openai/gpt-5.6-luna` through OpenRouter, `crates/agent`). Jev, the image-phrase model and
+the stage's hold/confirm rules are gone from the runtime path. Everything that changes the screen — a photo, a chart,
+a diagram, a correction, a removal, a layout change, a clear — is one Luna tool call.
 
-Measured on real sentences: 13/15 routed correctly at 0.75–1.00 confidence. A third question was tried and
-removed — it pushed Jev past its 700 ms budget and every decision silently fell back to the local heuristic.
+Each call gets, in this order (the front of the message is stable between calls so providers can cache it):
+1. **the whole transcript** so far, oldest first, each sentence stamped with when it was said (capped at ~10k tokens);
+2. **the board as it is now**, with tile ids (`e1`…), diagram node ids (`n1`…), chart points, focus, layout and limits;
+3. **recent changes** — the last ten things done to the board, so it doesn't repeat itself;
+4. **the newest words**: the sentences since its last call, and the phrase being spoken right now.
 
-The word lists below are now **the offline path** (no API key, or Jev unreachable) plus mid-sentence shortcuts.
-They no longer decide anything when Jev is answering.
+It acts only on the newest words; earlier speech is context. Its answer is tool calls, or `no_action(reason)`
+(`tool_choice` is `required`, so "nothing to do" is an explicit, logged choice):
 
-| Visual | Who decides | When it's considered | Hard rules in code |
-|---|---|---|---|
-| Photo | **Jev** routes (`photo` / `photo_update`); the **phrase model** or the **named-subject shortcut** decides *what*; **image search** finds it in the library | Every transcript update (~0.6 s) | Library match ≥ 0.52 (MobileCLIP) / label gate (asset card); Jev ≥ 0.45 new, 0.4 swap; an unfinished phrase with Jev < 0.6 needs a second agreeing update; ≥ 1.5 s between new photos |
-| Drawn picture | Same, when the library has nothing (or only a near-miss) | as above | Jev must be ≥ 0.8 sure the sentence wanted a photo; subject must still be in the transcript when the image lands (< 12 s); similar subjects are not redrawn within 25 s; logos/charts/vague subjects refused |
-| Chart, diagram | **Jev routes** (`chart` / `diagram`), the **canvas agent** draws it (gets `needs: chart|diagram`) | When Jev routes there | Chart values must be spoken numbers (or already on the board); a new set of numbers or a bar → pie switch makes a *new* chart; same-layout redraw replaces the diagram in focus; ≤ 4 tiles, ≤ 8 nodes/points |
-| Compare / zoom / point / remove | **Jev routes** (`board`), the canvas agent picks the op | When Jev routes there | Removing a tile still needs a removal phrase in your newest words |
-| Clear the board | **Jev routes** (`clear`), the canvas agent clears | When Jev routes there | Still needs a section phrase in your newest words; one clear per 6 s |
+| Tools | For |
+|---|---|
+| `show_photo(subject, mode add\|replace)` | A photo. The pipeline embeds Luna's phrase with CLIP, searches the library, and draws the picture if nothing matches. |
+| `draw_chart` · `set_point` · `add_point` · `remove_point` · `set_chart` | A new chart; correct one value; add a point; drop a point; change kind / title / unit. Points are addressed by label ("Mar" finds "March"). |
+| `draw_diagram` · `add_nodes` · `update_node` · `remove_node` · `add_edge` · `remove_edge` | A new diagram; grow it; rename a step; drop a step; link or unlink steps. |
+| `focus` · `arrange` · `annotate` · `clear_annotations` | Layout and emphasis. |
+| `remove(id)` · `clear_board` | Take a tile away; clear the screen. |
 
-Everything in the "who decides" column is a model judgement; everything in the last column and the lists
-below is **hardcoded** (English phrases in Rust).
+**When Luna is called:** whenever it is idle, at least 3 new words have arrived (partial phrases count), and the
+rate cap allows (`AGENT_RPM`, default 18/min; a new OpenRouter account is limited to 20/min for this model).
+Sentences that arrive while it is busy are merged into the next call, not dropped. After the audio ends, the last
+words get a final call.
 
-## The word lists (hardcoded)
+## Hard rules in code (the model judges the language; the code checks the evidence)
 
-**Mid-sentence graphics shortcut** — `has_graphic_cue`, [crates/canvas/src/lib.rs:688](crates/canvas/src/lib.rs):
-any digit; percent, hundred, thousand, million, billion, half of, a third, a quarter, doubled, tripled, twice as,
-grew, growth, increased, decreased, dropped, went up, went down, "first,", first we/you/the, then we/you/the/it,
-after that, "next,", finally, step, stages, phase, process, pipeline, workflow, cycle, loop, leads to, results in,
-feeds into, which means, because of, timeline, over the years, made up of, consists of, breaks down, "parts:".
-*Only makes graphics start earlier; the finished sentence is always sent anyway.*
+- **Destructive ops need a quote.** `remove`, `clear_board`, `remove_point` and `remove_node` carry a `quote`: the
+  exact words in which the presenter asked. The code checks every word of it appears, in order, in the *newest*
+  words. No quote, or a quote from earlier speech, and the op is refused (and logged). There are no phrase lists
+  any more, so "take the eagle away" and "let's park that" work as well as "remove". One clear per 6 s.
+- **Chart values must be numbers the presenter said** (or already on the board). A number said with a scale word
+  also grounds the bare number ("eighteen million" → 18, for a chart kept in millions). Invented remainders like
+  "Not stoned: 40" are dropped.
+- **Ops address things by id**, so an op still applies when a photo landed while Luna was thinking. If its target
+  is gone, it is refused and logged. A `clear_board` clears only the tiles Luna saw.
+- Canvas limits: ≤ 4 tiles, ≤ 3 annotations, ≤ 8 nodes and ≤ 8 points; a stat with a second value becomes bars; a
+  redraw sharing half its nodes with a diagram on the board replaces it in place.
+- **Photos:** a library match must clear the score floor `TAU` and, on the asset card, the label gate. A subject
+  asked for twice within 25 s is one picture. A drawn picture is shown only if the subject is still in what was
+  said (< 15 s old); logos, icons, charts, text and vague subjects are never drawn; drawn pictures are saved in
+  `generated/` and reused.
 
-**Mid-sentence layout shortcut** — `has_layout_cue`, [crates/canvas/src/lib.rs:751](crates/canvas/src/lib.rs)
-(only when something is on the board): compare, versus, vs, side by side, next to each other, both of these,
-focus on, zoom in, this one, closer look, all of these, all together, altogether, notice, see how, look at the,
-pay attention, connects to, leads to, compared to, just like, moving on, let's move on, next topic, new section,
-set that aside.
+Every refused op, every model failure and every "nothing to do" is in `logs/run-*.jsonl` (`ev: "agent"`, fields
+`ops`, `applied`, `refused`, `no_action`, `error`).
 
-**Clear permission** — `has_section_cue`, [crates/canvas/src/lib.rs:663](crates/canvas/src/lib.rs):
-move on, moving on, next topic, new section, set that aside, start fresh, switch gears, switching gears, next up,
-clean slate, clear the screen, change of topic, different topic.
-
-**Remove permission** — `has_removal_cue`, [crates/canvas/src/lib.rs:675](crates/canvas/src/lib.rs):
-remove, get rid of, take away, take that/it away, take that/it down, put that/it aside, set aside, set that aside,
-forget the, forget about, drop the, hide the, don't need the, no longer need.
-
-**Numbers** — `spoken_numbers`, [crates/agent/src/lib.rs:239](crates/agent/src/lib.rs): digits (with commas,
-decimals, %, $), number words zero–nineteen, twenty–ninety, hundred / thousand / million / billion ("fifteen
-hundred", "forty thousand", "a thousand", "1.2 million"). **Not understood:** half, a third, dozen, couple —
-a chart value built from those is dropped.
-
-**Named subjects** — `named_subject`, [crates/query/src/lib.rs:184](crates/query/src/lib.rs): not a fixed list —
-the library's own captions. A phrase that names exactly one library subject is searched immediately; two subjects
-("owls and penguins") or an ambiguous one ("a rose and a white rose") go through the phrase model.
-
-**Offline fallback only** (no API key / model down) — `CUES` and `REFINE_OBJECT_CUES`,
-[crates/query/src/lib.rs:140](crates/query/src/lib.rs): here's, take a look, look at, picture this, imagine, as you
-can see, let me show you, check out, this is what…; make that, make it, switch to, change it to, instead of that,
-the other one.
+## Offline fallback (no key, or Luna unreachable)
+A model call gets one retry (a timeout, a 429 or a 5xx), then the rules answer: `rule_ops`
+([crates/canvas](crates/canvas/src/lib.rs)) maps "compare / side by side", "focus on / zoom in", "notice / look at
+the", "let's move on / next topic" to layout ops, and a presenter cue ("here's…", "take a look at…", "picture
+this…", `CUES` in [crates/query](crates/query/src/lib.rs)) followed by a library subject shows that subject.
 
 ## Known limits
-- Jev routes the sentence, but clearing and removing still need one of the listed phrases as a final guard, so
-  paraphrases ("let's park that") route to `clear`/`board` and are then dropped. Removing that guard is a one-line
-  change once routing has been trusted for a few talks.
-- Nothing yet checks *how well the words were heard*: "parrots are nice" became a picture of Paris because the
-  phrase model invented a subject, and "how this painting works" was a mis-hearing of "pipeline". Whisper's
-  per-token confidence is now exposed (`transcribe_detailed`) but not yet used — TODO N1/N2/N3.
+- Speech → photo is about 2.7 s for a library photo and about 7 s for a drawn one (measured on the spoken test
+  talk `fixtures/audio/luna-edit-talk.wav`). Most of it is Luna's ~1.4 s call plus waiting for the previous call
+  and the rate cap.
+- Nothing yet checks *how well the words were heard*: a mis-transcribed partial can make Luna ask for the wrong
+  photo. Whisper's per-token confidence is exposed (`transcribe_detailed`) but not yet used.
+- The transcript is capped at ~10k tokens; older sentences are dropped, not summarised.
 - English only; accents and a noisy room raise transcription errors (sessions are recorded to `logs/*.wav` for tuning).
+
+## Testing
+- `cargo run -p ls-agent --bin ls-agent-probe -- --runs 3` — 42 speech → board cases against the real model (see
+  [probes/luna/README.md](probes/luna/README.md); baseline before the refactor in `probes/luna/BASELINE.md`).
+- `./target/release/ls-replay fixtures/audio/luna-edit-talk.wav` then `python3 scripts/e2e_check.py logs/run-….jsonl` —
+  a spoken talk through Whisper → Luna → canvas, checked against nine board milestones.

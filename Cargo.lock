@@ -2779,19 +2779,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ls-decide"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "ls-contracts",
- "ls-query",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "ls-gen"
 version = "0.1.0"
 dependencies = [
@@ -2824,12 +2811,10 @@ dependencies = [
  "ls-agent",
  "ls-canvas",
  "ls-contracts",
- "ls-decide",
  "ls-gen",
  "ls-hear",
  "ls-query",
  "ls-search",
- "ls-stage",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -2839,14 +2824,6 @@ dependencies = [
 [[package]]
 name = "ls-query"
 version = "0.1.0"
-dependencies = [
- "anyhow",
- "ls-contracts",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tokio",
-]
 
 [[package]]
 name = "ls-search"
@@ -2861,13 +2838,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokenizers",
-]
-
-[[package]]
-name = "ls-stage"
-version = "0.1.0"
-dependencies = [
- "ls-contracts",
 ]
 
 [[package]]

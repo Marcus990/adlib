@@ -36,6 +36,6 @@ async fn main() -> anyhow::Result<()> {
     let summary = run(engine, source, Arc::new(Print), log, stop).await?;
     println!("\nchunks={} renders={} shown={:?}", summary.chunks, summary.renders, summary.shown);
     println!("speech→render latency ms: {:?}  p50={:?} p95={:?}", summary.render_latencies_ms, summary.pct(0.5), summary.pct(0.95));
-    println!("outcomes={:?} decide_sources={:?} query_fallbacks={}", summary.outcomes, summary.decide_sources, summary.query_fallbacks);
+    println!("agent calls={} fallbacks={} ops applied={} refused={} generated={}", summary.agent_calls, summary.agent_fallbacks, summary.ops_applied, summary.ops_refused, summary.generated);
     Ok(())
 }
