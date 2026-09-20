@@ -77,3 +77,32 @@ CASES += [
         tile("e3", "diagram", diagram=diagram("flow", "Where the data goes", ["Kafka", "Spark", "Snowflake", "Grafana"], icons={"Kafka": pic("logo", "Kafka"), "Spark": pic("logo", "Apache Spark"), "Snowflake": pic("logo", "Snowflake"), "Grafana": pic("logo", "Grafana")})),
         tile("e4", "diagram", diagram=diagram("hub", "One platform, many teams", ["Platform", "Data", "Security", "Mobile", "Web"], icons={"Platform": pic("icon", "layers"), "Data": pic("icon", "database"), "Security": pic("icon", "shield"), "Mobile": pic("icon", "smartphone"), "Web": pic("icon", "globe")})))},
 ]
+
+def text_card(blocks):
+    return {"blocks": [{"id": f"b{i + 1}", **b} for i, b in enumerate(blocks)]}
+
+LESSONS = text_card([
+    {"kind": "heading", "text": "Three lessons from building in public", "level": 1, "emphasis": ["building in public"]},
+    {"kind": "paragraph", "text": "The fastest teams shorten the distance between an idea and a real user.", "level": 0, "emphasis": ["real user"]},
+    {"kind": "bullet", "text": "Start with the problem, not the feature", "level": 0, "emphasis": ["the problem"]},
+    {"kind": "bullet", "text": "Measure the outcome that matters", "level": 0, "emphasis": ["outcome"]},
+    {"kind": "bullet", "text": "Keep the feedback loop short", "level": 0, "emphasis": ["feedback loop"]},
+])
+CASES += [
+    {"name": "text-lessons-full", "scene": {"elements": [tile("e1", "text", text=LESSONS, focus=True)]}},
+    {"name": "text-closing-full", "scene": {"elements": [tile("e1", "text", text=text_card([
+        {"kind": "heading", "text": "Thank you", "level": 1, "emphasis": []},
+        {"kind": "paragraph", "text": "Questions?", "level": 0, "emphasis": []},
+    ]), focus=True)]}},
+    {"name": "text-wrapped-emphasis", "scene": {"elements": [tile("e1", "text", text=text_card([
+        {"kind": "heading", "text": "Build the company by keeping the customer feedback loop extraordinarily short", "level": 1, "emphasis": ["customer feedback loop extraordinarily short"]},
+    ]), focus=True)]}},
+    {"name": "text-grid", "scene": grid(
+        tile("e1", "text", text=LESSONS),
+        tile("e2", "text", text=text_card([
+            {"kind": "heading", "text": "The takeaway", "level": 2, "emphasis": []},
+            {"kind": "paragraph", "text": "Speed of learning beats speed of shipping.", "level": 0, "emphasis": ["Speed of learning"]},
+        ])),
+        tile("e3", "chart", chart=chart("bar", "Users", "", [("2024", 2000), ("2025", 15000)])),
+        tile("e4", "diagram", diagram=diagram("flow", "How it works", ["Listen", "Decide", "Show"])))},
+]

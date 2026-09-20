@@ -288,12 +288,13 @@ fn scene_log(scene: &Scene) -> Value {
     let tiles: Vec<Value> = scene
         .elements
         .iter()
-        .map(|e| match (&e.diagram, &e.chart) {
-            (Some(d), _) => json!({"id": e.id, "kind": "diagram", "layout": d.layout, "title": d.title,
+        .map(|e| match (&e.diagram, &e.chart, &e.text) {
+            (Some(d), _, _) => json!({"id": e.id, "kind": "diagram", "layout": d.layout, "title": d.title,
                 "nodes": d.nodes.iter().map(|n| n.label.clone()).collect::<Vec<_>>(), "edges": d.edges.len(),
                 "pictures": d.nodes.iter().filter(|n| n.icon.is_some()).count()}),
-            (_, Some(c)) => json!({"id": e.id, "kind": "chart", "chart": c.kind, "title": c.title, "unit": c.unit,
+            (_, Some(c), _) => json!({"id": e.id, "kind": "chart", "chart": c.kind, "title": c.title, "unit": c.unit,
                 "points": c.points.iter().map(|p| json!([p.label, p.value])).collect::<Vec<_>>(), "pictures": c.points.iter().filter(|p| p.icon.is_some()).count()}),
+            (_, _, Some(t)) => json!({"id": e.id, "kind": "text", "blocks": t.blocks.iter().map(|b| json!({"id": b.id, "kind": b.kind, "text": b.text})).collect::<Vec<_>>()}),
             _ if e.kind == ElementKind::Logo => json!({"id": e.id, "kind": "logo", "asset": e.image_id, "title": e.caption}),
             _ => json!({"id": e.id, "kind": "image", "image_id": e.image_id}),
         })

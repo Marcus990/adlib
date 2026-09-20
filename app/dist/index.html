@@ -235,7 +235,7 @@
     const board = $('board');
     for (const e of sc.elements) {
       let t = tiles.get(e.id);
-      const gfx = e.kind === 'diagram' || e.kind === 'chart';
+      const gfx = e.kind === 'diagram' || e.kind === 'chart' || e.kind === 'text';
       const logo = e.kind === 'logo';
       const sketch = theme === 'sketch';
       if (t && t.sketch !== sketch) { t.div.remove(); tiles.delete(e.id); t = null; }   // theme switched
@@ -256,7 +256,7 @@
       if (gfx) {
         // Drawn for the tile's final size; the SVG scales smoothly while the tile animates there.
         const W = e.rect.w * innerWidth, H = e.rect.h * innerHeight;
-        const sig = JSON.stringify([e.diagram || e.chart, Math.round(W), Math.round(H)]);
+        const sig = JSON.stringify([e.diagram || e.chart || e.text, Math.round(W), Math.round(H)]);
         if (sig !== t.sig) { t.sig = sig; try { Sketch.render(t.div.querySelector('svg.g'), e, W, H, t.seen, n === 1, sketch ? 'sketch' : 'slate'); } catch (err) { fe('js_error', sc.chunk_id, null, 'gfx ' + err); } }
         t.div.classList.toggle('full', n === 1);
         t.div.classList.toggle('dim', sc.layout === 'hero' && !e.focus && n > 1);

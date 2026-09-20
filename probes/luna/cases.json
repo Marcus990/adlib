@@ -1,5 +1,17 @@
 [
  {
+  "id": "chart-large-headline-is-stat",
+  "group": "chart-headline",
+  "board": [],
+  "history": ["Here is the situation."],
+  "newest": "McDonald's lost over one hundred million dollars.",
+  "expect": {
+   "elements": 1,
+   "charts": {"e1": {"kind": "stat", "values": [100]}},
+   "no_photo": true
+  }
+ },
+ {
   "id": "chart-correct-explicit",
   "group": "chart-edit",
   "board": [
@@ -2357,6 +2369,119 @@
   "newest": "Amazon Web Services has thirty two percent of the market.",
   "expect": {
    "no_symbol": true,
+   "no_photo": true
+  }
+ },
+ {
+  "id": "text-explicit-list",
+  "group": "text",
+  "board": [],
+  "history": ["Today I want to share what we learned building this company."],
+  "newest": "There are three lessons: start with users, measure the outcome, and keep the feedback loop short.",
+  "expect": {
+   "elements": 1,
+   "texts": {"e1": {"block_count": 4, "blocks_include": ["three lessons", "start with users", "measure the outcome", "feedback loop"]}},
+   "no_photo": true
+  }
+ },
+ {
+  "id": "text-stated-takeaway",
+  "group": "text",
+  "board": [],
+  "history": ["We ran twelve experiments over six weeks."],
+  "newest": "The key takeaway is simple: speed of learning beats speed of shipping.",
+  "expect": {
+   "elements": 1,
+   "texts": {"e1": {"blocks_include": ["speed of learning"]}},
+   "no_photo": true
+  }
+ },
+ {
+  "id": "text-correct-block",
+  "group": "text",
+  "board": [{"op": {"op": "draw_text", "blocks": [
+   {"kind": "heading", "text": "Three lessons", "level": 1, "emphasis": ["Three lessons"]},
+   {"kind": "bullet", "text": "Measure outputs", "level": 0, "emphasis": ["Measure outputs"]}
+  ]}}],
+  "history": ["There are three lessons. First, measure outputs."],
+  "newest": "Actually, make that second point measure outcomes.",
+  "expect": {
+   "elements": 1,
+   "texts": {"e1": {"block_count": 2, "blocks_include": ["measure outcomes"]}}
+  }
+ },
+ {
+  "id": "text-guard-ordinary-narration",
+  "group": "text",
+  "board": [],
+  "history": ["Let me tell you how this began."],
+  "newest": "We stayed up late, talked to customers, and rewrote the prototype before sunrise.",
+  "expect": {"no_change": true, "no_photo": true}
+ },
+ {
+  "id": "text-single-actor-outcome-not-diagram",
+  "group": "text",
+  "board": [],
+  "history": ["So here's the situation. You have two interns, James and Marcus, and they broke prod."],
+  "newest": "What they did was that they somehow enabled their website's customer service agents to end up doing the coding side.",
+  "expect": {
+   "elements": 1,
+   "texts": {"e1": {"blocks_include": ["customer service agents", "coding"]}},
+   "no_photo": true
+  }
+ },
+ {
+  "id": "text-new-headline-replaces-old",
+  "group": "text",
+  "board": [{"op": {"op": "draw_text", "blocks": [
+   {"kind": "heading", "text": "They lost over one hundred million dollars", "level": 1, "emphasis": ["lost over one hundred million dollars"]}
+  ]}}],
+  "history": ["They lost over one hundred million dollars."],
+  "newest": "What actually matters now is customer retention.",
+  "expect": {
+   "elements": 1,
+   "texts": {"e1": {"block_count": 1, "blocks_include": ["customer retention"]}},
+   "no_photo": true
+  }
+ },
+ {
+  "id": "text-section-cue-becomes-heading",
+  "group": "text",
+  "board": [],
+  "history": ["Let me set this up."],
+  "newest": "The scenario.",
+  "expect": {
+   "elements": 1,
+   "texts": {"e1": {"block_count": 1, "blocks_include": ["The scenario"]}},
+   "no_photo": true
+  }
+ },
+ {
+  "id": "text-section-adds-first-body",
+  "group": "text",
+  "board": [{"op": {"op": "draw_text", "blocks": [
+   {"kind": "heading", "text": "The scenario", "level": 1, "emphasis": ["scenario"]}
+  ]}}],
+  "history": ["The scenario."],
+  "newest": "A support team loses every Friday copying the same numbers across five spreadsheets.",
+  "expect": {
+   "elements": 1,
+   "texts": {"e1": {"block_count": 2, "blocks_include": ["The scenario", "five spreadsheets"]}},
+   "no_photo": true
+  }
+ },
+ {
+  "id": "text-section-updates-one-body",
+  "group": "text",
+  "board": [{"op": {"op": "draw_text", "blocks": [
+   {"kind": "heading", "text": "The scenario", "level": 1, "emphasis": ["scenario"]},
+   {"kind": "paragraph", "text": "A support team loses every Friday to manual reporting", "level": 0, "emphasis": ["manual reporting"]}
+  ]}}],
+  "history": ["The scenario.", "A support team loses every Friday to manual reporting."],
+  "newest": "They copy the same numbers across five spreadsheets.",
+  "expect": {
+   "elements": 1,
+   "texts": {"e1": {"block_count": 2, "blocks_include": ["The scenario", "five spreadsheets"]}},
    "no_photo": true
   }
  }

@@ -9,6 +9,7 @@ pub const MAX_ELEMENTS: usize = 4;
 pub const MAX_ANNOTATIONS: usize = 3;
 pub const MAX_NODES: usize = 10;
 pub const MAX_POINTS: usize = 8;
+pub const MAX_TEXT_BLOCKS: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Rect {
@@ -25,6 +26,7 @@ pub enum ElementKind {
     Image,
     Diagram,
     Chart,
+    Text,
     /// A company logo, icon or flag from the symbol library, or a plain name card when the library has none
     /// (`image_id` empty, `caption` = the name).
     Logo,
@@ -47,6 +49,44 @@ pub struct Element {
     pub diagram: Option<Diagram>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chart: Option<Chart>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<TextCard>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextBlockKind {
+    Heading,
+    Paragraph,
+    Bullet,
+}
+
+/// One semantic unit in a text tile. IDs are assigned by the canvas so Luna can patch a single line.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TextBlock {
+    pub id: String,
+    pub kind: TextBlockKind,
+    pub text: String,
+    #[serde(default)]
+    pub level: u8,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub emphasis: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TextCard {
+    pub blocks: Vec<TextBlock>,
+}
+
+/// A text block as the agent describes it; the canvas owns stable block IDs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TextBlockSpec {
+    pub kind: TextBlockKind,
+    pub text: String,
+    #[serde(default)]
+    pub level: u8,
+    #[serde(default)]
+    pub emphasis: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -212,6 +252,10 @@ pub enum Op {
     AddPoint { id: String, label: String, value: f64, #[serde(default)] icon: Option<String>, #[serde(default)] logo: Option<String> },
     RemovePoint { id: String, label: String, #[serde(default)] quote: Option<String> },
     SetChart { id: String, kind: Option<ChartKind>, title: Option<String>, unit: Option<String> },
+    DrawText { blocks: Vec<TextBlockSpec> },
+    AddTextBlocks { id: String, blocks: Vec<TextBlockSpec> },
+    UpdateTextBlock { id: String, block: String, text: Option<String>, emphasis: Option<Vec<String>>, level: Option<u8> },
+    RemoveTextBlock { id: String, block: String, #[serde(default)] quote: Option<String> },
     /// A photo request. The canvas does not place photos itself: the pipeline searches the library
     /// (or draws one) and renders the result.
     ShowPhoto { subject: String, replace: bool },
@@ -231,12 +275,13 @@ impl Op {
             self,
             Op::DrawDiagram { .. } | Op::AddNodes { .. } | Op::UpdateNode { .. } | Op::RemoveNode { .. } | Op::AddEdge { .. } | Op::RemoveEdge { .. }
                 | Op::DrawChart { .. } | Op::UpdateChart { .. } | Op::SetPoint { .. } | Op::AddPoint { .. } | Op::RemovePoint { .. } | Op::SetChart { .. }
+                | Op::DrawText { .. } | Op::AddTextBlocks { .. } | Op::UpdateTextBlock { .. } | Op::RemoveTextBlock { .. }
         )
     }
     /// The words the model quoted as its authority for a destructive op, if this op needs one.
     pub fn quote(&self) -> Option<Option<&str>> {
         match self {
-            Op::Remove { quote, .. } | Op::ClearBoard { quote } | Op::RemoveNode { quote, .. } | Op::RemovePoint { quote, .. } => Some(quote.as_deref()),
+            Op::Remove { quote, .. } | Op::ClearBoard { quote } | Op::RemoveNode { quote, .. } | Op::RemovePoint { quote, .. } | Op::RemoveTextBlock { quote, .. } => Some(quote.as_deref()),
             _ => None,
         }
     }
@@ -302,6 +347,38 @@ fn clean_points(points: &[Point]) -> Vec<Point> {
     out
 }
 
+fn clean_text_spec(spec: &TextBlockSpec) -> Option<TextBlockSpec> {
+    let limit = match spec.kind {
+        TextBlockKind::Heading => 80,
+        TextBlockKind::Paragraph => 220,
+        TextBlockKind::Bullet => 140,
+    };
+    let text = short(&spec.text, limit);
+    if text.is_empty() {
+        return None;
+    }
+    let lower = text.to_lowercase();
+    let mut emphasis: Vec<String> = vec![];
+    for phrase in &spec.emphasis {
+        let phrase = short(phrase, 48);
+        if !phrase.is_empty() && lower.contains(&phrase.to_lowercase()) && !emphasis.iter().any(|p| same(p, &phrase)) {
+            emphasis.push(phrase);
+        }
+        if emphasis.len() == 2 {
+            break;
+        }
+    }
+    if emphasis.is_empty() {
+        return None;
+    }
+    let level = match spec.kind {
+        TextBlockKind::Heading => spec.level.clamp(1, 2),
+        TextBlockKind::Bullet => spec.level.min(1),
+        TextBlockKind::Paragraph => 0,
+    };
+    Some(TextBlockSpec { kind: spec.kind, text, level, emphasis })
+}
+
 impl Diagram {
     fn add_nodes(&mut self, specs: &[NodeSpec]) -> Vec<String> {
         let mut added = vec![];
@@ -361,6 +438,7 @@ impl Diagram {
 pub struct Canvas {
     scene: Scene,
     next_id: u64,
+    next_block_id: u64,
     /// Why ops were refused or did nothing (missing target, no such point, chart full…). Drained by [`Canvas::take_notes`].
     notes: Vec<String>,
     /// Names of the ops the last `apply` changed something with.
@@ -389,6 +467,11 @@ impl Canvas {
         format!("{prefix}{}", self.next_id)
     }
 
+    fn new_block_id(&mut self) -> String {
+        self.next_block_id += 1;
+        format!("b{}", self.next_block_id)
+    }
+
     // ---- fast path (from stage renders) ----
 
     /// New image: add it, focus it, auto layout; evict the oldest past the cap.
@@ -398,7 +481,7 @@ impl Canvas {
             let id = e.id.clone();
             return self.focus_inner(&id, format!("fast:refocus {image_id}"), chunk_id);
         }
-        self.push_element(ElementKind::Image, image_id, caption, url, None, None);
+        self.push_element(ElementKind::Image, image_id, caption, url, None, None, None);
         self.bump(format!("fast:render {image_id}"), chunk_id)
     }
 
@@ -411,7 +494,7 @@ impl Canvas {
         if let Some(id) = self.scene.elements.iter().find(|e| same(e)).map(|e| e.id.clone()) {
             return self.focus_inner(&id, format!("fast:refocus logo {caption}"), chunk_id);
         }
-        self.push_element(ElementKind::Logo, asset_id, caption, url, None, None);
+        self.push_element(ElementKind::Logo, asset_id, caption, url, None, None, None);
         self.bump(format!("fast:logo {caption}"), chunk_id)
     }
 
@@ -429,7 +512,7 @@ impl Canvas {
     }
 
     /// Add an element, focus it, auto layout; evict the oldest past the cap. Returns its id.
-    fn push_element(&mut self, kind: ElementKind, image_id: &str, caption: &str, url: &str, diagram: Option<Diagram>, chart: Option<Chart>) -> String {
+    fn push_element(&mut self, kind: ElementKind, image_id: &str, caption: &str, url: &str, diagram: Option<Diagram>, chart: Option<Chart>, text: Option<TextCard>) -> String {
         let id = self.new_id("e");
         let z = self.scene.elements.iter().map(|e| e.z).max().unwrap_or(0) + 1;
         for e in self.scene.elements.iter_mut() {
@@ -446,6 +529,7 @@ impl Canvas {
             focus: true,
             diagram,
             chart,
+            text,
         });
         while self.scene.elements.len() > MAX_ELEMENTS {
             let old = self.scene.elements.remove(0);
@@ -550,6 +634,15 @@ impl Canvas {
         self.scene.elements.iter().any(|e| e.id == id)
     }
 
+    fn text_blocks(&mut self, specs: &[TextBlockSpec], room: usize) -> Vec<TextBlock> {
+        specs
+            .iter()
+            .filter_map(clean_text_spec)
+            .take(room)
+            .map(|b| TextBlock { id: self.new_block_id(), kind: b.kind, text: b.text, level: b.level, emphasis: b.emphasis })
+            .collect()
+    }
+
     fn apply_one(&mut self, op: &Op) -> bool {
         match op {
             Op::Focus { id } if self.has(id) => {
@@ -632,7 +725,7 @@ impl Canvas {
                         self.focus_only(&id);
                     }
                     None => {
-                        self.push_element(ElementKind::Diagram, "", &caption, "", Some(d), None);
+                        self.push_element(ElementKind::Diagram, "", &caption, "", Some(d), None, None);
                     }
                 }
                 true
@@ -673,7 +766,7 @@ impl Canvas {
                     }
                 }
                 let caption = title.clone().unwrap_or_else(|| "chart".into());
-                self.push_element(ElementKind::Chart, "", &caption, "", None, Some(Chart { kind, title, unit, points }));
+                self.push_element(ElementKind::Chart, "", &caption, "", None, Some(Chart { kind, title, unit, points }), None);
                 true
             }
             Op::UpdateChart { id, kind, title, points } => {
@@ -820,6 +913,114 @@ impl Canvas {
                 }
                 changed
             }
+            Op::DrawText { blocks } => {
+                let blocks = self.text_blocks(blocks, MAX_TEXT_BLOCKS);
+                if blocks.is_empty() {
+                    return self.miss("draw_text: no usable blocks".into());
+                }
+                let caption = blocks.iter().find(|b| b.kind == TextBlockKind::Heading).or_else(|| blocks.first()).map(|b| b.text.clone()).unwrap_or_default();
+                // Text is the presenter’s current headline, not a board that accumulates. A new text card
+                // replaces the newest existing one and removes any older text tiles left by earlier calls.
+                let target = self.scene.elements.iter().rev().find(|e| e.kind == ElementKind::Text).map(|e| e.id.clone());
+                if let Some(id) = target {
+                    let removed: Vec<String> = self.scene.elements.iter().filter(|e| e.kind == ElementKind::Text && e.id != id).map(|e| e.id.clone()).collect();
+                    self.scene.elements.retain(|e| e.kind != ElementKind::Text || e.id == id);
+                    self.scene.annotations.retain(|a| !a.targets.iter().any(|t| removed.contains(t)));
+                    let e = self.scene.elements.iter_mut().find(|e| e.id == id).unwrap();
+                    e.caption = caption;
+                    e.text = Some(TextCard { blocks });
+                    self.focus_only(&id);
+                } else {
+                    self.push_element(ElementKind::Text, "", &caption, "", None, None, Some(TextCard { blocks }));
+                }
+                true
+            }
+            Op::AddTextBlocks { id, blocks } => {
+                let Some(current) = self.scene.elements.iter().find(|e| &e.id == id).and_then(|e| e.text.as_ref()).map(|t| t.blocks.len()) else {
+                    return self.miss(format!("add_text_blocks: no text tile {id}"));
+                };
+                let has_body = self.scene.elements.iter().find(|e| &e.id == id).and_then(|e| e.text.as_ref()).is_some_and(|t| t.blocks.iter().any(|b| b.kind == TextBlockKind::Paragraph));
+                let replaces_body = has_body && blocks.iter().any(|b| b.kind != TextBlockKind::Heading);
+                if current >= MAX_TEXT_BLOCKS && !replaces_body {
+                    return self.miss(format!("add_text_blocks: {id} already has {MAX_TEXT_BLOCKS} blocks"));
+                }
+                let added = self.text_blocks(blocks, MAX_TEXT_BLOCKS);
+                if added.is_empty() {
+                    return self.miss("add_text_blocks: no usable blocks".into());
+                }
+                let card = self.scene.elements.iter_mut().find(|e| &e.id == id).unwrap().text.as_mut().unwrap();
+                let mut changed = false;
+                for block in added {
+                    if block.kind == TextBlockKind::Paragraph || (has_body && block.kind == TextBlockKind::Bullet) {
+                        if let Some(body) = card.blocks.iter_mut().find(|b| b.kind == TextBlockKind::Paragraph) {
+                            changed |= body.text != block.text || body.level != block.level || body.emphasis != block.emphasis;
+                            body.text = block.text;
+                            body.level = 0;
+                            body.emphasis = block.emphasis;
+                            continue;
+                        }
+                    }
+                    if card.blocks.len() < MAX_TEXT_BLOCKS {
+                        card.blocks.push(block);
+                        changed = true;
+                    }
+                }
+                if changed { self.focus_only(id); }
+                changed
+            }
+            Op::UpdateTextBlock { id, block, text, emphasis, level } => {
+                let heading_only_body = self.scene.elements.iter().find(|e| &e.id == id).and_then(|e| e.text.as_ref()).is_some_and(|card| {
+                    card.blocks.len() == 1 && card.blocks[0].id == *block && card.blocks[0].kind == TextBlockKind::Heading && *level == Some(0)
+                });
+                if heading_only_body {
+                    let spec = TextBlockSpec {
+                        kind: TextBlockKind::Paragraph,
+                        text: text.clone().unwrap_or_default(),
+                        level: 0,
+                        emphasis: emphasis.clone().unwrap_or_default(),
+                    };
+                    let Some(clean) = clean_text_spec(&spec) else { return self.miss("update_text_block: no usable first body".into()) };
+                    let body = TextBlock { id: self.new_block_id(), kind: clean.kind, text: clean.text, level: clean.level, emphasis: clean.emphasis };
+                    self.scene.elements.iter_mut().find(|e| &e.id == id).unwrap().text.as_mut().unwrap().blocks.push(body);
+                    self.focus_only(id);
+                    return true;
+                }
+                let Some(card) = self.scene.elements.iter_mut().find(|e| &e.id == id).and_then(|e| e.text.as_mut()) else {
+                    return self.miss(format!("update_text_block: no text tile {id}"));
+                };
+                let Some(i) = card.blocks.iter().position(|b| b.id == *block) else {
+                    return self.miss(format!("update_text_block: no block {block} in {id}"));
+                };
+                let old = card.blocks[i].clone();
+                let spec = TextBlockSpec {
+                    kind: old.kind,
+                    text: text.clone().unwrap_or_else(|| old.text.clone()),
+                    level: level.unwrap_or(old.level),
+                    emphasis: emphasis.clone().unwrap_or_else(|| old.emphasis.clone()),
+                };
+                let Some(clean) = clean_text_spec(&spec) else { return self.miss("update_text_block: empty text".into()) };
+                card.blocks[i].text = clean.text;
+                card.blocks[i].level = clean.level;
+                card.blocks[i].emphasis = clean.emphasis;
+                let changed = card.blocks[i] != old;
+                if changed { self.focus_only(id); }
+                changed
+            }
+            Op::RemoveTextBlock { id, block, .. } => {
+                let Some(card) = self.scene.elements.iter_mut().find(|e| &e.id == id).and_then(|e| e.text.as_mut()) else {
+                    return self.miss(format!("remove_text_block: no text tile {id}"));
+                };
+                if card.blocks.len() <= 1 {
+                    return self.miss(format!("remove_text_block: {block} is the last block of {id}; remove the tile instead"));
+                }
+                let before = card.blocks.len();
+                card.blocks.retain(|b| b.id != *block);
+                if card.blocks.len() == before {
+                    return self.miss(format!("remove_text_block: no block {block} in {id}"));
+                }
+                self.focus_only(id);
+                true
+            }
             Op::UpdateNode { id, node, label, note } => {
                 let Some(d) = self.scene.elements.iter_mut().find(|e| &e.id == id).and_then(|e| e.diagram.as_mut()) else { return self.miss(format!("update_node: no diagram {id}")) };
                 let Some(nid) = resolve(&d.nodes, node) else { return self.miss(format!("update_node: no node {node:?} in {id}")) };
@@ -928,6 +1129,10 @@ pub fn op_name(op: &Op) -> String {
         Op::AddPoint { id, label, value, .. } => format!("add_point({id}, {label}={value})"),
         Op::RemovePoint { id, label, .. } => format!("remove_point({id}, {label})"),
         Op::SetChart { id, .. } => format!("set_chart({id})"),
+        Op::DrawText { blocks } => format!("draw_text({} blocks)", blocks.len()),
+        Op::AddTextBlocks { id, blocks } => format!("add_text_blocks({id}, +{})", blocks.len()),
+        Op::UpdateTextBlock { id, block, .. } => format!("update_text_block({id}, {block})"),
+        Op::RemoveTextBlock { id, block, .. } => format!("remove_text_block({id}, {block})"),
         Op::ShowPhoto { subject, replace } => format!("show_photo({subject}{})", if *replace { ", replace" } else { "" }),
         Op::ShowLogo { name, replace } => format!("show_logo({name}{})", if *replace { ", replace" } else { "" }),
         Op::ShowIcon { concept, replace, .. } => format!("show_icon({concept}{})", if *replace { ", replace" } else { "" }),
@@ -951,8 +1156,8 @@ pub fn board_summary(scene: &Scene) -> Vec<String> {
         .iter()
         .map(|e| {
             let focus = if e.focus && n > 1 { " (in focus)" } else { "" };
-            match (&e.diagram, &e.chart) {
-                (Some(d), _) => {
+            match (&e.diagram, &e.chart, &e.text) {
+                (Some(d), _, _) => {
                     let labels: Vec<&str> = d.nodes.iter().map(|x| x.label.as_str()).collect();
                     let body = match d.layout {
                         DiagramLayout::Hub if labels.len() > 1 => format!("{} — {}", labels[0], labels[1..].join(", ")),
@@ -961,11 +1166,12 @@ pub fn board_summary(scene: &Scene) -> Vec<String> {
                     };
                     format!("{:?} diagram{}: {body}{focus}", d.layout, d.title.as_deref().map(|t| format!(" '{t}'")).unwrap_or_default()).to_lowercase()
                 }
-                (_, Some(c)) => {
+                (_, Some(c), _) => {
                     let unit = c.unit.as_deref().map(|u| if u.trim() == "%" { "%".to_string() } else { format!(" {u}") }).unwrap_or_default();
                     let pts: Vec<String> = c.points.iter().map(|p| format!("{} {}{unit}", p.label, num(p.value))).collect();
                     format!("{:?} chart{}: {}{focus}", c.kind, c.title.as_deref().map(|t| format!(" '{t}'")).unwrap_or_default(), pts.join(", ")).to_lowercase()
                 }
+                (_, _, Some(t)) => format!("text: {}{focus}", t.blocks.iter().map(|b| format!("{}={}", b.id, b.text)).collect::<Vec<_>>().join(" | ")),
                 _ if e.kind == ElementKind::Logo => format!("{}: {}{focus}", if e.image_id.is_empty() { "name card" } else { "logo" }, e.caption),
                 _ => format!("photo: {}{focus}", e.caption.split('(').next().unwrap_or(&e.caption).trim()),
             }
@@ -1494,6 +1700,84 @@ mod tests {
         let d = s.elements[0].diagram.as_ref().unwrap();
         assert_eq!((d.nodes.len(), d.edges.len()), (2, 1), "the chain continues from the first step");
         assert!(c.apply(s.version, &[Op::DrawDiagram { layout: DiagramLayout::Cycle, title: None, nodes: ns(&["Alone"]), edges: vec![] }], 3).is_none());
+    }
+
+    #[test]
+    fn text_blocks_draw_patch_and_remove_by_stable_id() {
+        let block = |kind, text: &str, emphasis: &[&str]| TextBlockSpec {
+            kind, text: text.into(), level: if kind == TextBlockKind::Heading { 1 } else { 0 }, emphasis: emphasis.iter().map(|s| s.to_string()).collect(),
+        };
+        let mut c = Canvas::new();
+        let s = c.apply(0, &[Op::DrawText { blocks: vec![
+            block(TextBlockKind::Heading, "Three lessons", &["Three"]),
+            block(TextBlockKind::Bullet, "Start with the user", &["the user", "missing words"]),
+        ]}], 1).unwrap();
+        let e = &s.elements[0];
+        assert_eq!(e.kind, ElementKind::Text);
+        let id = e.id.clone();
+        let first = e.text.as_ref().unwrap().blocks[0].id.clone();
+        let second = e.text.as_ref().unwrap().blocks[1].id.clone();
+        assert_eq!(e.text.as_ref().unwrap().blocks[1].emphasis, vec!["the user"], "emphasis must be an exact phrase in the block");
+
+        let s = c.apply(s.version, &[Op::AddTextBlocks { id: id.clone(), blocks: vec![block(TextBlockKind::Bullet, "Measure the outcome", &["Measure the outcome"])] }], 2).unwrap();
+        assert_eq!(s.elements[0].text.as_ref().unwrap().blocks.len(), 3);
+        let s = c.apply(s.version, &[Op::UpdateTextBlock { id: id.clone(), block: second.clone(), text: Some("Start with real users".into()), emphasis: Some(vec!["real users".into()]), level: None }], 3).unwrap();
+        assert_eq!(s.elements[0].text.as_ref().unwrap().blocks[1].text, "Start with real users");
+        let s = c.apply(s.version, &[Op::RemoveTextBlock { id, block: first, quote: Some("remove the title".into()) }], 4).unwrap();
+        assert_eq!(s.elements[0].text.as_ref().unwrap().blocks.len(), 2);
+
+        let old_id = s.elements[0].id.clone();
+        let s = c.apply(s.version, &[Op::DrawText { blocks: vec![block(TextBlockKind::Heading, "A new headline", &["new headline"])] }], 5).unwrap();
+        let texts: Vec<&Element> = s.elements.iter().filter(|e| e.kind == ElementKind::Text).collect();
+        assert_eq!(texts.len(), 1, "new text replaces every previous text tile");
+        assert_eq!(texts[0].id, old_id, "the newest text tile is updated in place");
+        assert_eq!(texts[0].text.as_ref().unwrap().blocks[0].text, "A new headline");
+
+        assert!(c.apply(s.version, &[Op::DrawText { blocks: vec![block(TextBlockKind::Heading, "Unselected words", &[])] }], 6).is_none());
+        assert!(c.take_notes().iter().any(|note| note.contains("draw_text: no usable blocks")));
+    }
+
+    #[test]
+    fn a_section_keeps_one_stable_body_paragraph() {
+        let block = |kind, text: &str, emphasis: &[&str]| TextBlockSpec {
+            kind, text: text.into(), level: if kind == TextBlockKind::Heading { 1 } else { 0 }, emphasis: emphasis.iter().map(|s| s.to_string()).collect(),
+        };
+        let mut c = Canvas::new();
+        let s = c.apply(0, &[Op::DrawText { blocks: vec![
+            block(TextBlockKind::Heading, "The scenario", &["scenario"]),
+            block(TextBlockKind::Paragraph, "A team loses Friday to reporting", &["loses Friday"]),
+        ]}], 1).unwrap();
+        let id = s.elements[0].id.clone();
+        let body_id = s.elements[0].text.as_ref().unwrap().blocks[1].id.clone();
+        let s = c.apply(s.version, &[Op::AddTextBlocks { id, blocks: vec![
+            block(TextBlockKind::Paragraph, "They copy numbers across five spreadsheets", &["five spreadsheets"]),
+        ]}], 2).unwrap();
+        let blocks = &s.elements[0].text.as_ref().unwrap().blocks;
+        assert_eq!(blocks.len(), 2, "a developed section still has one heading and one body");
+        assert_eq!(blocks[1].id, body_id, "the body is patched rather than appended");
+        assert!(blocks[1].text.contains("five spreadsheets"));
+
+        let s = c.apply(s.version, &[Op::AddTextBlocks { id: s.elements[0].id.clone(), blocks: vec![
+            block(TextBlockKind::Bullet, "They repeat it every Friday", &["every Friday"]),
+        ]}], 3).unwrap();
+        let blocks = &s.elements[0].text.as_ref().unwrap().blocks;
+        assert_eq!(blocks.len(), 2, "prose mislabeled as a bullet cannot create a third section block");
+        assert_eq!(blocks[1].kind, TextBlockKind::Paragraph);
+        assert_eq!(blocks[1].id, body_id);
+
+        let mut title_only = Canvas::new();
+        let s = title_only.apply(0, &[Op::DrawText { blocks: vec![
+            block(TextBlockKind::Heading, "The scenario", &["scenario"]),
+        ]}], 1).unwrap();
+        let id = s.elements[0].id.clone();
+        let heading = s.elements[0].text.as_ref().unwrap().blocks[0].id.clone();
+        let s = title_only.apply(s.version, &[Op::UpdateTextBlock {
+            id, block: heading, text: Some("A team copies five spreadsheets".into()), emphasis: Some(vec!["five spreadsheets".into()]), level: Some(0),
+        }], 2).unwrap();
+        let blocks = &s.elements[0].text.as_ref().unwrap().blocks;
+        assert_eq!(blocks.len(), 2, "body prose aimed at a lone heading becomes its first paragraph");
+        assert_eq!(blocks[0].text, "The scenario");
+        assert_eq!(blocks[1].kind, TextBlockKind::Paragraph);
     }
 
     #[test]

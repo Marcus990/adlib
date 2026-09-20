@@ -11,7 +11,7 @@ A quick guide for presenters (top) and for whoever tunes it (bottom). Canvas mod
 | A company logo | "Let's put up the Google logo." / "a logo of the company called Google" / "let's make this presentation about Google" | From the logo library, by name. A brand that isn't in the library gets a plain card with its name (never a drawn logo). |
 | An icon or a flag | "an icon for teamwork", "a database icon", "the flag of Canada" | From the icon library, by name and tags. If nothing fits, a plain card with the word. |
 | Two photos together | "…a red rose and a white rose side by side." | |
-| A chart | Say the numbers: "two hundred users… five hundred… fifteen hundred", "fifty percent are students…" | Only numbers you actually say get charted. |
+| A chart | Say the numbers: "two hundred users… five hundred… fifteen hundred", "fifty percent are students…", "we lost one hundred million dollars" | A single large currency, percent, thousand, million or billion figure becomes a headline stat; only numbers you actually say get charted. |
 | Fix a number | "Sorry, actually it was six hundred." / "Let's correct March from seventy to eighty." / "Make that ninety." | Fixes that one value; the rest of the chart stays. If you name no month, it is the one you just talked about. |
 | Add a number | "And in April we hit ninety five." | Adds to the chart already on screen. |
 | Take one bar / step out | "Drop February." / "Let's take the test step out." | |
@@ -21,6 +21,9 @@ A quick guide for presenters (top) and for whoever tunes it (bottom). Canvas mod
 | A loop | "…and it all runs in a loop." | Turns the process into a cycle. |
 | Parts of a whole | "The system is made up of three parts: the ears, the brain and the canvas." | |
 | A timeline | "In 2019 we… In 2021 we… In 2023…" | |
+| Structured text | "There are three lessons. First, start with users. Second, measure the outcome." | One text tile maximum. New text replaces old text; the full concise wording appears with selected key phrases underlined. Ordinary narration does not become text. |
+| Section + body | "The scenario." Then describe it. | Keeps “The scenario” as the heading and revises one body paragraph as the explanation develops. A new section cue replaces the card. |
+| Fix text | "Actually, make the second point measure the real outcome." | Updates that block without redrawing the card. |
 | Compare / zoom / point | "Let's compare them side by side." "Zoom in on the owl." "Notice the eyes." | |
 | Remove a picture | "Take the eagle away." / "Get rid of the chart." | Name the thing. |
 | Clear the board | "Let's move on." / "Next topic." | Once per section. |
@@ -58,6 +61,7 @@ It acts only on the newest words; earlier speech is context. Its answer is tool 
 | `show_logo` / `show_icon` accept `mode replace` | Swap the symbol just shown for a better one: the words were cut off ("the flag…" → "…of Canada") and Luna acted on the unfinished phrase. |
 | `draw_chart` · `set_point` · `add_point` · `remove_point` · `set_chart` | A new chart; correct one value; add a point; drop a point; change kind / title / unit. Points are addressed by label ("Mar" finds "March"). |
 | `draw_diagram` · `add_nodes` · `update_node` · `remove_node` · `add_edge` · `remove_edge` | A new diagram; grow it; rename a step; drop a step; link or unlink steps. |
+| `draw_text` · `add_text_blocks` · `update_text_block` · `remove_text_block` | A structured heading/list/takeaway/closing; extend it; correct one block; remove one block. |
 | `focus` · `arrange` · `annotate` · `clear_annotations` | Layout and emphasis. |
 | `remove(id)` · `clear_board` | Take a tile away; clear the screen. |
 
@@ -68,7 +72,7 @@ words get a final call.
 
 ## Hard rules in code (the model judges the language; the code checks the evidence)
 
-- **Destructive ops need a quote.** `remove`, `clear_board`, `remove_point` and `remove_node` carry a `quote`: the
+- **Destructive ops need a quote.** `remove`, `clear_board`, `remove_point`, `remove_node` and `remove_text_block` carry a `quote`: the
   exact words in which the presenter asked. The code checks every word of it appears, in order, in the *newest*
   words. No quote, or a quote from earlier speech, and the op is refused (and logged). There are no phrase lists
   any more, so "take the eagle away" and "let's park that" work as well as "remove". One clear per 6 s.
@@ -77,6 +81,9 @@ words get a final call.
   "Not stoned: 40" are dropped.
 - **Ops address things by id**, so an op still applies when a photo landed while Luna was thinking. If its target
   is gone, it is refused and logged. A `clear_board` clears only the tiles Luna saw.
+- **Visible text waits for a finished sentence.** Luna still sees partial speech and can react quickly with other tools,
+  but draw/add/update text calls from a partial-only turn are refused. `draw_text` replaces the existing text tile.
+  Every block needs 1–2 exact emphasis phrases; the full block renders with those phrases underlined, and a block without one is refused.
 - Canvas limits: ≤ 4 tiles, ≤ 3 annotations, ≤ 8 nodes and ≤ 8 points; a stat with a second value becomes bars; a
   redraw sharing half its nodes with a diagram on the board replaces it in place.
 - **Logos and icons never go to image generation.** They are looked up in `LS_ASSETS/icons` (`crates/search/src/icons.rs`, a port
