@@ -321,6 +321,15 @@
   listen('scene', e => { if (mode === 'canvas') renderScene(e.payload); });
   let resizeT = 0;
   addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => lastScene && renderScene(lastScene), 150); });
+  listen('session_reset', () => {
+    token++;
+    for (const [, t] of tiles) t.div.remove();
+    tiles.clear(); lastScene = null; shown.length = 0;
+    renderScene.drawn = new Set();
+    $('annG').innerHTML = ''; $('grid').innerHTML = ''; toggleGrid(false);
+    for (const slot of slots) { slot.classList.remove('on'); slot.querySelectorAll('img').forEach(img => img.removeAttribute('src')); }
+    $('idle').classList.remove('gone', 'err'); $('blank').classList.remove('on');
+  });
   listen('state', e => applyState(e.payload));
   listen('operator_blank', e => { $('blank').classList.toggle('on', !!e.payload); fe('blank', null, null, String(!!e.payload)); });
   // Canvas mode: the board itself is the summary (it holds diagrams and charts the photo grid can't show).

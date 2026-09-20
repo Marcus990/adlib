@@ -159,6 +159,7 @@ fn start_session(
     *session.stop.lock().unwrap() = Some(stop.clone());
 
     if let Some(stage) = app.get_webview_window("main") {
+        let _ = app.emit_to("main", "session_reset", ());
         if !settings.display.trim().is_empty() {
             place_on_display(&stage, &settings.display);
         }
@@ -186,7 +187,7 @@ fn start_session(
         let mode = "canvas";
         let next = state.merge(json!({"remote": remote, "mode": mode}));
         let _ = app.emit("state", next);
-        match Engine::load(cfg).await {
+        let completed = match Engine::load(cfg).await {
             Ok(engine) => {
                 let engine = Arc::new(engine);
                 *cache_slot.lock().unwrap() = Some(engine.cache.clone());
@@ -195,23 +196,35 @@ fn start_session(
                 match run(engine, source, sink, log.clone(), stop).await {
                     Ok(summary) => {
                         let _ = app.emit("talk_end", ());
-                        let _ = app.emit("state", state.merge(json!({"phase": "ended"})));
                         let _ = app.emit_to("debug", "status", json!({"type": "summary", "summary": summary,
                             "p50": summary.pct(0.5), "p95": summary.pct(0.95)}));
+                        true
                     }
                     Err(e) => {
                         log.log(json!({"ev": "pipeline_error", "error": format!("{e:#}")}));
                         let _ = app.emit("state", state.merge(json!({"phase": "error", "error": format!("{e:#}")})));
+                        false
                     }
                 }
             }
             Err(e) => {
                 log.log(json!({"ev": "engine_error", "error": format!("{e:#}")}));
                 let _ = app.emit("state", state.merge(json!({"phase": "error", "error": format!("{e:#}")})));
+                false
             }
-        }
+        };
         running.store(false, Ordering::SeqCst);
         *stop_slot.lock().unwrap() = None;
+        if completed {
+            if let Some(stage) = app.get_webview_window("main") {
+                let _ = stage.set_fullscreen(false);
+                let _ = stage.hide();
+            }
+            let next = state.merge(json!({
+                "phase": "idle", "source": "not started", "blank": false, "error": null
+            }));
+            let _ = app.emit("state", next);
+        }
     });
     Ok(())
 }
