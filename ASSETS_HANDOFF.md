@@ -254,3 +254,12 @@ no owl, sunflower or Earth) and the images are casual snapshots — "this owl" r
 "a sunflower in a field" returned cherry blossoms. With generation on, the same talk now shows the card's eagle
 and rose and *draws* the owl, sunflower and Earth in ~2 s. The photo library is best treated as recall for
 common nouns; anything specific is generated.
+
+
+## Status update (2026-09-20, branch `logos-and-icons`): AS8/AS9 done, AS7 not
+Direct requests for a logo, icon or flag now work end to end: Luna's `show_logo` / `show_icon` tools → `IconSearch`
+(`crates/search/src/icons.rs`, the §3 pipeline ported and checked against `icon_search.py`: 63/63 identical) → a `logo` tile
+served through the existing `img://` protocol (`.svg` mime added) → drawn without the polaroid frame. A miss shows a plain name
+card. Monochrome icons are re-inked for the theme (§5, the cheap part: `currentColor` string replace). **Not done:** icons
+inside diagram nodes (AS7; `Node.icon` is still an emoji field the model no longer fills), the light/dark sibling selection, and
+concept-icon recall beyond name/tags + the model's synonyms ("security" and "growth" match weakly; an embedding of icon names is the next step).
