@@ -11,7 +11,7 @@ real timings once the key exists). *The "fast gate + agent" split was replaced b
 speech → Whisper (partial + final phrases) → transcript
           │ whenever Luna is idle, ≥ 3 new words, under the rate cap
           ▼
-   Luna (OpenRouter chat + tools) sees: whole transcript · board with ids · recent changes · newest words
+   Luna (OpenAI Responses WebSocket, or HTTP/OpenRouter chat) sees: transcript · board with ids · recent changes · newest words
           → tool calls: show_photo / draw_chart / set_point / … / remove / clear_board / no_action
           ▼
    Rust: guards (quote for destructive ops, spoken numbers) → Canvas ops by id → Scene v+1 → emit "scene"
@@ -21,6 +21,11 @@ speech → Whisper (partial + final phrases) → transcript
   annotations are an SVG overlay. Rust owns all state.
 - There is no separate "fast path": a photo is a `show_photo` request that Luna makes and Rust fulfils. The old
   Jev gate, the phrase model and the stage's hold/confirm rules were removed (see TRIGGERS.md).
+- With `CANVAS_TRANSPORT=websocket`, startup prepares the fixed instructions and tools using `generate: false`.
+  The first turn sends full context; later turns continue with `previous_response_id`, tool outcomes, new speech,
+  and the authoritative current board. A failed socket is discarded and that turn retries over HTTP.
+- OpenAI requests use the standard service tier on both transports because the chained Luna benchmark found it
+  faster and more consistent. `CANVAS_SERVICE_TIER=fast` opts into Fast mode; agent logs record the returned tier.
 
 ## Scene
 - `Element { id, image_id, caption, rect (0..1), z, focus }` — ≤ 4 images (oldest evicted).
