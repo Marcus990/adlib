@@ -328,7 +328,7 @@ pub struct CanvasAgent {
     pub model: String,
     /// First attempt; a timeout or a 429/5xx gets one more, shorter, attempt (`CANVAS_TIMEOUT_MS`, default 6000).
     timeout: Duration,
-    /// OpenAI processing tier. Fast is the application default; `default` exists for controlled benchmarks.
+    /// OpenAI processing tier. Standard is the application default; Fast remains an explicit experiment.
     service_tier: String,
     /// One live Responses connection and response chain. `CanvasAgent` clones share it so the pipeline can make
     /// the call in a task, apply the returned ops, then report those outcomes to the next turn.
@@ -343,7 +343,7 @@ impl CanvasAgent {
             openai_key: None,
             model: model.unwrap_or_else(|| DEFAULT_MODEL.into()),
             timeout: Duration::from_millis(std::env::var("CANVAS_TIMEOUT_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(6000)),
-            service_tier: std::env::var("CANVAS_SERVICE_TIER").unwrap_or_else(|_| "fast".into()),
+            service_tier: std::env::var("CANVAS_SERVICE_TIER").unwrap_or_else(|_| "default".into()),
             ws: Arc::new(Mutex::new(WsState::default())),
         }
     }
@@ -507,8 +507,8 @@ impl CanvasAgent {
         match self.provider() {
             Some(Provider::OpenAi) => {
                 body["max_completion_tokens"] = json!(700);
-                // Fast mode is the right tradeoff for the latency-sensitive live demo. OpenAI reports the
-                // actual tier as `priority` in the response, which the pipeline logs on every call.
+                // Standard was faster and more consistent than Fast mode in the chained Luna benchmark.
+                // The response tier is logged so an explicit override remains measurable.
                 body["service_tier"] = json!(self.service_tier);
                 if model.starts_with("gpt-5") {
                     body["reasoning_effort"] = json!("none");
@@ -1118,7 +1118,7 @@ mod tests {
         assert_eq!(oa.provider(), Some(Provider::OpenAi));
         let b = oa.request_body(&inp);
         assert_eq!(b["model"], "gpt-5.6-luna");
-        assert_eq!(b["service_tier"], "fast");
+        assert_eq!(b["service_tier"], "default");
         assert_eq!((b["max_completion_tokens"].as_i64(), b["reasoning_effort"].as_str(), b["temperature"].as_i64()), (Some(700), Some("none"), Some(0)));
         for rejected in ["max_tokens", "reasoning", "provider"] {
             assert!(b.get(rejected).is_none(), "OpenAI rejects `{rejected}`");

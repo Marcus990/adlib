@@ -24,8 +24,8 @@ speech → Whisper (partial + final phrases) → transcript
 - With `CANVAS_TRANSPORT=websocket`, startup prepares the fixed instructions and tools using `generate: false`.
   The first turn sends full context; later turns continue with `previous_response_id`, tool outcomes, new speech,
   and the authoritative current board. A failed socket is discarded and that turn retries over HTTP.
-- OpenAI requests use Fast mode (`service_tier: "fast"`) on both transports; agent logs record the tier OpenAI
-  actually returned (`priority` for Fast mode).
+- OpenAI requests use the standard service tier on both transports because the chained Luna benchmark found it
+  faster and more consistent. `CANVAS_SERVICE_TIER=fast` opts into Fast mode; agent logs record the returned tier.
 
 ## Scene
 - `Element { id, image_id, caption, rect (0..1), z, focus }` — ≤ 4 images (oldest evicted).

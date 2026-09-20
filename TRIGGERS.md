@@ -91,7 +91,7 @@ The same tools, prompt and parsing go to either; only the request differs (`Canv
 | transport | Chat Completions by default; `CANVAS_TRANSPORT=websocket` uses a warmed, continued Responses connection with HTTP fallback | Chat Completions |
 | token limit | `max_completion_tokens` (`max_tokens` is rejected) | `max_tokens` |
 | reasoning | `reasoning_effort: "none"`. Function tools on chat completions require it (`minimal` is not a value for this model; the alternative is the Responses API) | `reasoning: {effort: "minimal"}` |
-| routing | Fast mode (`service_tier: "fast"`; response reports `priority`) | `provider: {sort: "latency"}` |
+| routing | Standard tier by default; `CANVAS_SERVICE_TIER=fast` opts into Fast mode | `provider: {sort: "latency"}` |
 | latency measured | 0.8–1.5 s per call, median ~0.95 s | 1.4–2.25 s, median ~1.9 s |
 
 ## Offline fallback (no key, or Luna unreachable)

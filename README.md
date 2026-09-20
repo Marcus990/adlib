@@ -56,8 +56,8 @@ With no mic named, the app prefers AirPods, then the MacBook mic, and never a vi
 ## Tuning knobs
 - `OPENAI_API_KEY` / `OPENROUTER_API_KEY` — Luna's backend: OpenAI's own API when its key is set, else OpenRouter
   (`CANVAS_PROVIDER=openrouter` forces OpenRouter). `CANVAS_MODEL` (default `gpt-5.6-luna`; on OpenRouter it is
-  `openai/gpt-5.6-luna`, the prefix is added or dropped for you). OpenAI calls use Fast mode and log the actual
-  returned service tier (`priority`). `CANVAS_TRANSPORT=websocket` enables OpenAI's
+  `openai/gpt-5.6-luna`, the prefix is added or dropped for you). OpenAI calls use the standard service tier by
+  default and log the tier returned; `CANVAS_SERVICE_TIER=fast` opts into Fast mode. `CANVAS_TRANSPORT=websocket` enables OpenAI's
   persistent Responses connection: startup prepares the prompt and tools without generating, later turns send
   incremental speech and canvas outcomes, and any socket failure retries over HTTP. HTTP remains the default until
   this path matches the established full probe baseline.
