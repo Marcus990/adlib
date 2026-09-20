@@ -218,7 +218,7 @@ enum Msg {
     HearError(String),
     Status(Value),
     /// Luna answered.
-    Agent { seen: Scene, proposal: ls_agent::Proposal, call: u64, chunk_id: u64, ms: u64, heard_at: u64 },
+    Agent { seen: Scene, proposal: ls_agent::Proposal, call: u64, chunk_id: u64, ms: u64, heard_at: u64, new_from: usize },
     /// A photo search for a `show_photo` request finished.
     Photo { subject: String, replace: bool, chunk_id: u64, heard_at: u64, best: Option<Match>, search_ms: u64 },
     /// A generated image arrived (None = failed or refused).
@@ -595,6 +595,10 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
     let min_gap = if engine.agent.has_remote() { Duration::from_millis(60_000 / rpm.max(1) as u64) } else { Duration::ZERO };
     let mut agent_busy = false;
     let mut last_call: Option<Instant> = None;
+    // After a failed call (the model down or rate-limited) wait before asking again, doubling up to 8 s; the
+    // words of the failed call are offered again then.
+    let mut fail_streak = 0u32;
+    let mut retry_not_before: Option<Instant> = None;
     let mut call_no = 0u64;
     let mut last_chunk_id = 0u64;
     let mut dirty_since: Option<u64> = None; // when words Luna has not seen first arrived
@@ -641,12 +645,22 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                             speaking_now = c.text.clone();
                         }
                     }
-                    Msg::Agent { seen, proposal, call, chunk_id, ms, heard_at } => {
+                    Msg::Agent { seen, proposal, call, chunk_id, ms, heard_at, new_from } => {
                         agent_busy = false;
                         let now = log.now_ms();
                         summary.agent_calls += 1;
                         if proposal.source == ls_agent::Source::Rules {
                             summary.agent_fallbacks += 1;
+                        }
+                        // A configured model that failed answers with no ops. Its sentences were never judged, so
+                        // they go to the next call as new words instead of being lost as "already handled".
+                        if proposal.source == ls_agent::Source::Rules && proposal.error.is_some() {
+                            seen_upto = seen_upto.min(new_from);
+                            fail_streak = (fail_streak + 1).min(4);
+                            retry_not_before = Some(Instant::now() + Duration::from_secs(1 << (fail_streak - 1)));
+                        } else {
+                            fail_streak = 0;
+                            retry_not_before = None;
                         }
                         let ls_agent::Proposal { mut ops, source, mut dropped, error, transport, first_event_ms, service_tier } = proposal;
                         // One clear per section cue: the partial and the final of "let's move on…" both asked
@@ -796,7 +810,7 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
             dirty_since = Some(log.now_ms());
         }
         let draining = hear_done_at.is_some();
-        let due = last_call.is_none_or(|t| t.elapsed() >= min_gap);
+        let due = last_call.is_none_or(|t| t.elapsed() >= min_gap) && retry_not_before.is_none_or(|t| Instant::now() >= t);
         if !agent_busy && due && fresh_words >= if draining { 1 } else { 3 } {
             call_no += 1;
             agent_busy = true;
@@ -813,12 +827,13 @@ pub async fn run(engine: Arc<Engine>, source: AudioSource, sink: Arc<dyn RenderS
                 let t = log2.now_ms();
                 let input = AgentInput { scene: &seen, transcript: &tr, new_from, speaking_now: &speaking, changes: &ch, now_s };
                 let mut proposal = e.agent.propose(&input).await;
-                if proposal.source == ls_agent::Source::Rules {
+                // Only with no model configured at all do the offline rules (and the vocabulary photo guess) act.
+                if proposal.source == ls_agent::Source::Rules && !e.agent.has_remote() {
                     if let Some(subject) = offline_photo(&input.newest_text(), &e.vocab) {
                         proposal.ops.push(Op::ShowPhoto { subject, replace: false });
                     }
                 }
-                let _ = tx.send(Msg::Agent { seen, proposal, call, chunk_id, ms: log2.now_ms() - t, heard_at });
+                let _ = tx.send(Msg::Agent { seen, proposal, call, chunk_id, ms: log2.now_ms() - t, heard_at, new_from });
             });
         }
         // After the audio ends, finish what is in flight and answer the last words, then stop.

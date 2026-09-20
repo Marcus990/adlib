@@ -287,3 +287,10 @@
   and routing into one choice restored it: 116/117 answered by Jev, p50 212 ms.
 - Probe on real sentences: 13/15 routed right at 0.75–1.00. Replay of the chart-vs-image session: charts on the
   numbers sentences, board ops for compare/focus/remove, and no stray generated images.
+
+
+## 2026-09-20 — photo library 15k → 39k (Open Images image-level classes)
+- Card had 445 labels (Tree ×1661; no basketball/owl/sunflower). `assets-pipeline/expand_openimages_classes.py` appended
+  24,476 photos across 2,236 classes (≤12 each, CLIP-ranked to "a photo of a {class}", near-duplicates dropped): 39,476 rows,
+  2,275 labels, card 5.3 GB used. New rows carry Open Images author + license (all CC BY 2.0). Details: ASSETS_HANDOFF.md §10.
+- "basketball" now finds the basketball court/sport/hoop classes (Open Images hosts no "Basketball (Ball)" photos).

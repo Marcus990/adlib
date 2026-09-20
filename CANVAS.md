@@ -21,7 +21,7 @@ speech → Whisper (partial + final phrases) → transcript
   annotations are an SVG overlay. Rust owns all state.
 - There is no separate "fast path": a photo is a `show_photo` request that Luna makes and Rust fulfils. The old
   Jev gate, the phrase model and the stage's hold/confirm rules were removed (see TRIGGERS.md).
-- With `CANVAS_TRANSPORT=websocket`, startup prepares the fixed instructions and tools using `generate: false`.
+- On OpenAI (unless `CANVAS_TRANSPORT=http`), startup prepares the fixed instructions and tools using `generate: false`.
   The first turn sends full context; later turns continue with `previous_response_id`, tool outcomes, new speech,
   and the authoritative current board. A failed socket is discarded and that turn retries over HTTP.
 - OpenAI requests use the standard service tier on both transports because the chained Luna benchmark found it
@@ -32,6 +32,10 @@ speech → Whisper (partial + final phrases) → transcript
 - `Annotation { id, kind: highlight|frame|arrow, targets: [element ids], label? }` — ≤ 3.
 - `layout`: auto | hero | compare | grid — the layout engine turns (elements, layout, focus) into rects.
   auto: 1 → full; 2 → side by side; 3 → hero + 2; 4 → 2×2. hero: focus big, others stacked; compare: 2 up.
+- **Zoom** = `focus` = layout hero on the focused tile. The `focus` op does both (a bare focus flag was only visible
+  in `auto` with exactly 3 tiles), for every tile kind and any count 1–4; asking again for a photo/logo/icon that is
+  already up zooms on it when there are ≥ 2 tiles. A lone tile has no neighbours to outgrow, so the web view scales its
+  picture up instead (`.zoom` in `app/dist/index.html`). A new tile, `arrange auto`, or removing down to one tile ends it.
 
 ## Board operations (validated; unknown ids or labels are refused and logged)
 - Photos: `render` adds a tile and focuses it (oldest evicted past 4), `update` replaces the focused photo in place
@@ -39,8 +43,18 @@ speech → Whisper (partial + final phrases) → transcript
 - Agent ops address tiles by id (`e1`), diagram nodes by id or label (`n2` / "Build"), chart points by label.
   Because they are id-addressed they apply even if the board changed while Luna was thinking; `clear_board`
   clears only the tiles Luna saw. `Canvas::take_notes()` returns why an op was refused.
-Offline rules (no key): "compare/versus/side by side" → compare; "focus on/this one/zoom" → focus latest;
-"notice/look at the/see how" → highlight latest; "let's move on/next topic/new section" → clear board.
+- **Circle** = `annotate` kind `highlight` (a hand-drawn circle in the sketch theme, a gold ring in slate) around one whole tile.
+  "Circle this", "highlight this", "let's highlight the X", "look at X", "notice X" all mean it: "this" is the focused tile, a
+  name picks that tile. A tile carries one mark (asking again changes nothing; frame and highlight replace each other), an arrow
+  needs two different tiles (max 3 arrows), `clear_annotations` ("remove the circle", "stop highlighting") takes them all off.
+  Circles have no cap of their own: every tile can carry one, so all 4 can be circled at once ("circle everything", "circle them all")
+  or one at a time, and "circle the eagle and the owl" circles those two.
+- **Remove a tile:** `remove` (needs the presenter's words as `quote`, which must be in the newest words, live phrase included). "Take the eagle away",
+  "get rid of the chart", "get the owl out of there", "get the owl out", "get that out of here", "take the logo off" all mean
+  it, for any kind of tile. "That"/"it" is the focused tile; a point or step ("get March out") is `remove_point` / `remove_node`
+  instead; "get the word out" is a figure of speech. The offline rules remove a tile only when the words name it.
+Offline rules (no key): "let's compare/versus/side by side" → compare; "zoom in on X/focus on X/this one" → focus the tile
+named X, else the one in focus; "zoom out" → auto; "circle/highlight this|the X, look at X, notice, see how" → circle the named tile, else the one in focus (once). They never clear the board.
 
 ## Contracts
 `RenderEvent` stays (logs, eval, replay). New `Scene` is emitted alongside to the web view.

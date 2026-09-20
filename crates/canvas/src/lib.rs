@@ -1,12 +1,15 @@
 //! Canvas mode (CANVAS.md): an evolving board of ≤ 4 elements — library images, live diagrams
-//! (flow / cycle / hub / timeline) and charts built from spoken numbers — plus ≤ 3 annotations.
+//! (flow / cycle / hub / timeline) and charts built from spoken numbers — plus a circle per tile and ≤ 3 arrows.
 //! Pure and deterministic. The fast path (stage renders) and the agent (tool calls) both mutate the
 //! board through [`Canvas`]; every mutation bumps `version` so stale agent answers can be dropped.
 
 use serde::{Deserialize, Serialize};
 
 pub const MAX_ELEMENTS: usize = 4;
-pub const MAX_ANNOTATIONS: usize = 3;
+/// Arrows between tiles. Circles have no limit of their own: a tile carries one, so there are at most `MAX_ELEMENTS`
+/// (every tile on the board can be circled at once).
+pub const MAX_ARROWS: usize = 3;
+pub const MAX_ANNOTATIONS: usize = MAX_ELEMENTS + MAX_ARROWS;
 pub const MAX_NODES: usize = 10;
 pub const MAX_POINTS: usize = 8;
 pub const MAX_TEXT_BLOCKS: usize = 8;
@@ -241,7 +244,9 @@ pub enum Op {
     ClearBoard { #[serde(default)] quote: Option<String> },
     DrawDiagram { layout: DiagramLayout, title: Option<String>, nodes: Vec<NodeSpec>, edges: Vec<EdgeSpec> },
     AddNodes { id: String, nodes: Vec<NodeSpec>, edges: Vec<EdgeSpec> },
-    UpdateNode { id: String, node: String, label: Option<String>, note: Option<String> },
+    /// Rename a node / change its note, and/or retitle the diagram (`title`; `node` may then be empty). A diagram
+    /// titled after the node being renamed ("Call ignition" hub, centre "Call ignition") is retitled with it.
+    UpdateNode { id: String, node: String, label: Option<String>, note: Option<String>, #[serde(default)] title: Option<String> },
     RemoveNode { id: String, node: String, #[serde(default)] quote: Option<String> },
     AddEdge { id: String, from: String, to: String, label: Option<String> },
     RemoveEdge { id: String, from: String, to: String },
@@ -479,7 +484,7 @@ impl Canvas {
         if let Some(e) = self.scene.elements.iter_mut().find(|e| e.image_id == image_id) {
             // Already on the board: just bring it into focus.
             let id = e.id.clone();
-            return self.focus_inner(&id, format!("fast:refocus {image_id}"), chunk_id);
+            return self.zoom_inner(&id, format!("fast:refocus {image_id}"), chunk_id);
         }
         self.push_element(ElementKind::Image, image_id, caption, url, None, None, None);
         self.bump(format!("fast:render {image_id}"), chunk_id)
@@ -492,7 +497,7 @@ impl Canvas {
             e.kind == ElementKind::Logo && if asset_id.is_empty() { e.image_id.is_empty() && same(&e.caption, caption) } else { e.image_id == asset_id }
         };
         if let Some(id) = self.scene.elements.iter().find(|e| same(e)).map(|e| e.id.clone()) {
-            return self.focus_inner(&id, format!("fast:refocus logo {caption}"), chunk_id);
+            return self.zoom_inner(&id, format!("fast:refocus logo {caption}"), chunk_id);
         }
         self.push_element(ElementKind::Logo, asset_id, caption, url, None, None, None);
         self.bump(format!("fast:logo {caption}"), chunk_id)
@@ -645,10 +650,16 @@ impl Canvas {
 
     fn apply_one(&mut self, op: &Op) -> bool {
         match op {
+            // Focus is a zoom: the tile becomes the big one (layout hero) whatever the tile count or kind. It used to
+            // be a bare flag that only showed in an "auto" layout of exactly 3 tiles (2 sit side by side, 4+ are a
+            // grid), so "zoom in on the logo" did nothing on most boards.
             Op::Focus { id } if self.has(id) => {
-                for e in self.scene.elements.iter_mut() {
-                    e.focus = &e.id == id;
+                let already = self.scene.layout == Layout::Hero && self.scene.elements.iter().any(|e| e.focus && &e.id == id);
+                if already {
+                    return false;
                 }
+                self.focus_only(id);
+                self.scene.layout = Layout::Hero;
                 true
             }
             Op::Remove { id, .. } if self.has(id) => {
@@ -659,28 +670,77 @@ impl Canvas {
                         e.focus = true;
                     }
                 }
+                if self.scene.elements.len() < 2 && self.scene.layout == Layout::Hero {
+                    self.scene.layout = Layout::Auto; // what was zoomed on is gone; a lone tile is not a zoom
+                }
                 true
             }
             Op::Arrange { layout } if *layout != self.scene.layout => {
                 self.scene.layout = *layout;
                 true
             }
+            // "Circle this" / "highlight this" / "look at the owl" all end up here as a highlight. A tile carries one mark, so
+            // asking again for the same thing changes nothing (it used to stack duplicates, each one redrawing the circle).
             Op::Annotate { kind, targets, label } => {
-                let targets: Vec<String> = targets.iter().filter(|t| self.has(t)).cloned().collect();
-                if targets.is_empty() || (*kind == AnnotationKind::Arrow && targets.len() < 2 && self.scene.elements.len() < 2) {
-                    return false;
+                let mut valid: Vec<String> = vec![];
+                for t in targets {
+                    if self.has(t) && !valid.contains(t) {
+                        valid.push(t.clone());
+                    }
                 }
-                let id = self.new_id("a");
-                self.scene.annotations.push(Annotation {
-                    id,
-                    kind: *kind,
-                    targets,
-                    label: label.clone().map(|l| l.chars().take(40).collect()),
-                });
-                while self.scene.annotations.len() > MAX_ANNOTATIONS {
-                    self.scene.annotations.remove(0);
+                let label = label.as_deref().map(|l| l.trim().chars().take(40).collect::<String>()).filter(|l| !l.is_empty());
+                let mut changed = false;
+                if *kind == AnnotationKind::Arrow {
+                    if valid.len() < 2 {
+                        return self.miss("annotate: an arrow needs two tiles that are on the board".into());
+                    }
+                    let pair = [valid[0].clone(), valid[1].clone()];
+                    let same_pair = |a: &Annotation| a.kind == AnnotationKind::Arrow && a.targets.len() == 2 && pair.iter().all(|p| a.targets.contains(p));
+                    match self.scene.annotations.iter_mut().find(|a| same_pair(a)) {
+                        Some(a) => {
+                            if label.is_some() && a.label != label {
+                                a.label = label;
+                                changed = true;
+                            }
+                        }
+                        None => {
+                            let id = self.new_id("a");
+                            self.scene.annotations.push(Annotation { id, kind: AnnotationKind::Arrow, targets: pair.to_vec(), label });
+                            changed = true;
+                        }
+                    }
+                } else {
+                    if valid.is_empty() {
+                        return self.miss("annotate: no such tile on the board to circle".into());
+                    }
+                    for t in valid {
+                        let marks = |a: &Annotation| a.kind != AnnotationKind::Arrow && a.targets == std::slice::from_ref(&t);
+                        match self.scene.annotations.iter_mut().find(|a| marks(a)) {
+                            // Already marked: keep its id (the drawn circle stays put), only a new kind or label changes it.
+                            Some(a) => {
+                                if a.kind != *kind || (label.is_some() && a.label != label) {
+                                    a.kind = *kind;
+                                    if label.is_some() {
+                                        a.label = label.clone();
+                                    }
+                                    changed = true;
+                                }
+                            }
+                            None => {
+                                let id = self.new_id("a");
+                                self.scene.annotations.push(Annotation { id, kind: *kind, targets: vec![t.clone()], label: label.clone() });
+                                changed = true;
+                            }
+                        }
+                    }
                 }
-                true
+                // Only arrows are capped: circles are one per tile, so every tile can be circled at once.
+                while self.scene.annotations.iter().filter(|a| a.kind == AnnotationKind::Arrow).count() > MAX_ARROWS {
+                    if let Some(i) = self.scene.annotations.iter().position(|a| a.kind == AnnotationKind::Arrow) {
+                        self.scene.annotations.remove(i);
+                    }
+                }
+                changed
             }
             Op::ClearAnnotations if !self.scene.annotations.is_empty() => {
                 self.scene.annotations.clear();
@@ -1021,25 +1081,57 @@ impl Canvas {
                 self.focus_only(id);
                 true
             }
-            Op::UpdateNode { id, node, label, note } => {
+            Op::UpdateNode { id, node, label, note, title } => {
                 let Some(d) = self.scene.elements.iter_mut().find(|e| &e.id == id).and_then(|e| e.diagram.as_mut()) else { return self.miss(format!("update_node: no diagram {id}")) };
-                let Some(nid) = resolve(&d.nodes, node) else { return self.miss(format!("update_node: no node {node:?} in {id}")) };
-                let taken = |d: &Diagram, l: &str| d.nodes.iter().any(|n| n.id != nid && same(&n.label, l));
                 let mut changed = false;
-                let n = d.nodes.iter().position(|n| n.id == nid).unwrap();
-                if let Some(l) = label.as_deref().map(|l| short(l, 32)).filter(|l| !l.is_empty()) {
-                    if taken(d, &l) {
-                        self.notes.push(format!("update_node: another node in {id} is already called {l:?}"));
-                    } else if d.nodes[n].label != l {
-                        d.nodes[n].label = l;
+                let mut retitled = false;
+                let new_title = title.as_deref().map(|t| short(t, 40)).filter(|t| !t.is_empty());
+                if node.trim().is_empty() {
+                    // Retitle only.
+                    let Some(t) = new_title else { return self.miss(format!("update_node: nothing to change in {id} (no node, no title)")) };
+                    if d.title.as_deref() != Some(t.as_str()) {
+                        d.title = Some(t);
                         changed = true;
+                        retitled = true;
+                    }
+                } else {
+                    let Some(nid) = resolve(&d.nodes, node) else { return self.miss(format!("update_node: no node {node:?} in {id}")) };
+                    let taken = |d: &Diagram, l: &str| d.nodes.iter().any(|n| n.id != nid && same(&n.label, l));
+                    let n = d.nodes.iter().position(|n| n.id == nid).unwrap();
+                    if let Some(l) = label.as_deref().map(|l| short(l, 32)).filter(|l| !l.is_empty()) {
+                        if taken(d, &l) {
+                            self.notes.push(format!("update_node: another node in {id} is already called {l:?}"));
+                        } else if d.nodes[n].label != l {
+                            // A title that is just the old node label (one misheard name used for both) follows the rename.
+                            if d.title.as_deref().is_some_and(|t| same(t, &d.nodes[n].label)) {
+                                d.title = Some(l.clone());
+                                retitled = true;
+                            }
+                            d.nodes[n].label = l;
+                            changed = true;
+                        }
+                    }
+                    if let Some(t) = new_title {
+                        if d.title.as_deref() != Some(t.as_str()) {
+                            d.title = Some(t);
+                            changed = true;
+                            retitled = true;
+                        }
+                    }
+                    if let Some(t) = note.as_deref() {
+                        let t = Some(short(t, 24)).filter(|t| !t.is_empty());
+                        if d.nodes[n].note != t {
+                            d.nodes[n].note = t;
+                            changed = true;
+                        }
                     }
                 }
-                if let Some(t) = note.as_deref() {
-                    let t = Some(short(t, 24)).filter(|t| !t.is_empty());
-                    if d.nodes[n].note != t {
-                        d.nodes[n].note = t;
-                        changed = true;
+                if retitled {
+                    // The tile's caption is the diagram's title.
+                    if let Some(e) = self.scene.elements.iter_mut().find(|e| &e.id == id) {
+                        if let Some(t) = e.diagram.as_ref().and_then(|d| d.title.clone()) {
+                            e.caption = t;
+                        }
                     }
                 }
                 if changed {
@@ -1093,6 +1185,15 @@ impl Canvas {
             e.focus = e.id == id;
         }
         self.bump(reason, chunk_id)
+    }
+
+    /// Something already on the board was asked for again (a photo, logo or icon): bring it forward, and with other
+    /// tiles around make it the big one. Focus alone was invisible in most layouts.
+    fn zoom_inner(&mut self, id: &str, reason: String, chunk_id: u64) -> Scene {
+        if self.scene.elements.len() >= 2 {
+            self.scene.layout = Layout::Hero;
+        }
+        self.focus_inner(id, reason, chunk_id)
     }
 
     // ---- layout engine ----
@@ -1269,45 +1370,168 @@ pub fn layout_rects(layout: Layout, n: usize, focus: usize) -> Vec<Rect> {
 /// True if the speech contains words that suggest re-arranging or annotating the board — used to
 /// decide when an in-progress phrase is worth an agent call.
 pub fn has_layout_cue(text: &str) -> bool {
-    let t = text.to_lowercase();
+    // "compared to X" is a figure of speech, but the cue "compare" would match inside it.
+    let t = text.to_lowercase().replace("compared to", " ").replace("compared with", " ");
     [
         "compare", "versus", " vs ", "side by side", "next to each other", "both of these", "focus on", "zoom in",
-        "this one", "closer look", "all of these", "all together", "altogether", "notice", "see how", "look at the",
-        "pay attention", "connects to", "leads to", "compared to", "just like", "moving on", "let's move on",
+        "this one", "closer look", "all of these", "all together", "altogether", "notice", "see how",
+        "zoom out", "circle this", "circle that", "highlight this", "highlight that", "highlight the", "circle the", "look at", "pay attention", "connects to", "leads to", "moving on", "let's move on",
         "next topic", "new section", "set that aside",
     ]
     .iter()
     .any(|c| t.contains(c))
 }
 
-/// Offline agent (no API key): cue rules over the newest speech → ops. Transparent and cheap.
+/// Every tile the speech names ("circle the eagle and the owl"), in board order. A name inside a longer name that also
+/// matched ("Python" in "Python API") is dropped.
+fn tiles_named(scene: &Scene, said: &str) -> Vec<String> {
+    let hay = format!(" {} ", said_words(said));
+    let hits: Vec<(String, String)> = scene
+        .elements
+        .iter()
+        .filter_map(|e| {
+            let name = said_words(e.caption.split('(').next().unwrap_or(&e.caption));
+            (!name.is_empty() && !["photo", "chart", "diagram", "logo", "icon"].contains(&name.as_str()) && hay.contains(&format!(" {name} "))).then(|| (name, e.id.clone()))
+        })
+        .collect();
+    hits.iter().filter(|(n, _)| !hits.iter().any(|(m, _)| m.len() > n.len() && m.contains(n.as_str()))).map(|(_, id)| id.clone()).collect()
+}
+
+/// The tile a removal request names: "get the owl out (of there)", "get the Python logo out", "take the chart away / off",
+/// "remove the owl", "get rid of the owl". Only a tile the words NAME counts here ("get it out" needs the model's judgment
+/// of what "it" is), and a name inside a longer sentence about something else ("get the word out") matches no tile.
+fn removal_target(scene: &Scene, said: &str) -> Option<String> {
+    let hay = format!(" {} ", said_words(said));
+    scene.elements.iter().find_map(|e| {
+        let name = said_words(e.caption.split('(').next().unwrap_or(&e.caption));
+        if name.is_empty() || ["photo", "chart", "diagram", "logo", "icon"].contains(&name.as_str()) {
+            return None;
+        }
+        // "the owl", "that owl photo", "the Python logo": an optional determiner before the name, a kind word after it.
+        let hit = ["", "the ", "that ", "this ", "my "].iter().any(|d| {
+            ["", " logo", " icon", " photo", " picture", " image", " chart", " diagram", " flag", " card"].iter().any(|k| {
+                let n = format!("{d}{name}{k}");
+                [format!("get {n} out"), format!("get {n} off"), format!("take {n} away"), format!("take {n} off"), format!("take {n} out"), format!("remove {n}"), format!("get rid of {n}")]
+                    .iter()
+                    .any(|p| hay.contains(&format!(" {p} ")))
+            })
+        });
+        hit.then(|| e.id.clone())
+    })
+}
+
+/// Lowercased words of some speech joined by single spaces, punctuation gone ("Let's circle this!" → "let's circle this").
+fn said_words(s: &str) -> String {
+    s.to_lowercase().replace('’', "'").split(|c: char| !(c.is_alphanumeric() || c == '\'')).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ")
+}
+
+/// Does the speech say `verb` directly followed by one of `objects` ("circle this", "highlight the", "look at that")?
+/// The object requirement keeps "the highlights of the trip" and "a circle of friends" from counting.
+fn asks_to(said: &str, verbs: &[&str], objects: &[&str]) -> bool {
+    let hay = format!(" {} ", said_words(said));
+    verbs.iter().any(|v| objects.iter().any(|o| hay.contains(&format!(" {v} {o} "))))
+}
+
+/// The tile the (lowercased) speech names by its caption or title: "zoom in on the owl" → the owl photo, "the
+/// Python logo" → the Python tile. The longest name wins; generic captions ("photo", "chart") never match.
+fn tile_named(scene: &Scene, said: &str) -> Option<String> {
+    let hay = format!(" {} ", said_words(said));
+    let words = said_words;
+    scene
+        .elements
+        .iter()
+        .filter_map(|e| {
+            let name = words(e.caption.split('(').next().unwrap_or(&e.caption));
+            (!name.is_empty() && !["photo", "chart", "diagram", "logo", "icon"].contains(&name.as_str()) && hay.contains(&format!(" {name} "))).then(|| (name.len(), e.id.clone()))
+        })
+        .max_by_key(|(len, _)| *len)
+        .map(|(_, id)| id)
+}
+
+/// Offline agent (no API key): cue rules over the newest speech → ops. Transparent and cheap, and deliberately
+/// timid: it only takes commands that cannot be ordinary talk. It never clears the board (a clear needs the
+/// model's judgment and a quote), and "compared to" / "just like" are filler, not requests (09-20: seven
+/// spurious arrows and a "compare" layout came from them while Luna was rate-limited).
 pub fn rule_ops(curr: &str, scene: &Scene) -> Vec<Op> {
     let t = curr.to_lowercase().replace('’', "'");
     let has = |cues: &[&str]| cues.iter().any(|c| t.contains(c));
     let n = scene.elements.len();
     let focused = scene.elements.iter().find(|e| e.focus).map(|e| e.id.clone());
     let mut ops = vec![];
-    if has(&["let's move on", "moving on", "next topic", "new section", "set that aside", "start fresh"]) && n > 0 {
-        return vec![Op::ClearBoard { quote: None }];
+    let hay = format!(" {} ", said_words(&t));
+    if !scene.annotations.is_empty()
+        && ["remove the circle", "remove the highlight", "remove that circle", "stop circling", "stop highlighting", "clear the highlight", "clear the circle", "take the circle off", "take the highlight off", "no more circle", "unhighlight"]
+            .iter()
+            .any(|p| hay.contains(&format!(" {p} ")))
+    {
+        return vec![Op::ClearAnnotations];
     }
-    if has(&["compare", "versus", " vs ", "side by side", "next to each other", "both of these"]) && n >= 2 && scene.layout != Layout::Compare {
+    // One tile taken off: "get the owl out of there". Never a clear, and only a tile the words name.
+    if let Some(id) = removal_target(scene, &t) {
+        return vec![Op::Remove { id, quote: Some(curr.trim().to_string()) }];
+    }
+    // "compare" alone also matches "compared to"; only the request forms count.
+    if has(&["let's compare", "lets compare", "compare these", "compare those", "compare them", "compare both", "compare the two", "versus", " vs ", "side by side", "next to each other", "both of these"])
+        && n >= 2
+        && scene.layout != Layout::Compare
+    {
         ops.push(Op::Arrange { layout: Layout::Compare });
-    } else if has(&["focus on", "zoom in", "this one", "take a closer look", "closer look"]) && n >= 2 && scene.layout != Layout::Hero {
-        ops.push(Op::Arrange { layout: Layout::Hero });
+    } else if has(&["focus on", "zoom in", "zoom into", "this one", "take a closer look", "closer look"]) && n >= 1 {
+        // The tile the words name ("zoom in on the owl"), else the one already in focus, else the newest.
+        let target = tile_named(scene, &t).or_else(|| focused.clone()).or_else(|| scene.elements.last().map(|e| e.id.clone()));
+        let zoomed = scene.layout == Layout::Hero && target == focused;
+        if let (Some(id), false) = (target, zoomed) {
+            ops.push(Op::Focus { id });
+        }
+    } else if has(&["zoom out", "zoom back out"]) && scene.layout == Layout::Hero {
+        ops.push(Op::Arrange { layout: Layout::Auto });
     } else if has(&["all of these", "all together", "altogether", "the whole set", "everything we've seen"]) && n >= 3 {
         ops.push(Op::Arrange { layout: Layout::Grid });
     }
-    if has(&["notice", "see how", "look at the", "pay attention to", "important"]) {
-        if let Some(id) = focused.clone() {
-            if !scene.annotations.iter().any(|a| a.targets == vec![id.clone()] && a.kind == AnnotationKind::Highlight) {
-                ops.push(Op::Annotate { kind: AnnotationKind::Highlight, targets: vec![id], label: None });
-            }
+    // Circling. Every phrasing gives the same result: "circle this", "highlight this", "let's highlight the chart",
+    // "look at the owl", "notice…", "pay attention to…" put a highlight on the tile the words name, else the one in
+    // focus ("this"). Once per tile. "Look at" needs a tile that is on the board, or "this / that / it".
+    const THIS: [&str; 6] = ["this", "that", "it", "these", "those", "them"];
+    const THE: [&str; 8] = ["this", "that", "it", "these", "those", "them", "the", "my"];
+    const ALL: [&str; 5] = ["everything", "all", "each", "every", "both"];
+    let named = tiles_named(scene, &t);
+    let closer = has(&["closer look", "look closer", "zoom in", "zoom into"]);
+    let verb_said = |verbs: &[&str]| {
+        let hay = format!(" {} ", said_words(&t));
+        verbs.iter().any(|v| hay.contains(&format!(" {v} ")))
+    };
+    // "circle everything / them all / all of these / each one / both": every tile ("both" = the two newest).
+    let all = asks_to(&t, &["circle", "highlight"], &ALL) || (verb_said(&["circle", "highlight"]) && verb_said(&["them all", "all of them", "all of these", "all four", "all three"]));
+    let circle = all
+        || asks_to(&t, &["circle", "highlight"], &THE)
+        || (!named.is_empty() && verb_said(&["circle", "highlight"]))
+        || (!closer && (asks_to(&t, &["look at"], &THIS) || (!named.is_empty() && verb_said(&["look at"]))))
+        || has(&["notice", "see how", "pay attention to", "important"]);
+    if circle {
+        let both_only = all && asks_to(&t, &["circle", "highlight"], &["both"]) && n > 2;
+        let targets: Vec<String> = if both_only {
+            scene.elements.iter().rev().take(2).map(|e| e.id.clone()).collect()
+        } else if all {
+            scene.elements.iter().map(|e| e.id.clone()).collect()
+        } else if !named.is_empty() {
+            named
+        } else {
+            focused.clone().into_iter().collect()
+        };
+        // Once per tile: skip the ones that already carry a mark.
+        let fresh: Vec<String> = targets.into_iter().filter(|id| !scene.annotations.iter().any(|a| a.kind != AnnotationKind::Arrow && a.targets == vec![id.clone()])).collect();
+        if !fresh.is_empty() {
+            ops.push(Op::Annotate { kind: AnnotationKind::Highlight, targets: fresh, label: None });
         }
     }
-    if has(&["connects to", "leads to", "compared to", "relates to", "just like"]) && n >= 2 {
+    if has(&["connects to", "leads to", "relates to"]) && n >= 2 {
         let a = scene.elements[n - 2].id.clone();
         let b = scene.elements[n - 1].id.clone();
-        ops.push(Op::Annotate { kind: AnnotationKind::Arrow, targets: vec![a, b], label: None });
+        // One arrow per pair: the same words come back in every partial and again in the final.
+        let linked = scene.annotations.iter().any(|x| x.kind == AnnotationKind::Arrow && x.targets.len() == 2 && x.targets.contains(&a) && x.targets.contains(&b));
+        if !linked {
+            ops.push(Op::Annotate { kind: AnnotationKind::Arrow, targets: vec![a, b], label: None });
+        }
     }
     ops
 }
@@ -1518,11 +1742,32 @@ mod tests {
     }
 
     #[test]
+    fn a_diagram_can_be_retitled_and_follows_a_renamed_node() {
+        let mut c = Canvas::new();
+        let hub = Op::DrawDiagram { layout: DiagramLayout::Hub, title: Some("Call ignition".into()), nodes: ns(&["Call ignition", "Founded 2023"]), edges: vec![] };
+        let id = c.apply(0, &[hub], 1).unwrap().elements[0].id.clone();
+        let title = |c: &Canvas| {
+            let e = &c.scene().elements[0];
+            (e.diagram.as_ref().unwrap().title.clone(), e.caption.clone())
+        };
+        // renaming the node the title was copied from renames the title too (09-20: "Call ignition" stayed on screen)
+        c.apply(0, &[Op::UpdateNode { id: id.clone(), node: "Call ignition".into(), label: Some("Cognition".into()), note: None, title: None }], 2).unwrap();
+        assert_eq!(title(&c), (Some("Cognition".into()), "Cognition".into()));
+        // a title that is not the node's name is left alone by a rename
+        c.apply(0, &[Op::UpdateNode { id: id.clone(), node: "Founded 2023".into(), label: Some("Founded".into()), note: None, title: None }], 3).unwrap();
+        assert_eq!(title(&c).0.as_deref(), Some("Cognition"));
+        // an explicit retitle needs no node
+        c.apply(0, &[Op::UpdateNode { id: id.clone(), node: String::new(), label: None, note: None, title: Some("How Cognition began".into()) }], 4).unwrap();
+        assert_eq!(title(&c), (Some("How Cognition began".into()), "How Cognition began".into()));
+        assert!(c.apply(0, &[Op::UpdateNode { id, node: String::new(), label: None, note: None, title: None }], 6).is_none(), "nothing to change is refused");
+    }
+
+    #[test]
     fn diagram_nodes_can_be_renamed_removed_and_relinked() {
         let mut c = Canvas::new();
         let id = c.apply(0, &[Op::DrawDiagram { layout: DiagramLayout::Flow, title: None, nodes: ns(&["Commit", "Build", "Test", "Deploy"]), edges: vec![] }], 1).unwrap().elements[0].id.clone();
         let labels = |c: &Canvas| c.scene().elements[0].diagram.as_ref().unwrap().nodes.iter().map(|n| n.label.clone()).collect::<Vec<_>>();
-        c.apply(0, &[Op::UpdateNode { id: id.clone(), node: "build".into(), label: Some("Compile".into()), note: None }], 2).unwrap();
+        c.apply(0, &[Op::UpdateNode { id: id.clone(), node: "build".into(), label: Some("Compile".into()), note: None, title: None }], 2).unwrap();
         assert_eq!(labels(&c), ["Commit", "Compile", "Test", "Deploy"]);
         // removing a node re-chains the rest
         c.apply(0, &[Op::RemoveNode { id: id.clone(), node: "Test".into(), quote: Some("take the test step out".into()) }], 3).unwrap();
@@ -1534,7 +1779,7 @@ mod tests {
         let ids: Vec<String> = c.scene().elements[0].diagram.as_ref().unwrap().nodes.iter().map(|n| n.id.clone()).collect();
         assert_eq!(ids.len(), ids.iter().collect::<std::collections::HashSet<_>>().len(), "unique node ids: {ids:?}");
         // an unknown node is refused with a reason
-        assert!(c.apply(0, &[Op::UpdateNode { id: id.clone(), node: "Nope".into(), label: Some("X".into()), note: None }], 5).is_none());
+        assert!(c.apply(0, &[Op::UpdateNode { id: id.clone(), node: "Nope".into(), label: Some("X".into()), note: None, title: None }], 5).is_none());
         assert!(c.take_notes().iter().any(|n| n.contains("Nope")));
         c.apply(0, &[Op::AddEdge { id: id.clone(), from: "Commit".into(), to: "Monitor".into(), label: Some("also".into()) }], 6).unwrap();
         c.apply(0, &[Op::RemoveEdge { id, from: "Commit".into(), to: "Monitor".into() }], 7).unwrap();
@@ -1795,7 +2040,259 @@ mod tests {
         let s = add(&mut c, "owl");
         assert_eq!(rule_ops("let's compare these two birds", &s), vec![Op::Arrange { layout: Layout::Compare }]);
         assert!(matches!(rule_ops("notice the beak", &s)[0], Op::Annotate { kind: AnnotationKind::Highlight, .. }));
-        assert_eq!(rule_ops("ok, moving on", &s), vec![Op::ClearBoard { quote: None }]);
         assert!(rule_ops("they live in forests", &s).is_empty());
+    }
+
+    /// A board of `n` mixed tiles: logo, photo, chart, icon.
+    fn mixed_board(n: usize) -> (Canvas, Vec<String>) {
+        let mut c = Canvas::new();
+        c.render_logo("logos:python", "Python", "u", 1);
+        if n > 1 {
+            add(&mut c, "owl");
+        }
+        if n > 2 {
+            chart(&mut c, "Users", &[("Jan", 40.0)]);
+        }
+        if n > 3 {
+            c.render_logo("lucide:database", "Database", "u", 4);
+        }
+        let ids = c.scene().elements.iter().map(|e| e.id.clone()).collect();
+        (c, ids)
+    }
+
+    #[test]
+    fn focus_zooms_any_tile_at_any_count() {
+        let area = |r: &Rect| r.w * r.h;
+        for n in 1..=4 {
+            let (mut c, ids) = mixed_board(n);
+            assert_eq!(c.scene().elements.len(), n);
+            for id in &ids {
+                // start from a layout that shows no focus at all: side by side (2), grid (4)
+                let _ = c.apply(0, &[Op::Arrange { layout: Layout::Compare }], 9);
+                let s = c.apply(0, &[Op::Focus { id: id.clone() }], 10).unwrap_or_else(|| panic!("n={n} {id}: focus changed nothing"));
+                assert_eq!(s.layout, Layout::Hero, "n={n} {id}");
+                assert_eq!(s.elements.iter().find(|e| e.focus).map(|e| &e.id), Some(id), "n={n}");
+                let big = s.elements.iter().find(|e| &e.id == id).unwrap();
+                for other in s.elements.iter().filter(|e| &e.id != id) {
+                    assert!(area(&big.rect) > 2.0 * area(&other.rect), "n={n}: {id} should be much bigger than {}", other.id);
+                }
+                assert!(c.apply(0, &[Op::Focus { id: id.clone() }], 11).is_none(), "zooming on what is already zoomed changes nothing");
+            }
+        }
+    }
+
+    #[test]
+    fn asking_again_for_a_symbol_on_the_board_zooms_on_it() {
+        let mut c = Canvas::new();
+        c.render_logo("logos:python", "Python", "u", 1);
+        c.render_logo("logos:google-icon", "Google", "u", 2);
+        assert_eq!(c.scene().layout, Layout::Auto);
+        let s = c.render_logo("logos:python", "Python", "u", 3);
+        assert_eq!(s.layout, Layout::Hero, "two tiles side by side had no visible focus");
+        assert_eq!(s.elements.iter().find(|e| e.focus).map(|e| e.caption.as_str()), Some("Python"));
+        // a lone tile has nothing to zoom relative to
+        let mut one = Canvas::new();
+        one.render_logo("logos:python", "Python", "u", 1);
+        assert_eq!(one.render_logo("logos:python", "Python", "u", 2).layout, Layout::Auto);
+    }
+
+    #[test]
+    fn a_zoom_ends_when_only_one_tile_is_left_or_a_new_one_arrives() {
+        let (mut c, ids) = mixed_board(2);
+        c.apply(0, &[Op::Focus { id: ids[0].clone() }], 5).unwrap();
+        let s = c.apply(0, &[Op::Remove { id: ids[1].clone(), quote: Some("take it away".into()) }], 6).unwrap();
+        assert_eq!(s.layout, Layout::Auto, "the lone tile that is left is not a zoom");
+        c.apply(0, &[Op::Focus { id: ids[0].clone() }], 7).unwrap();
+        assert_eq!(add(&mut c, "eagle").layout, Layout::Auto, "a new tile resets to the automatic layout");
+    }
+
+    #[test]
+    fn rules_zoom_in_on_the_named_tile_with_any_number_of_tiles() {
+        for n in 1..=4 {
+            let (c, ids) = mixed_board(n);
+            let s = c.scene();
+            // the tile named in the words, else the focused one
+            assert_eq!(rule_ops("let's zoom in on the python logo", s), vec![Op::Focus { id: ids[0].clone() }], "n={n}");
+            let last = ids.last().unwrap().clone();
+            assert_eq!(rule_ops("take a closer look", s), if s.layout == Layout::Hero && n == 1 { vec![] } else { vec![Op::Focus { id: last }] }, "n={n}");
+        }
+        // 2+ tiles: name the photo
+        let (c, ids) = mixed_board(2);
+        assert_eq!(rule_ops("zoom in on the owl", c.scene()), vec![Op::Focus { id: ids[1].clone() }]);
+        // already zoomed on it: nothing to do; "zoom out" goes back to the automatic layout
+        let mut c = c;
+        let s = c.apply(0, &[Op::Focus { id: ids[1].clone() }], 3).unwrap();
+        assert!(rule_ops("zoom in on the owl", &s).is_empty());
+        assert_eq!(rule_ops("okay, zoom out", &s), vec![Op::Arrange { layout: Layout::Auto }]);
+        assert!(rule_ops("okay, zoom out", c.scene()).len() == 1 && has_layout_cue("zoom out"));
+    }
+
+    fn circled(ops: &[Op]) -> Vec<String> {
+        ops.iter().filter_map(|o| if let Op::Annotate { kind: AnnotationKind::Highlight, targets, .. } = o { Some(targets.join(",")) } else { None }).collect()
+    }
+
+    #[test]
+    fn every_way_of_saying_circle_this_circles_it() {
+        let (c, ids) = mixed_board(2); // e1 Python logo, e2 owl (focused)
+        let s = c.scene();
+        for said in ["circle this", "let's circle this", "Highlight this.", "let's highlight this", "lets highlight this one", "highlight that", "circle it", "look at this", "notice this", "pay attention to this"] {
+            assert_eq!(circled(&rule_ops(said, s)), vec![ids[1].clone()], "{said:?} circles the tile in focus");
+        }
+        // a name picks the tile, wherever the focus is
+        for said in ["circle the python logo", "highlight the python logo", "let's highlight python", "look at the python logo", "look at python"] {
+            let ops = rule_ops(said, s);
+            assert_eq!(circled(&ops), vec![ids[0].clone()], "{said:?} → {ops:?}");
+        }
+        // not requests
+        for said in ["the highlights of the trip", "a circle of friends", "look at how far we have come", "circle back later"] {
+            assert!(circled(&rule_ops(said, s)).is_empty(), "{said:?}");
+        }
+        // "closer look" is the zoom, not a circle
+        let ops = rule_ops("take a closer look at the owl", s);
+        assert!(circled(&ops).is_empty() && matches!(ops[..], [Op::Focus { .. }]), "{ops:?}");
+    }
+
+    #[test]
+    fn a_tile_is_circled_once_and_the_circle_can_be_taken_off() {
+        let (mut c, ids) = mixed_board(2);
+        let s = c.apply(0, &rule_ops("circle this", c.scene()), 1).unwrap();
+        assert_eq!(s.annotations.len(), 1);
+        assert!(rule_ops("circle this", &s).is_empty(), "already circled: the rules add nothing");
+        // the model asking again (partial, then final) changes nothing, and keeps the drawn circle's id
+        let id0 = s.annotations[0].id.clone();
+        let again = Op::Annotate { kind: AnnotationKind::Highlight, targets: vec![ids[1].clone()], label: None };
+        assert!(c.apply(0, &[again.clone(), again], 2).is_none());
+        assert_eq!(c.scene().annotations.len(), 1);
+        assert_eq!(c.scene().annotations[0].id, id0);
+        // frame ↔ highlight and a new label update the one mark instead of adding another
+        let framed = Op::Annotate { kind: AnnotationKind::Frame, targets: vec![ids[1].clone()], label: Some("the eyes".into()) };
+        let s = c.apply(0, &[framed], 3).unwrap();
+        assert_eq!((s.annotations.len(), s.annotations[0].kind, s.annotations[0].label.as_deref()), (1, AnnotationKind::Frame, Some("the eyes")));
+        // one circle per tile, several tiles at once
+        let both = Op::Annotate { kind: AnnotationKind::Highlight, targets: ids.clone(), label: None };
+        assert_eq!(c.apply(0, &[both], 4).unwrap().annotations.len(), 2);
+        // take them off
+        assert_eq!(rule_ops("okay, stop highlighting", c.scene()), vec![Op::ClearAnnotations]);
+        assert!(c.apply(0, &[Op::ClearAnnotations], 5).unwrap().annotations.is_empty());
+        assert!(rule_ops("remove the circle", c.scene()).is_empty(), "nothing to remove");
+    }
+
+    #[test]
+    fn get_x_out_of_there_removes_that_tile() {
+        let (c, ids) = mixed_board(4); // e1 Python logo, e2 owl, e3 chart "Users", e4 Database icon
+        let s = c.scene();
+        for (said, want) in [
+            ("get the owl out of there", 1),
+            ("Get the owl out.", 1),
+            ("get owl out", 1),
+            ("let's get the python logo out of there", 0),
+            ("can you get the users chart out", 2),
+            ("get that database out of here", 3),
+            ("take the owl away", 1),
+            ("get rid of the python logo", 0),
+            ("remove the owl", 1),
+        ] {
+            assert_eq!(rule_ops(said, s), vec![Op::Remove { id: ids[want].clone(), quote: Some(said.trim().to_string()) }], "{said:?}");
+        }
+        // figures of speech and unnamed things are left to the model
+        for said in ["we need to get the word out", "get it out of there", "get the product out the door", "the owl is out of there", "get out of the habit"] {
+            assert!(rule_ops(said, s).iter().all(|o| !matches!(o, Op::Remove { .. })), "{said:?}");
+        }
+        // the op works on every kind of tile, and the board closes up
+        for id in &ids {
+            let mut c2 = mixed_board(4).0;
+            let after = c2.apply(0, &[Op::Remove { id: id.clone(), quote: Some("get it out".into()) }], 9).unwrap();
+            assert_eq!(after.elements.len(), 3);
+            assert!(!after.elements.iter().any(|e| &e.id == id));
+        }
+    }
+
+    #[test]
+    fn every_tile_on_the_board_can_be_circled_at_once_or_one_by_one() {
+        let hl = |ids: &[String]| Op::Annotate { kind: AnnotationKind::Highlight, targets: ids.to_vec(), label: None };
+        for n in 1..=4 {
+            let (mut c, ids) = mixed_board(n);
+            // all at once, in one op
+            let s = c.apply(0, &[hl(&ids)], 1).unwrap();
+            assert_eq!(s.annotations.len(), n, "n={n}: every tile circled");
+            for id in &ids {
+                assert!(s.annotations.iter().any(|a| a.targets == vec![id.clone()]), "n={n}: {id}");
+            }
+            // one by one, on a fresh board
+            let (mut d, ids) = mixed_board(n);
+            for (k, id) in ids.iter().enumerate() {
+                let s = d.apply(0, &[hl(std::slice::from_ref(id))], 2 + k as u64).unwrap();
+                assert_eq!(s.annotations.len(), k + 1, "n={n}: circles pile up, none is pushed out");
+            }
+        }
+        // arrows have their own cap and never push a circle out
+        let (mut c, ids) = mixed_board(4);
+        c.apply(0, &[hl(&ids)], 1).unwrap();
+        let arrow = |a: usize, b: usize| Op::Annotate { kind: AnnotationKind::Arrow, targets: vec![ids[a].clone(), ids[b].clone()], label: None };
+        c.apply(0, &[arrow(0, 1), arrow(1, 2), arrow(2, 3), arrow(0, 3)], 2).unwrap();
+        let s = c.scene();
+        let arrows = s.annotations.iter().filter(|a| a.kind == AnnotationKind::Arrow).count();
+        let circles = s.annotations.iter().filter(|a| a.kind != AnnotationKind::Arrow).count();
+        assert_eq!((circles, arrows), (4, MAX_ARROWS));
+    }
+
+    #[test]
+    fn the_rules_circle_what_was_asked_for_one_two_or_all_of_the_tiles() {
+        let (c, ids) = mixed_board(4); // e1 Python logo, e2 owl, e3 chart "Users", e4 Database icon (focused)
+        let s = c.scene();
+        let targets = |said: &str| -> Vec<String> {
+            rule_ops(said, s).iter().filter_map(|o| if let Op::Annotate { kind: AnnotationKind::Highlight, targets, .. } = o { Some(targets.clone()) } else { None }).flatten().collect()
+        };
+        for said in ["circle everything", "let's highlight all of these", "circle them all", "highlight all four", "circle each one", "circle all of them", "highlight every one"] {
+            assert_eq!(targets(said), ids, "{said:?}");
+        }
+        assert_eq!(targets("circle the python logo and the owl"), vec![ids[0].clone(), ids[1].clone()]);
+        assert_eq!(targets("highlight the users chart"), vec![ids[2].clone()]);
+        assert_eq!(targets("circle this"), vec![ids[3].clone()], "this = the focused tile");
+        assert_eq!(targets("circle both"), vec![ids[3].clone(), ids[2].clone()], "both = the two newest");
+        // tiles that already carry a circle are skipped, so "circle everything" after two single circles adds the rest
+        let mut c = c;
+        let s2 = c.apply(0, &[Op::Annotate { kind: AnnotationKind::Highlight, targets: vec![ids[0].clone(), ids[1].clone()], label: None }], 5).unwrap();
+        let rest: Vec<String> = rule_ops("circle everything", &s2).iter().filter_map(|o| if let Op::Annotate { targets, .. } = o { Some(targets.clone()) } else { None }).flatten().collect();
+        assert_eq!(rest, vec![ids[2].clone(), ids[3].clone()]);
+    }
+
+    #[test]
+    fn an_arrow_needs_two_tiles_and_bad_targets_say_why() {
+        let (mut c, ids) = mixed_board(3);
+        let arrow = |t: &[&str]| Op::Annotate { kind: AnnotationKind::Arrow, targets: t.iter().map(|x| x.to_string()).collect(), label: None };
+        assert!(c.apply(0, &[arrow(&[&ids[0]])], 1).is_none());
+        assert!(c.apply(0, &[arrow(&[&ids[0], &ids[0]])], 1).is_none(), "the same tile twice is not two tiles");
+        assert!(c.take_notes().iter().filter(|n| n.contains("needs two tiles")).count() == 2);
+        assert!(c.apply(0, &[arrow(&[&ids[0], &ids[1]])], 2).is_some());
+        assert!(c.apply(0, &[arrow(&[&ids[1], &ids[0]])], 3).is_none(), "the same pair again adds nothing");
+        assert!(c.apply(0, &[Op::Annotate { kind: AnnotationKind::Highlight, targets: vec!["nope".into()], label: None }], 4).is_none());
+        assert!(c.take_notes().iter().any(|n| n.contains("no such tile")));
+    }
+
+    #[test]
+    fn rules_never_clear_and_ignore_filler() {
+        let mut c = Canvas::new();
+        add(&mut c, "eagle");
+        let s = add(&mut c, "owl");
+        for said in ["ok, moving on", "let's move on", "next topic", "new section", "start fresh"] {
+            assert!(rule_ops(said, &s).iter().all(|o| !matches!(o, Op::ClearBoard { .. })), "{said}");
+        }
+        for filler in ["yeah it's just like, you know", "a selection of images compared to action images", "it is just like that"] {
+            assert!(rule_ops(filler, &s).is_empty(), "{filler}");
+        }
+        assert!(!has_layout_cue("it's just like, yeah"));
+        assert!(!has_layout_cue("images compared to those"));
+    }
+
+    #[test]
+    fn rules_draw_one_arrow_per_pair() {
+        let mut c = Canvas::new();
+        add(&mut c, "eagle");
+        let s = add(&mut c, "owl");
+        let ops = rule_ops("the eagle leads to the owl", &s);
+        assert!(matches!(ops[..], [Op::Annotate { kind: AnnotationKind::Arrow, .. }]));
+        let s = c.apply(s.version, &ops, 3).expect("arrow drawn");
+        assert!(rule_ops("the eagle leads to the owl", &s).is_empty(), "the same words again add nothing");
     }
 }

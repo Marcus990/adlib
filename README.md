@@ -17,7 +17,7 @@ mic → VAD + Whisper (local) → transcript → Luna (OpenAI API, or OpenRouter
    `mobileclip-s2/{open_clip_model.safetensors,tokenizer.json}`.
 2. `.env` — copy `.env.example`, set `OPENAI_API_KEY` (Luna on OpenAI's own API, fastest) or `OPENROUTER_API_KEY`.
    Without either the app still runs on the offline rules (layout cues, and a presenter cue + library subject
-   for photos).
+   for photos). List names Whisper mangles (`Cognition`, `Baseten`…) in `talk-terms.txt`.
 3. Build: `CARGO_BUILD_JOBS=2 cargo build --release`
 4. Image library: a folder of jpg/png/webp + optional `captions.tsv` (`id<TAB>caption`, id = file stem).
    Index it (one image at a time, ~1.5 s each):
@@ -59,15 +59,16 @@ With no mic named, the app prefers AirPods, then the MacBook mic, and never a vi
 - `OPENAI_API_KEY` / `OPENROUTER_API_KEY` — Luna's backend: OpenAI's own API when its key is set, else OpenRouter
   (`CANVAS_PROVIDER=openrouter` forces OpenRouter). `CANVAS_MODEL` (default `gpt-5.6-luna`; on OpenRouter it is
   `openai/gpt-5.6-luna`, the prefix is added or dropped for you). OpenAI calls use the standard service tier by
-  default and log the tier returned; `CANVAS_SERVICE_TIER=fast` opts into Fast mode. `CANVAS_TRANSPORT=websocket` enables OpenAI's
-  persistent Responses connection: startup prepares the prompt and tools without generating, later turns send
-  incremental speech and canvas outcomes, and any socket failure retries over HTTP. HTTP remains the default until
-  this path matches the established full probe baseline.
-  `CANVAS_TIMEOUT_MS` (6000): one retry, shorter, on a
-  timeout / 429 / 5xx, then the offline rules. `AGENT_RPM` — calls per minute: 500 on OpenAI (the measured maximum;
+  default and log the tier returned; `CANVAS_SERVICE_TIER=fast` opts into Fast mode. On OpenAI the default transport is a
+  persistent Responses WebSocket: startup prepares the prompt and tools without generating, later turns send
+  incremental speech and canvas outcomes, and any socket failure retries over HTTP (`CANVAS_TRANSPORT=http` opts
+  out; resending the whole transcript over HTTP every call hit the 500k tokens/min limit on 09-20).
+  `CANVAS_TIMEOUT_MS` (6000): one shorter retry on a timeout / 5xx, and up to two on a 429, waiting as long as the
+  error's "try again in …" says. If the model still fails the call changes nothing and its words are offered again
+  in the next call (the offline rules only run when there is no key at all). `AGENT_RPM` — calls per minute: 500 on OpenAI (the measured maximum;
   the account also allows 500k tokens a minute, and HTTP calls carry the whole transcript), 18 on OpenRouter (a new
   account is capped at 20/min for Luna).
-- `LS_ASSETS` (asset card root, e.g. `/Volumes/NO NAME/assets`) — Marcus's 15k-photo library (OpenAI CLIP ViT-B/32
+- `LS_ASSETS` (asset card root, e.g. `/Volumes/NO NAME/assets`) — Marcus's 39k-photo library (OpenAI CLIP ViT-B/32
   embeddings) and, in `icons/`, 13k logos, icons and flags searched by name (see ASSETS_HANDOFF.md). Unset = the local MobileCLIP index (`INDEX`, `CLIP_DIR`).
 - `CLIP_TEXT_DIR` (default `models/clip-vit-b32`) — `tokenizer.json` + `pytorch_model.bin` from
   openai/clip-vit-base-patch32; the text tower is extracted once into `clip-text-vit-b32.safetensors`.
