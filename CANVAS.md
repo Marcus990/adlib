@@ -54,11 +54,11 @@ Offline rules (no key): "compare/versus/side by side" → compare; "focus on/thi
   (one value), grown with `add_point`, trimmed with `remove_point`; diagrams with `add_nodes`, `update_node`,
   `remove_node`, `add_edge`, `remove_edge`. There is no whole-data-set `update_chart` tool any more: a model that
   sent only the changed point used to wipe the rest of the chart.
-- A text tile holds up to eight ordered semantic blocks: `heading`, `paragraph` and `bullet`. Blocks get stable ids
-  (`b1`…) so Luna can append, correct or remove one block without redrawing the tile. `emphasis` is a list of exact
-  phrases within the block; the renderer marks those phrases using the active theme. A closing such as “Thank you” is
-  an ordinary heading block, rather than a special slide type. Text tools only apply after finished speech, so a partial
-  ASR phrase cannot become visible copy.
+- The board holds at most one text tile. A new `draw_text` replaces that tile in place; text never accumulates beside
+  older text. The tile holds up to eight semantic blocks: `heading`, `paragraph` and `bullet`, with stable ids (`b1`…)
+  for list extensions and corrections. Every block carries 1–2 exact `emphasis` phrases; those phrases are the only
+  words the renderer shows and underlines. A closing such as “Thank you” is an ordinary heading block. Text tools only
+  apply after finished speech, so a partial ASR phrase cannot become visible copy.
 - Canvas rules: omitted edges = chain (flow/timeline), chain + closing edge (cycle), spokes (hub); a redraw
   sharing ≥ half the nodes of a diagram on the board replaces it in place; same chart title → replace data;
   a stat with ≥ 2 values becomes bars; ≤ 8 nodes / points; node ids are never reused after a removal.

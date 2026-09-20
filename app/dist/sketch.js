@@ -609,7 +609,16 @@
 
   // ---------- structured text ----------
   function renderText(svg, el, card, W, H, seen, f) {
-    const blocks = (card && card.blocks) || [];
+    // `text` is context for Luna and later edits; `emphasis` is the actual screen copy. Keeping that
+    // distinction here prevents full transcript-like sentences from leaking onto the presentation.
+    const blocks = ((card && card.blocks) || []).flatMap(b => {
+      const source = String(b.text), lower = source.toLowerCase();
+      const phrases = (b.emphasis || [])
+        .filter(p => p && lower.includes(String(p).toLowerCase()))
+        .sort((a, z) => lower.indexOf(String(a).toLowerCase()) - lower.indexOf(String(z).toLowerCase()));
+      if (!phrases.length) return [];
+      return [{ ...b, text: phrases.join(' '), emphasis: phrases }];
+    });
     if (!blocks.length) return;
     const pad = Math.max(f * 1.7, Math.min(W, H) * 0.06), maxW = W - 2 * pad, maxH = H - 2 * pad;
     const multiplier = b => b.kind === 'heading' ? (b.level === 2 ? 1.4 : 2.05) : 1;
@@ -625,7 +634,7 @@
           lines = lines.slice(0, cap);
           lines[cap - 1] = TextFit.ellipsize(lines[cap - 1] + '…', maxW - indent, sz, weight(b), HAND);
         }
-        const lh = sz * (b.kind === 'heading' ? 1.18 : 1.24), gap = i === blocks.length - 1 ? 0 : size * (b.kind === 'heading' ? 0.72 : 0.48);
+        const lh = sz * (b.kind === 'heading' ? 1.3 : 1.24), gap = i === blocks.length - 1 ? 0 : size * (b.kind === 'heading' ? 0.72 : 0.48);
         total += lines.length * lh + gap;
         return { b, lines, size: sz, lh, gap, indent, weight: weight(b) };
       });
@@ -664,7 +673,8 @@
             const lineW = tw(line, row.size, row.weight), left = titleOnly ? x - lineW / 2 : x;
             const sx = left + tw(before, row.size, row.weight), ex = sx + tw(hit, row.size, row.weight);
             const r = rng(key + ':' + li + ':' + phrase);
-            pen(svg, lineD(r, sx, cy + row.size * 0.48, ex, cy + row.size * 0.48, row.size * 0.08), MARK[2], Math.max(2, row.size * 0.16), isNew, li * 100, 350, { opacity: 0.8 });
+            const uy = cy + row.size * 0.62;
+            pen(svg, lineD(r, sx, uy, ex, uy, row.size * 0.08), MARK[2], Math.max(2, row.size * 0.16), isNew, li * 100, 350, { opacity: 0.8 });
           }
         }
         write(svg, line, x, cy, row.size, { 'text-anchor': anchor, 'font-weight': row.weight }, isNew, li * 90);

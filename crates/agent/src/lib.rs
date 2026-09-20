@@ -106,8 +106,8 @@ DIAGRAMS
 
 TEXT
 - Text is for structure the presenter explicitly creates: a heading or section label, an enumerated list, a stated takeaway, a concise headline claim, or a closing. Never transcribe ordinary narration and never turn a story into paragraphs on screen.
-- `draw_text` creates one text tile from semantic blocks. Use heading for a title, paragraph for one short supporting thought, and bullet for each explicit item. Use `add_text_blocks` as the presenter continues the same list. Patch corrections by block id with `update_text_block`; do not redraw the tile.
-- `emphasis` contains at most two short, exact phrases copied from that block's text. Emphasize only words the presenter stresses or frames as the key takeaway.
+- `draw_text` replaces the one text tile on screen; text never accumulates into multiple tiles. Use heading for a title, paragraph for one short supporting thought, and bullet for each explicit item. Use `add_text_blocks` only as the presenter continues the same explicit list. Patch corrections by block id with `update_text_block`; do not redraw the tile.
+- `emphasis` contains 1–2 short, exact phrases copied from that block's text. ONLY these phrases are visible on screen; the rest of `text` is context for later edits. Every block must have emphasis. Choose the fewest words that carry the point.
 - Text must be extractive: use the presenter's own words and keep it concise. Never create text from unfinished words in "Being spoken now"; wait for the finished sentence.
 - A closing such as "Thank you" is a text tile, usually heading "Thank you" and optional paragraph "Questions?" only when those words were said. Clear the old board only when the newest words also authorize `clear_board` with a quote.
 - A single claim with one actor and one outcome is text, not a diagram: “customer service agents ended up doing the coding” should be a short heading/body card. Do not manufacture diagram nodes by splitting a sentence into its subject and predicate.
@@ -144,8 +144,8 @@ pub fn tools() -> Value {
         "kind": {"type": "string", "enum": ["heading", "paragraph", "bullet"]},
         "text": {"type": "string", "description": "concise words taken from finished speech"},
         "level": {"type": "integer", "minimum": 0, "maximum": 2, "description": "heading: 1 or 2; bullet: 0 or 1"},
-        "emphasis": {"type": "array", "maxItems": 2, "items": {"type": "string"}, "description": "short exact phrases within text"}
-    }, "required": ["kind", "text"]});
+        "emphasis": {"type": "array", "minItems": 1, "maxItems": 2, "items": {"type": "string"}, "description": "REQUIRED screen copy: only these short exact phrases within text are rendered"}
+    }, "required": ["kind", "text", "emphasis"]});
     let tool = |name: &str, description: &str, properties: Value, required: Value| {
         json!({"type": "function", "function": {"name": name, "description": description,
             "parameters": {"type": "object", "properties": properties, "required": required}}})
@@ -177,7 +177,7 @@ pub fn tools() -> Value {
             json!({"id": id("chart"), "label": {"type": "string"}, "quote": quote.clone()}), json!(["id", "label", "quote"])),
         tool("set_chart", "Change a chart's kind, title or unit without touching its data ('show that as a line chart', 'call this chart monthly signups').",
             json!({"id": id("chart"), "kind": kind, "title": {"type": "string", "description": "≤ 6 words"}, "unit": {"type": "string"}}), json!(["id"])),
-        tool("draw_text", "Add a NEW structured text tile for an explicit heading, list, takeaway, concise headline claim or closing. Prefer this over a diagram for one actor and one outcome. Never transcribe ordinary narration or unfinished speech.",
+        tool("draw_text", "Replace the one text tile on screen with a heading, list, takeaway, concise headline claim or closing. Only each block's required emphasis phrases render. Prefer this over a diagram for one actor and one outcome. Never transcribe ordinary narration or unfinished speech.",
             json!({"blocks": {"type": "array", "minItems": 1, "maxItems": 8, "items": text_block.clone()}}), json!(["blocks"])),
         tool("add_text_blocks", "Append finished items to an existing text tile as the presenter continues the same list.",
             json!({"id": id("text tile"), "blocks": {"type": "array", "minItems": 1, "items": text_block.clone()}}), json!(["id", "blocks"])),

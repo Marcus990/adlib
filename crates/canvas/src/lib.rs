@@ -368,6 +368,9 @@ fn clean_text_spec(spec: &TextBlockSpec) -> Option<TextBlockSpec> {
             break;
         }
     }
+    if emphasis.is_empty() {
+        return None;
+    }
     let level = match spec.kind {
         TextBlockKind::Heading => spec.level.clamp(1, 2),
         TextBlockKind::Bullet => spec.level.min(1),
@@ -916,7 +919,20 @@ impl Canvas {
                     return self.miss("draw_text: no usable blocks".into());
                 }
                 let caption = blocks.iter().find(|b| b.kind == TextBlockKind::Heading).or_else(|| blocks.first()).map(|b| b.text.clone()).unwrap_or_default();
-                self.push_element(ElementKind::Text, "", &caption, "", None, None, Some(TextCard { blocks }));
+                // Text is the presenter’s current headline, not a board that accumulates. A new text card
+                // replaces the newest existing one and removes any older text tiles left by earlier calls.
+                let target = self.scene.elements.iter().rev().find(|e| e.kind == ElementKind::Text).map(|e| e.id.clone());
+                if let Some(id) = target {
+                    let removed: Vec<String> = self.scene.elements.iter().filter(|e| e.kind == ElementKind::Text && e.id != id).map(|e| e.id.clone()).collect();
+                    self.scene.elements.retain(|e| e.kind != ElementKind::Text || e.id == id);
+                    self.scene.annotations.retain(|a| !a.targets.iter().any(|t| removed.contains(t)));
+                    let e = self.scene.elements.iter_mut().find(|e| e.id == id).unwrap();
+                    e.caption = caption;
+                    e.text = Some(TextCard { blocks });
+                    self.focus_only(&id);
+                } else {
+                    self.push_element(ElementKind::Text, "", &caption, "", None, None, Some(TextCard { blocks }));
+                }
                 true
             }
             Op::AddTextBlocks { id, blocks } => {
@@ -1669,12 +1685,22 @@ mod tests {
         let second = e.text.as_ref().unwrap().blocks[1].id.clone();
         assert_eq!(e.text.as_ref().unwrap().blocks[1].emphasis, vec!["the user"], "emphasis must be an exact phrase in the block");
 
-        let s = c.apply(s.version, &[Op::AddTextBlocks { id: id.clone(), blocks: vec![block(TextBlockKind::Bullet, "Measure the outcome", &[])] }], 2).unwrap();
+        let s = c.apply(s.version, &[Op::AddTextBlocks { id: id.clone(), blocks: vec![block(TextBlockKind::Bullet, "Measure the outcome", &["Measure the outcome"])] }], 2).unwrap();
         assert_eq!(s.elements[0].text.as_ref().unwrap().blocks.len(), 3);
         let s = c.apply(s.version, &[Op::UpdateTextBlock { id: id.clone(), block: second.clone(), text: Some("Start with real users".into()), emphasis: Some(vec!["real users".into()]), level: None }], 3).unwrap();
         assert_eq!(s.elements[0].text.as_ref().unwrap().blocks[1].text, "Start with real users");
         let s = c.apply(s.version, &[Op::RemoveTextBlock { id, block: first, quote: Some("remove the title".into()) }], 4).unwrap();
         assert_eq!(s.elements[0].text.as_ref().unwrap().blocks.len(), 2);
+
+        let old_id = s.elements[0].id.clone();
+        let s = c.apply(s.version, &[Op::DrawText { blocks: vec![block(TextBlockKind::Heading, "A new headline", &["new headline"])] }], 5).unwrap();
+        let texts: Vec<&Element> = s.elements.iter().filter(|e| e.kind == ElementKind::Text).collect();
+        assert_eq!(texts.len(), 1, "new text replaces every previous text tile");
+        assert_eq!(texts[0].id, old_id, "the newest text tile is updated in place");
+        assert_eq!(texts[0].text.as_ref().unwrap().blocks[0].text, "A new headline");
+
+        assert!(c.apply(s.version, &[Op::DrawText { blocks: vec![block(TextBlockKind::Heading, "Unselected words", &[])] }], 6).is_none());
+        assert!(c.take_notes().iter().any(|note| note.contains("draw_text: no usable blocks")));
     }
 
     #[test]

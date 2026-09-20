@@ -2388,8 +2388,8 @@
   "id": "text-correct-block",
   "group": "text",
   "board": [{"op": {"op": "draw_text", "blocks": [
-   {"kind": "heading", "text": "Three lessons", "level": 1, "emphasis": []},
-   {"kind": "bullet", "text": "Measure outputs", "level": 0, "emphasis": []}
+   {"kind": "heading", "text": "Three lessons", "level": 1, "emphasis": ["Three lessons"]},
+   {"kind": "bullet", "text": "Measure outputs", "level": 0, "emphasis": ["Measure outputs"]}
   ]}}],
   "history": ["There are three lessons. First, measure outputs."],
   "newest": "Actually, make that second point measure outcomes.",
@@ -2415,6 +2415,20 @@
   "expect": {
    "elements": 1,
    "texts": {"e1": {"blocks_include": ["customer service agents", "coding"]}},
+   "no_photo": true
+  }
+ },
+ {
+  "id": "text-new-headline-replaces-old",
+  "group": "text",
+  "board": [{"op": {"op": "draw_text", "blocks": [
+   {"kind": "heading", "text": "They lost over one hundred million dollars", "level": 1, "emphasis": ["lost over one hundred million dollars"]}
+  ]}}],
+  "history": ["They lost over one hundred million dollars."],
+  "newest": "What actually matters now is customer retention.",
+  "expect": {
+   "elements": 1,
+   "texts": {"e1": {"block_count": 1, "blocks_include": ["customer retention"]}},
    "no_photo": true
   }
  }
