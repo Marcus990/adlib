@@ -17,7 +17,7 @@ async fn main() -> anyhow::Result<()> {
     let root = std::env::current_dir()?;
     let cfg = Config::from_env(&root);
     let log = Logger::create(&cfg.log_path)?;
-    eprintln!("log: {}  remote: {}", cfg.log_path.display(), cfg.api_key.is_some());
+    eprintln!("log: {}  remote: {}", cfg.log_path.display(), cfg.api_key.is_some() || cfg.openai_key.is_some());
     let source = if a.get(1).map(|s| s.as_str()) == Some("--mic") {
         AudioSource::Mic { device: a.get(2).filter(|s| !s.starts_with("--")).cloned() }
     } else {

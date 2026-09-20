@@ -9,8 +9,8 @@
 //!   ... --timing --filter a,b       # no timeout: per-call latency + token usage, no pass/fail
 //!   ... --filter chart-correct   --group diagram-edit   --rpm 18   --verbose   --model <id>
 //!
-//! Requests are paced at `--rpm` (default 18): a new OpenRouter account is capped at 20/min per model,
-//! and a 429 would look like a model failure.
+//! Requests are paced at `--rpm` (default: the backend's, 30 on OpenAI, 18 on OpenRouter, where a new account is
+//! capped at 20/min per model and a 429 would look like a model failure). OPENAI_API_KEY selects OpenAI.
 
 use ls_agent::{AgentInput, CanvasAgent, Sentence, Source};
 use ls_canvas::{board_summary, Canvas, Op, Scene};
@@ -39,7 +39,7 @@ struct Args {
     runs: usize,
     filter: Option<String>,
     group: Option<String>,
-    rpm: u64,
+    rpm: Option<u64>,
     dry: bool,
     verbose: bool,
     timing: bool,
@@ -48,7 +48,7 @@ struct Args {
 
 fn parse_args() -> Args {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut a = Args { cases: root.join("probes/luna/cases.json"), runs: 3, filter: None, group: None, rpm: 18, dry: false, verbose: false, timing: false, model: None };
+    let mut a = Args { cases: root.join("probes/luna/cases.json"), runs: 3, filter: None, group: None, rpm: None, dry: false, verbose: false, timing: false, model: None };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -56,7 +56,7 @@ fn parse_args() -> Args {
             "--runs" => a.runs = it.next().and_then(|v| v.parse().ok()).expect("--runs <n>"),
             "--filter" => a.filter = it.next(),
             "--group" => a.group = it.next(),
-            "--rpm" => a.rpm = it.next().and_then(|v| v.parse().ok()).expect("--rpm <n>"),
+            "--rpm" => a.rpm = Some(it.next().and_then(|v| v.parse().ok()).expect("--rpm <n>")),
             "--model" => a.model = it.next(),
             "--dry" => a.dry = true,
             "--timing" => a.timing = true,
@@ -347,14 +347,16 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let key = std::env::var("OPENROUTER_API_KEY").ok().filter(|k| !k.trim().is_empty());
-    anyhow::ensure!(key.is_some(), "OPENROUTER_API_KEY is not set (env or .env); use --dry to only validate the cases");
+    let openai = std::env::var("OPENAI_API_KEY").ok().filter(|k| !k.trim().is_empty());
+    anyhow::ensure!(key.is_some() || openai.is_some(), "neither OPENAI_API_KEY nor OPENROUTER_API_KEY is set (env or .env); use --dry to only validate the cases");
     let model = args.model.clone().or_else(|| std::env::var("CANVAS_MODEL").ok());
-    let agent = CanvasAgent::new(reqwest::Client::new(), key, model);
-    println!("model {} · {} cases × {} runs · {} pending skipped\n", agent.model, runnable.len(), args.runs, pending.len());
+    let agent = CanvasAgent::new(reqwest::Client::new(), key, model).with_openai(openai);
+    let rpm = args.rpm.unwrap_or(agent.default_rpm() as u64);
+    println!("{:?} · model {} · {} cases × {} runs · {} pending skipped\n", agent.provider().unwrap(), agent.wire_model(), runnable.len(), args.runs, pending.len());
 
     if args.timing {
         println!("{:<34} {:>7} {:>8} {:>8} {:>9} {:>6}  provider", "case", "ms", "prompt", "output", "reasoning", "calls");
-        let interval = std::time::Duration::from_millis(60_000 / args.rpm.max(1));
+        let interval = std::time::Duration::from_millis(60_000 / rpm.max(1));
         for case in &runnable {
             for _ in 0..args.runs {
                 let canvas = build_canvas(case)?;
@@ -379,8 +381,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let jobs: Vec<(usize, usize)> = (0..runnable.len()).flat_map(|c| (0..args.runs).map(move |r| (c, r))).collect();
-    let interval = std::time::Duration::from_millis(60_000 / args.rpm.max(1));
-    println!("pacing {} requests at {} per minute (~{:.1} min)\n", jobs.len(), args.rpm, jobs.len() as f64 / args.rpm.max(1) as f64);
+    let interval = std::time::Duration::from_millis(60_000 / rpm.max(1));
+    println!("pacing {} requests at {} per minute (~{:.1} min)\n", jobs.len(), rpm, jobs.len() as f64 / rpm.max(1) as f64);
     let handles: Vec<_> = jobs
         .iter()
         .enumerate()

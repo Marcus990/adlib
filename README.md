@@ -4,7 +4,7 @@ A presenter talks; the screen shows one full-bleed image from a local library th
 being said, changing on its own. Design doc: see PLAN.md (link). State of the build: PROGRESS.md / TODO.md.
 
 ```
-mic → VAD + Whisper (local) → transcript → Luna (OpenRouter tool-calling model) → board ops / show_photo
+mic → VAD + Whisper (local) → transcript → Luna (OpenAI API, or OpenRouter) → board ops / show_photo
                                   Luna sees the whole transcript, the board, and what it changed recently
                        show_photo → CLIP search of the photo library (local) → or draw it → Tauri render
 ```
@@ -13,8 +13,9 @@ mic → VAD + Whisper (local) → transcript → Luna (OpenRouter tool-calling m
 
 1. Models (already downloaded into `models/`): `ggml-base.en.bin`, `ggml-silero-v5.1.2.bin`,
    `mobileclip-s2/{open_clip_model.safetensors,tokenizer.json}`.
-2. `.env` — copy `.env.example`, set `OPENROUTER_API_KEY`. Without it the app still runs on the offline rules
-   (layout cues, and a presenter cue + library subject for photos).
+2. `.env` — copy `.env.example`, set `OPENAI_API_KEY` (Luna on OpenAI's own API, fastest) or `OPENROUTER_API_KEY`.
+   Without either the app still runs on the offline rules (layout cues, and a presenter cue + library subject
+   for photos).
 3. Build: `CARGO_BUILD_JOBS=2 cargo build --release`
 4. Image library: a folder of jpg/png/webp + optional `captions.tsv` (`id<TAB>caption`, id = file stem).
    Index it (one image at a time, ~1.5 s each):
@@ -53,9 +54,12 @@ With no mic named, the app prefers AirPods, then the MacBook mic, and never a vi
   (speech→render ms), scene (the board after each change), frontend_ack (decode + receive→paint ms).
 
 ## Tuning knobs
-- `CANVAS_MODEL` (default `openai/gpt-5.6-luna`) — the model that decides everything. `CANVAS_TIMEOUT_MS` (6000): one
-  retry, shorter, on a timeout / 429 / 5xx, then the offline rules. `AGENT_RPM` (18) — calls per minute; a new
-  OpenRouter account is capped at 20/min for Luna.
+- `OPENAI_API_KEY` / `OPENROUTER_API_KEY` — Luna's backend: OpenAI's own API when its key is set, else OpenRouter
+  (`CANVAS_PROVIDER=openrouter` forces OpenRouter). `CANVAS_MODEL` (default `gpt-5.6-luna`; on OpenRouter it is
+  `openai/gpt-5.6-luna`, the prefix is added or dropped for you). `CANVAS_TIMEOUT_MS` (6000): one retry, shorter, on a
+  timeout / 429 / 5xx, then the offline rules. `AGENT_RPM` — calls per minute: 30 on OpenAI (the key measured
+  500 requests and 500k tokens a minute, and every call carries the whole transcript), 18 on OpenRouter (a new
+  account is capped at 20/min for Luna).
 - `LS_ASSETS` (asset card root, e.g. `/Volumes/NO NAME/assets`) — Marcus's 15k-photo library (OpenAI CLIP ViT-B/32
   embeddings, see ASSETS_HANDOFF.md). Unset = the local MobileCLIP index (`INDEX`, `CLIP_DIR`).
 - `CLIP_TEXT_DIR` (default `models/clip-vit-b32`) — `tokenizer.json` + `pytorch_model.bin` from
