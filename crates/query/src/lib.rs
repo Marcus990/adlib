@@ -16,10 +16,13 @@ const SYSTEM_PROMPT: &str = "You turn a live presenter's speech into image searc
 Return JSON only: {\"phrases\": [...]} with 1 to 3 short, concrete, visual noun phrases (2-5 words each), most important first. \
 Focus on the NEWEST speech. Drop filler words. Resolve references using what is on screen \
 (\"make it red\" with a car on screen -> \"red car\"). If the presenter points at something (\"here's…\", \"take a look at…\", \"picture this…\"), the thing they point at comes first. \
-If the talk is abstract, name the most picturable concrete thing mentioned. \
+Every phrase must name something the newest speech actually says, the obvious name of a thing it says \
+(\"the bird that hunts at night\" -> \"owl\"), or a thing already on screen that the newest speech refers to. \
+A thing named only as a comparison or figure of speech is NOT a subject: \"watch like an eagle\", \"it's like \
+a dog chasing its tail\", \"as fast as lightning\" name nothing to show. \
+If the newest speech names nothing to look at, return {\"phrases\": []} — that is the right answer most of the time. \
 Name the EXACT thing said (\"owl\", not \"bird\"; \"sunflower\", not \"flower\") — a missing picture is drawn \
 on demand, so a broader category is never a useful substitute. \
-Prefer words used in the library list when they fit. \
 Do NOT include what is already on screen unless the newest speech is about it.";
 
 #[derive(Clone)]
@@ -56,11 +59,19 @@ impl QueryClient {
     pub async fn query(&self, chunk_id: u64, prev: &str, curr: &str, displayed: &Displayed) -> QueryResult {
         if self.api_key.is_some() {
             match tokio::time::timeout(self.timeout, self.remote(prev, curr, displayed)).await {
-                Ok(Ok(phrases)) if !phrases.is_empty() => {
+                Ok(Ok(phrases)) => {
+                    // The model is generative: given filler it invents a subject. Keep only phrases whose
+                    // head word was actually heard (or is on screen). An empty list is returned AS-IS —
+                    // falling through to fallback_phrases here is what promoted a cue word like "picture"
+                    // into a subject of its own.
+                    let phrases = phrases.into_iter().filter(|p| grounded_in(p, prev, curr, displayed)).collect();
                     return QueryResult { chunk_id, phrases, from_fallback: false, named: false };
                 }
+                // Only a genuine failure falls through to the local extractor. An EMPTY answer is the
+                // model doing its job — the prompt asks for [] when the speech names nothing to look at —
+                // and treating that as a failure sent 54 filler chunks to fallback_phrases on the first
+                // replay, which is precisely how a cue word like "picture" became a subject.
                 Ok(Err(e)) => eprintln!("query: remote error: {e:#}"),
-                Ok(Ok(_)) => eprintln!("query: remote returned no phrases"),
                 Err(_) => eprintln!("query: remote timed out after {:?}", self.timeout),
             }
         }
@@ -78,8 +89,11 @@ impl QueryClient {
     async fn remote(&self, prev: &str, curr: &str, displayed: &Displayed) -> anyhow::Result<Vec<String>> {
         let key = self.api_key.as_deref().unwrap_or_default();
         let on_screen = displayed.caption.as_deref().unwrap_or("nothing");
-        let library = if self.vocab.is_empty() { String::new() } else { format!("\nLibrary: {}", self.vocab.join("; ")) };
-        let user = format!("On screen: {on_screen}\nPrevious speech: {prev}\nNewest speech: {curr}{library}");
+        // The library list used to be sent here. On filler the model simply recited its most frequent
+        // labels ("and over your" -> tree, person, house, 39 times on 09-19), and because those are labels
+        // verbatim they satisfy ls_search::names() and bypass the label gate entirely. `self.vocab` is still
+        // used by named_subject and fallback_phrases; it just no longer prompts the model.
+        let user = format!("On screen: {on_screen}\nPrevious speech: {prev}\nNewest speech: {curr}");
         let body = serde_json::json!({
             "model": self.model,
             "messages": [
@@ -221,6 +235,32 @@ pub fn named_subject(text: &str, vocab: &[String]) -> Option<String> {
 ///
 /// See also [`named_subject`]: when the speech names exactly one library subject, the photo search runs on
 /// it immediately instead of waiting for the phrase model.
+/// Split into lowercase words, stripping possessives and plurals.
+fn toks(s: &str) -> Vec<String> {
+    s.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric() && c != '\'')
+        .filter(|t| !t.is_empty())
+        .map(|t| t.trim_end_matches("'s").trim_end_matches('s').to_string())
+        .collect()
+}
+
+/// The phrase's head word must have been heard, or already be on screen. The phrase model is generative:
+/// given filler it answers with plausible subjects that were never spoken ("and over your" -> tree, person,
+/// house on 09-19). Since those are usually library labels verbatim, they satisfy `ls_search::names()` and
+/// bypass the label gate, so this is the only check standing between an invented subject and the screen.
+pub fn grounded_in(phrase: &str, prev: &str, curr: &str, displayed: &Displayed) -> bool {
+    let Some(head) = toks(phrase).into_iter().filter(|w| w.len() > 2 && !STOP.contains(&w.as_str())).last() else {
+        return false;
+    };
+    let mut ctx = toks(curr);
+    ctx.extend(toks(prev));
+    ctx.extend(toks(displayed.caption.as_deref().unwrap_or("")));
+    for line in &displayed.on_screen {
+        ctx.extend(toks(line));
+    }
+    ctx.contains(&head)
+}
+
 pub fn fallback_phrases(text: &str, vocab: &[String]) -> Vec<String> {
     // "here's what a bald eagle looks like…" → the object after the cue is what to search for.
     let mut out = vec![];

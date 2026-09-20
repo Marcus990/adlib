@@ -51,7 +51,10 @@ NOT already shown in `on_screen`? Yes when the subject is what they are talking 
 or \"look at\". Yes when they ask to change what is shown (\"make that the white one\", \"actually…\", \
 \"instead\") or want another thing next to it — a different variant counts as new (a white rose is not the red \
 rose on screen). No for filler, greetings, abstract talk with nothing to picture, or when what they are talking \
-about is already on screen — as that same photo, or covered by a chart or diagram (numbers, steps).";
+about is already on screen — as that same photo, or covered by a chart or diagram (numbers, steps). \
+No when the thing is named only as a comparison or a figure of speech rather than as what the talk is about \
+(\"watch like the eagle\", \"it's like a dog chasing its tail\", \"as fast as lightning\") — the eagle is not \
+the subject, it is how they are describing the subject.";
 
 const VISUAL_Q: &str = "What should happen on screen because of `curr`? Judge what the presenter is saying now. \
 One sentence gets one visual, so pick the single best fit.";
@@ -203,7 +206,10 @@ impl Decider {
             if left >= Duration::from_millis(250) {
                 match tokio::time::timeout(left, self.llm(prev, curr, d)).await {
                     Ok(Ok(action)) => {
-                        return (ChangeDecision { chunk_id, seq, action, p: 0.7, ..Default::default() }, Source::LlmFallback, Detail::default())
+                        // Below StageConfig::p_render (0.45) on purpose: a degraded decision may never
+                        // render on its own. Until 09-19 this returned 0.7, above every gate downstream,
+                        // which made the fallback path strictly more trigger-happy than Jev itself.
+                        return (ChangeDecision { chunk_id, seq, action, p: 0.4, ..Default::default() }, Source::LlmFallback, Detail::default())
                     }
                     Ok(Err(e)) => eprintln!("decide: llm fallback error: {e:#}"),
                     Err(_) => eprintln!("decide: llm fallback timed out"),
@@ -211,8 +217,11 @@ impl Decider {
             }
         }
         let (action, p) = match self.mode {
-            Mode::Intent => heuristic_intent(curr, d, &self.vocab),
-            Mode::Topic | Mode::Supplement => heuristic(curr, d, &self.vocab),
+            // Supplement is the live default. When Jev is unreachable the conservative heuristic is the
+            // right one: `heuristic` fires on a bare vocabulary substring with no cue at all, which on
+            // 09-19 put three junk photos on screen from a degraded path nobody could see in the logs.
+            Mode::Intent | Mode::Supplement => heuristic_intent(curr, d, &self.vocab),
+            Mode::Topic => heuristic(curr, d, &self.vocab),
         };
         (ChangeDecision { chunk_id, seq, action, p, ..Default::default() }, Source::Heuristic, Detail::default())
     }
@@ -381,7 +390,8 @@ pub fn heuristic_intent(curr: &str, d: &Displayed, vocab: &[String]) -> (Action,
         return (Action::NoChange, 0.9);
     }
     let shares = !on_screen.is_empty() && subject.split(' ').any(|p| p.len() > 3 && on_screen.contains(p));
-    if refine && shares { (Action::Update, 0.8) } else { (Action::NewRender, 0.85) }
+    // Kept under StageConfig::confirm_below_p (0.6) so a degraded decision still needs a second sighting.
+    if refine && shares { (Action::Update, 0.5) } else { (Action::NewRender, 0.55) }
 }
 
 /// Fraction of a subject's words (len > 2) present in `words`.
@@ -408,7 +418,7 @@ pub fn heuristic(curr: &str, d: &Displayed, vocab: &[String]) -> (Action, f32) {
             .split(|c: char| !c.is_alphanumeric())
             .any(|w| w == subject || w.trim_end_matches('s') == subject || subject.split(' ').any(|s| s.len() > 3 && s == w));
         if hit {
-            return (Action::NewRender, 0.8);
+            return (Action::NewRender, 0.55);
         }
     }
     (Action::NoChange, 0.9)

@@ -13,6 +13,11 @@ use serde::{Deserialize, Serialize};
 pub struct Chunk {
     pub id: u64,
     pub text: String,
+    /// The leading words of `text` that the previous decode of this same audio also produced.
+    /// Whisper re-transcribes the whole utterance every tick, so agreement across decodes is a
+    /// confidence signal: a real word survives a re-decode, a hallucinated one does not.
+    #[serde(default)]
+    pub stable: String,
     pub t_start_ms: u64,
     pub t_end_ms: u64,
     pub is_final: bool,
@@ -149,7 +154,7 @@ mod tests {
 
     #[test]
     fn chunk_roundtrips() {
-        let c = Chunk { id: 1, text: "hello".into(), t_start_ms: 0, t_end_ms: 900, is_final: false };
+        let c = Chunk { id: 1, text: "hello".into(), stable: String::new(), t_start_ms: 0, t_end_ms: 900, is_final: false };
         let s = serde_json::to_string(&c).unwrap();
         assert_eq!(serde_json::from_str::<Chunk>(&s).unwrap(), c);
     }
