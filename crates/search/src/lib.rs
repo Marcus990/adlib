@@ -1,6 +1,6 @@
 //! Track B: local image search (design doc §7.3). MobileCLIP v1 S2 via Candle on the CPU
 //! (Candle's Metal path for FastViT measured ~170 s/image and a batch-8 Metal run OOM'd the
-//! 8 GB Mac — see PROGRESS.md). Brute-force cosine over a small in-RAM index; an in-memory
+//! 8 GB Mac). Brute-force cosine over a small in-RAM index; an in-memory
 //! LRU image cache feeds the `img://` protocol.
 
 use anyhow::{Context, Error as E, Result};

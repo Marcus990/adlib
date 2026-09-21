@@ -1,4 +1,4 @@
-//! Marcus's asset library (ASSETS_HANDOFF.md §1–2): ~15k photos on the SD card whose image embeddings
+//! Marcus's asset library: ~15k photos on the SD card whose image embeddings
 //! were precomputed with **OpenAI CLIP ViT-B/32**. Queries must use that model's *text* tower — MobileCLIP
 //! vectors live in a different space and cannot be compared with these, even though both are 512-d.
 //!
