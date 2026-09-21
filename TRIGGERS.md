@@ -175,6 +175,6 @@ applied: the failed call's sentences are offered again after a 1–8 s back-off.
 
 ## Testing
 - `cargo run -p ls-agent --bin ls-agent-probe -- --runs 3` — 42 speech → board cases against the real model (see
-  [probes/luna/README.md](probes/luna/README.md); baseline before the refactor in `probes/luna/BASELINE.md`).
+  [probes/luna/README.md](probes/luna/README.md)).
 - `./target/release/ls-replay fixtures/audio/luna-edit-talk.wav` then `python3 scripts/e2e_check.py logs/run-….jsonl` —
   a spoken talk through Whisper → Luna → canvas, checked against nine board milestones.

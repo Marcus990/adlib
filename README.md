@@ -1,80 +1,122 @@
-# Live Slides — 48-hour proof of concept
+# Adlib
 
-A presenter talks; the screen builds a live visual board of photos, logos, charts, diagrams and structured
-text, changing on its own. Design details: see CANVAS.md and TRIGGERS.md.
+**The best way to present new ideas on the spot. No more slides you follow. Adlib follows you.**
+
+Adlib is always listening to your voice. As you speak, it creates flow charts, diagrams, graphics and graphs live
+on screen: charts from the numbers you say, flow diagrams from the steps you describe, photos, logos and icons for
+the things you mention, and structured text for your key points. Change your mind mid-sentence ("sorry, it was
+forty-eight percent, not forty-six") and the graphic edits itself in place. No slides, no clicking, no prompting.
+You just talk.
+
+Built by Marcus Ng and James Cai at **Hack the North**, where it won $10k in cash,
+reached the semi-finals, and took the **Rox Best AI Agent** prize track.
+
+## What it does
+
+| You say | The screen |
+|---|---|
+| "Forty-six percent had nobody to go with, thirty-two percent didn't know where to start…" | Draws a hand-sketched bar or pie chart from the numbers you actually said |
+| "Sorry, that first number was forty-eight." | Changes that one bar. The rest of the chart stays |
+| "In week five we hit one hundred three." | Adds a point to the chart already on screen |
+| "First we record audio, then transcribe it, then decide what to draw." | Grows a flow diagram one step per sentence |
+| "…and it all runs in a loop." | Turns the flow into a cycle |
+| "The API talks to Postgres and Kafka, and Kafka feeds Spark." | Draws an architecture diagram with a real logo on each node |
+| "We wrote the backend in Python." | Puts up the Python logo |
+| "There are three lessons. First…" | Writes a heading, paragraph and bullet card with the key phrases underlined |
+| "Penguins can't fly but they're great swimmers." | Shows a penguin photo (or draws one if the library has none) |
+| "Let's compare those. Zoom in on the owl. Notice the eyes." | Rearranges, zooms and circles |
+| "Take the eagle away." / "Let's move on." | Removes a tile or clears the board |
+
+Highlights:
+
+- **Live and editable.** It doesn't only generate. It revises. Corrections, additions, renames and removals
+  change the existing chart, diagram or text instead of redrawing it.
+- **Hand-drawn look.** Charts and diagrams are sketched on paper (wobbly strokes that draw themselves in,
+  taped-on polaroid photos, handwriting). A clean dark `slate` theme is also available.
+- **Technical diagrams.** Layered auto-layout, crossing reduction, labelled edges, and text that is measured and
+  fitted so nothing clips or collides.
+- **Logos, icons and flags by name.** 13k SVGs looked up by name and alias. A wrong logo is worse than none,
+  so a weak match becomes a plain name card.
+- **Photos.** Semantic search over ~39k photos with CLIP. If nothing matches, SDXL-Lightning draws one in about 2 s.
+- **Guardrails.** Chart values must be numbers you said out loud. Destructive commands (remove, clear) must be
+  quoted from your newest words, so the model can't wipe the board on its own.
+- **Works offline-ish.** Speech recognition and photo search run on-device. Without an LLM key, a small set of
+  rules still handles layout cues and photos.
+- **Fast.** Roughly 1–3 s from spoken sentence to graphic. A photo takes about 2.7 s, and graphics land 1.1–2.7 s
+  after the sentence.
+
+## How it works
 
 ```
-mic → VAD + Whisper (local) → transcript → Luna (OpenAI API, or OpenRouter) → board ops
-                                  Luna sees the whole transcript, the board, and what it changed recently
-                       show_photo → CLIP search of the photo library (local) → or draw it → Tauri render
-                       show_logo / show_icon → name lookup in the logo & icon library (local, no embeddings) → or a name card
-                       draw_text / patch text block → semantic heading, paragraph and bullet renderer
+mic ─▶ VAD (Silero) ─▶ Whisper (local, Metal) ─▶ live transcript
+                                                      │
+              transcript + current board + recent changes + newest words
+                                                      ▼
+                            Luna (GPT-5.6 Luna, Responses WebSocket)
+                              one decision-maker, answers with tool calls
+                                                      ▼
+   draw_chart · set_point · draw_diagram · add_nodes · draw_text · show_photo · show_logo · show_icon
+   focus · arrange · annotate · remove · clear_board · no_action
+                                                      ▼
+        guards (spoken numbers only, quoted removals) ─▶ Canvas: pure, deterministic board state
+                                                      ▼
+   show_photo ─▶ CLIP search ─▶ else SDXL-Lightning (Baseten)      show_logo / show_icon ─▶ name lookup
+                                                      ▼
+                     Tauri window renders the scene as SVG (sketch.js), animating only what changed
 ```
 
-## One-time setup (8 GB Mac: run heavy steps one at a time)
+1. **Hear.** A chunker runs voice-activity detection and re-transcribes the in-progress sentence on a 0.6 s tick,
+   so the model sees words while you are still saying them.
+2. **Decide.** One agent, Luna, sees the whole transcript, the board with stable ids, and what it changed
+   recently, and answers with tool calls. It changes nothing when there is nothing to do. Every turn is chained
+   over a persistent WebSocket, so only the new words are sent.
+3. **Apply.** The Rust canvas validates each op, applies it by id (so late answers still land correctly), and
+   emits a new scene. The board holds up to 4 tiles: charts, diagrams, photos, logos and one text card.
+4. **Draw.** The web view renders the scene as hand-drawn SVG. Strokes draw themselves, and only new nodes,
+   bars and points animate.
 
-1. Models (already downloaded into `models/`): `ggml-base.en.bin`, `ggml-silero-v5.1.2.bin`,
-   `mobileclip-s2/{open_clip_model.safetensors,tokenizer.json}`.
-2. `.env` — copy `.env.example`, set `OPENAI_API_KEY` (Luna on OpenAI's own API, fastest) or `OPENROUTER_API_KEY`.
-   Without either the app still runs on the offline rules (layout cues, and a presenter cue + library subject
-   for photos). List names Whisper mangles (`Cognition`, `Baseten`…) in `talk-terms.txt`.
-3. Build: `CARGO_BUILD_JOBS=2 cargo build --release`
-4. Image library: a folder of jpg/png/webp + optional `captions.tsv` (`id<TAB>caption`, id = file stem).
-   Index it (one image at a time, ~1.5 s each):
-   `./scripts/guard.sh 2600 ./target/release/ls-index models/mobileclip-s2 <lib> <lib>/index.json`
-   Dev library from macOS built-ins: `./scripts/make_dev_library.sh` → `dev-library/`.
-5. Check search quality: `./target/release/ls-search models/mobileclip-s2 <lib>/index.json "golden eagle" "a red rose"`
+Every run writes a JSONL log with timings, model decisions, refused ops and the board after each change.
 
-## Run
+## Tech stack
 
-**Double-clickable app:** `./scripts/make_app.sh` → `build/Live Slides.app` (icon, mic-permission text).
-Put settings in `.env` (it's loaded at startup), e.g. `LS_SOURCE=mic:AirPods`, `LS_FULLSCREEN=1`, `LS_DISPLAY=1`.
-First launch: macOS asks for microphone access for "Live Slides" — click Allow (the app keeps retrying and
-starts listening as soon as it's granted; the debug window says "waiting for microphone"). The very first
-launch also compiles Metal shaders (~13 s "loading models").
-With no mic named, the app prefers AirPods, then the MacBook mic, and never a virtual device.
+- **Rust workspace**, one crate per stage: `hear`, `agent`, `canvas`, `search`, `gen`, `pipeline`, `contracts`
+- **Tauri 2** desktop app (stage window plus a debug window with live transcript and decisions)
+- **Whisper** (`whisper-rs`, Metal) and **Silero VAD** for on-device speech recognition
+- **Luna** (OpenAI `gpt-5.6-luna`, or via OpenRouter) for all on-screen decisions, with tool calling
+- **CLIP ViT-B/32** through **Candle** for photo search (MobileCLIP-S2 for small local libraries)
+- **SDXL-Lightning** on **Baseten** as the drawn-image fallback
+- **Vanilla JS + SVG** for the sketch renderer, with in-house text fitting and layered diagram layout
+- **Iconify** sets for logos, icons and flags. Open Images and COCO for photos
+- **Python** for the asset pipeline (`assets-pipeline/`) and preview and test scripts
 
-**Launcher:** `./demo.sh [window] airpods|builtin|replay [display|wav]` (full screen by default).
+## Run it
 
-- **Pick the mic by name.** On this Mac the default input is "BlackHole 2ch" (a virtual loopback), so
-  `LS_SOURCE=mic` alone would hear silence. Use `mic:AirPods` (or `mic:MacBook Air Microphone`).
-  The first live run will trigger macOS's microphone permission prompt for the terminal/app; if the
-  device lookup blocks for 5 s the app reports "audio device lookup timed out" in the debug window.
-- Demo (AirPods): `INDEX=<lib>/index.json LS_SOURCE=mic:AirPods LS_FULLSCREEN=1 ./target/release/live-slides`
-  - Two windows: the full-screen stage and a debug window (live transcript, decisions, phrases, timings).
-  - Stage keys: `f` full screen, `Esc` leave full screen, `b` blank the screen (safety valve), `g` grid.
-  - `LS_DISPLAY=1` (monitor index) or `LS_DISPLAY=<name part>` puts the stage on that display (projector).
-  - `f` toggles full screen on the stage window; `g` toggles the grid of every image shown so far
-    (the "deck that built itself"; it also appears automatically when a replay ends).
-- Rehearsal replay of a recording: `LS_SOURCE=wav:talk.wav ./target/release/live-slides`
-- End-to-end check: `./target/release/ls-replay fixtures/audio/luna-edit-talk.wav`, then
-  `python3 scripts/e2e_check.py logs/run-….jsonl` (nine board milestones, in order).
-- Agent probes (no audio): `cargo run -p ls-agent --bin ls-agent-probe -- --runs 3` (see probes/luna/README.md).
-- Headless (no UI) replay with a summary: `./target/release/ls-replay talk.wav`
-- Every run writes `logs/run-<epoch>.jsonl`: chunk (asr/vad ms, lag), agent_call / agent (Luna's ops, transport,
-  first WebSocket event and total ms, what applied, what was refused and why, `no_action` reasons), photo_search (subject, best + score), generated, render
-  (speech→render ms), scene (the board after each change), frontend_ack (decode + receive→paint ms).
+Requires a Mac (Apple Silicon) with Rust and a microphone.
 
-## Tuning knobs
-- `OPENAI_API_KEY` / `OPENROUTER_API_KEY` — Luna's backend: OpenAI's own API when its key is set, else OpenRouter
-  (`CANVAS_PROVIDER=openrouter` forces OpenRouter). `CANVAS_MODEL` (default `gpt-5.6-luna`; on OpenRouter it is
-  `openai/gpt-5.6-luna`, the prefix is added or dropped for you). OpenAI calls use the standard service tier by
-  default and log the tier returned; `CANVAS_SERVICE_TIER=fast` opts into Fast mode. On OpenAI the default transport is a
-  persistent Responses WebSocket: startup prepares the prompt and tools without generating, later turns send
-  incremental speech and canvas outcomes, and any socket failure retries over HTTP (`CANVAS_TRANSPORT=http` opts
-  out; resending the whole transcript over HTTP every call hit the 500k tokens/min limit on 09-20).
-  `CANVAS_TIMEOUT_MS` (6000): one shorter retry on a timeout / 5xx, and up to two on a 429, waiting as long as the
-  error's "try again in …" says. If the model still fails the call changes nothing and its words are offered again
-  in the next call (the offline rules only run when there is no key at all). `AGENT_RPM` — calls per minute: 500 on OpenAI (the measured maximum;
-  the account also allows 500k tokens a minute, and HTTP calls carry the whole transcript), 18 on OpenRouter (a new
-  account is capped at 20/min for Luna).
-- `LS_ASSETS` (asset card root, e.g. `/Volumes/NO NAME/assets`) — Marcus's 39k-photo library (OpenAI CLIP ViT-B/32
-  embeddings) and, in `icons/`, 13k logos, icons and flags searched by name (see ASSETS_HANDOFF.md). Unset = the local MobileCLIP index (`INDEX`, `CLIP_DIR`).
-- `CLIP_TEXT_DIR` (default `models/clip-vit-b32`) — `tokenizer.json` + `pytorch_model.bin` from
-  openai/clip-vit-base-patch32; the text tower is extracted once into `clip-text-vit-b32.safetensors`.
-- `BASETEN_API_KEY` (+ optional `BASETEN_URL`, `GEN_SIZE`, default 768) — draws a picture when the library has
-  nothing. ~2 s warm; the deployment is woken at launch because a cold start takes ~146 s.
-- `TAU` — lowest photo score accepted (0.22 on the asset card, 0.52 with MobileCLIP; recalibrate per library with
-  `ls-calibrate`). `LABEL_MIN` (0.92) / `UNLABELLED_MIN` (off) — how strictly a card photo must match.
-- `LS_THEME` (`sketch` = paper + hand-drawn graphics, default; `slate` = dark cards).
-- Chunking: `crates/hear` `ChunkerConfig` (0.6 s tick, 0.6 s pause, 8 s max).
+```bash
+cp .env.example .env            # set OPENAI_API_KEY (or OPENROUTER_API_KEY); BASETEN_API_KEY is optional
+CARGO_BUILD_JOBS=2 cargo build --release
+./scripts/make_app.sh           # builds build/Live Slides.app
+```
+
+You also need the Whisper model (`ggml-base.en.bin`), the Silero VAD model and a photo library in `models/`.
+Point `LS_ASSETS` at the asset library, or build a small local library with `./scripts/make_dev_library.sh`
+and index it with `ls-index`.
+
+```bash
+./demo.sh airpods                                           # live from a mic (or: builtin)
+LS_SOURCE=wav:fixtures/audio/luna-edit-talk.wav ./target/release/live-slides   # replay a recording
+./target/release/ls-replay fixtures/audio/luna-edit-talk.wav                    # headless replay + summary
+cargo run -p ls-agent --bin ls-agent-probe -- --runs 3      # 42 speech → board test cases against the model
+```
+
+Stage keys: `f` full screen · `b` blank · `g` grid of everything shown so far.
+Useful settings: `LS_SOURCE`, `LS_THEME` (`sketch` or `slate`), `LS_FULLSCREEN`, `LS_DISPLAY`, `CANVAS_MODEL`,
+`AGENT_RPM`. Names Whisper mangles ("Baseten", "Kafka") go in `talk-terms.txt`.
+
+## More
+
+- [TRIGGERS.md](TRIGGERS.md): what to say and how each decision is made
+- [CANVAS.md](CANVAS.md): board model, ops and renderer design
+- [app/DEMO_SCRIPT.md](app/DEMO_SCRIPT.md): a 3½-minute talk that exercises everything
+- [probes/luna/README.md](probes/luna/README.md): the speech → board test suite
