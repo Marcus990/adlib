@@ -1,4 +1,4 @@
-# What Live Slides listens for
+# What AdLib listens for
 
 A quick guide for presenters (top) and for whoever tunes it (bottom). Canvas mode, English only.
 
@@ -6,7 +6,7 @@ A quick guide for presenters (top) and for whoever tunes it (bottom). Canvas mod
 
 | You want | Say something like | Notes |
 |---|---|---|
-| A photo | Just talk about it: "Penguins can't fly, but they're great swimmers." | From the photo library; if the library has nothing about it, one is drawn (about 2 s more). Logos, brands, charts and text are never drawn. |
+| A photo | Just talk about it: "Penguins can't fly, but they're great swimmers." | From the photo library with image vector embeddings; if the library has nothing about it, one is drawn using SDXL-Lightning image generation model hosted on Baseten (inference). Logos, brands, charts and text are never drawn. |
 | Swap the photo in focus | "Actually, make that the white rose instead." | A different variant of what's shown. |
 | A company logo | "Let's put up the Google logo." / "a logo of the company called Google" / "let's make this presentation about Google" | From the logo library, by name. A brand that isn't in the library gets a plain card with its name (never a drawn logo). |
 | An icon or a flag | "an icon for teamwork", "a database icon", "the flag of Canada" | From the icon library, by name and tags. If nothing fits, a plain card with the word. |
