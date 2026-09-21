@@ -1,7 +1,0 @@
-Thanks for coming. I want to show you how our app grew, and how it works under the hood. [[slnc 900]]
-Last year we had about two thousand users. [[slnc 500]] This year we have fifteen thousand, [[slnc 300]] and next year we expect forty thousand. [[slnc 1200]]
-About sixty percent of them are students, thirty percent are teachers, and ten percent are parents. [[slnc 1200]]
-So how does it work? [[slnc 400]] First, the presenter speaks into a microphone. [[slnc 500]] Then the speech is transcribed on the laptop. [[slnc 500]] Next, a model decides whether to show something. [[slnc 500]] Finally, the picture appears on the screen. [[slnc 1200]]
-And it all runs in a loop. We listen, we decide, we show, and then we listen again. [[slnc 1200]]
-Speaking of listening, owls can hear a mouse moving under the snow. [[slnc 1500]]
-Thanks, everyone. [[slnc 1000]]

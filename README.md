@@ -1,121 +1,116 @@
-# Adlib
+# AdLib
 
-**Won $10k cash and Semi-finalist at **Hack the North 2026**. Won the **Rox Best AI Agent** prize track.**
+**Won $10k cash and was a semi-finalist at Hack the North 2026. Won the Rox Best AI Agent prize track.**
 
-**The best way to present new ideas on the spot. No more slides you follow. Adlib follows you.**
+**The best way to present new ideas on the spot. No more slides you follow. AdLib follows you.**
 
-Adlib is always listening to your voice. As you speak, it creates flow charts, diagrams, graphics and graphs live
-on screen: charts from the numbers you say, flow diagrams from the steps you describe, photos, logos and icons for
-the things you mention, and structured text for your key points. Change your mind mid-sentence ("sorry, it was
-forty-eight percent, not forty-six") and the graphic edits itself in place. No slides, no clicking, no prompting.
-You just talk.
+AdLib listens to your voice and builds the visuals as you speak: flow charts, diagrams, graphs, photos, logos and
+text. If you correct yourself mid-sentence ("sorry, it was forty-eight percent, not forty-six"), the graphic
+updates in place. No slides, no clicking, no prompting. You just talk.
+
+## Demo
+
+<a href="https://www.youtube.com/watch?v=7rFWjY7Ly7k">
+  <img src="docs/demo-thumbnail.jpg" alt="Watch the AdLib demo on YouTube" width="720">
+</a>
+
+[Devpost](https://devpost.com/software/living-canvas-gz360v) submission here.
 
 ## What it does
 
-| You say | The screen |
+- **Charts from your numbers.** Say the figures and get a bar, line or pie chart. Only numbers you actually said
+  are charted.
+- **Diagrams from your explanation.** Describe steps and you get a flow. Say it loops and it becomes a cycle.
+  Describe a system and you get an architecture diagram with real logos on the nodes.
+- **Live edits.** Corrections, additions, renames and removals change what is already on screen instead of
+  redrawing it.
+- **Logos, icons and flags.** Mention a company or technology and its logo appears. Over 13,000 symbols.
+- **Photos.** Mention a thing and a matching photo appears, from a library of about 39,000 photos. If there is no
+  match, one is generated.
+- **Text.** Lists, section headings and takeaways become a clean text card with key phrases underlined.
+- **Layout control.** Compare, zoom, circle and remove, all by speaking.
+- **Hand-drawn look.** Sketched charts and diagrams that draw themselves in, on paper. A clean dark theme is also
+  included.
+
+## Things to try
+
+AdLib understands natural speech, so there is nothing to memorize. These are common things to try:
+
+| Say something like | You get |
 |---|---|
-| "Forty-six percent had nobody to go with, thirty-two percent didn't know where to start…" | Draws a hand-sketched bar or pie chart from the numbers you actually said |
-| "Sorry, that first number was forty-eight." | Changes that one bar. The rest of the chart stays |
-| "In week five we hit one hundred three." | Adds a point to the chart already on screen |
-| "First we record audio, then transcribe it, then decide what to draw." | Grows a flow diagram one step per sentence |
-| "…and it all runs in a loop." | Turns the flow into a cycle |
-| "The API talks to Postgres and Kafka, and Kafka feeds Spark." | Draws an architecture diagram with a real logo on each node |
-| "We wrote the backend in Python." | Puts up the Python logo |
-| "There are three lessons. First…" | Writes a heading, paragraph and bullet card with the key phrases underlined |
-| "Penguins can't fly but they're great swimmers." | Shows a penguin photo (or draws one if the library has none) |
-| "Let's compare those. Zoom in on the owl. Notice the eyes." | Rearranges, zooms and circles |
-| "Take the eagle away." / "Let's move on." | Removes a tile or clears the board |
-
-Highlights:
-
-- **Live and editable.** It doesn't only generate. It revises. Corrections, additions, renames and removals
-  change the existing chart, diagram or text instead of redrawing it.
-- **Hand-drawn look.** Charts and diagrams are sketched on paper (wobbly strokes that draw themselves in,
-  taped-on polaroid photos, handwriting). A clean dark `slate` theme is also available.
-- **Technical diagrams.** Layered auto-layout, crossing reduction, labelled edges, and text that is measured and
-  fitted so nothing clips or collides.
-- **Logos, icons and flags by name.** 13k SVGs looked up by name and alias. A wrong logo is worse than none,
-  so a weak match becomes a plain name card.
-- **Photos.** Semantic search over ~39k photos with CLIP. If nothing matches, SDXL-Lightning draws one in about 2 s.
-- **Guardrails.** Chart values must be numbers you said out loud. Destructive commands (remove, clear) must be
-  quoted from your newest words, so the model can't wipe the board on its own.
-- **Works offline-ish.** Speech recognition and photo search run on-device. Without an LLM key, a small set of
-  rules still handles layout cues and photos.
-- **Fast.** Roughly 1–3 s from spoken sentence to graphic. A photo takes about 2.7 s, and graphics land 1.1–2.7 s
-  after the sentence.
+| "Forty-six percent had nobody to go with, thirty-two percent didn't know where to start." | A chart |
+| "Sorry, that first number was forty-eight." | That one bar updates |
+| "In week five we hit one hundred three." | A new point on the same chart |
+| "First we record audio, then transcribe it, then decide what to draw." | A flow diagram, one step per sentence |
+| "And it all runs in a loop." | The flow becomes a cycle |
+| "The API talks to Postgres and Kafka, and Kafka feeds Spark." | An architecture diagram with logos |
+| "We wrote the backend in Python." | The Python logo |
+| "There are three lessons. First, start with users." | A text card |
+| "Penguins are great swimmers." | A penguin photo |
+| "Let's compare those. Zoom in on the owl. Notice the eyes." | Side by side, zoomed, circled |
+| "Take the eagle away." or "Let's move on." | A tile removed, or a clean board |
 
 ## How it works
 
-```
-mic ─▶ VAD (Silero) ─▶ Whisper (local, Metal) ─▶ live transcript
-                                                      │
-              transcript + current board + recent changes + newest words
-                                                      ▼
-                            Luna (GPT-5.6 Luna, Responses WebSocket)
-                              one decision-maker, answers with tool calls
-                                                      ▼
-   draw_chart · set_point · draw_diagram · add_nodes · draw_text · show_photo · show_logo · show_icon
-   focus · arrange · annotate · remove · clear_board · no_action
-                                                      ▼
-        guards (spoken numbers only, quoted removals) ─▶ Canvas: pure, deterministic board state
-                                                      ▼
-   show_photo ─▶ CLIP search ─▶ else SDXL-Lightning (Baseten)      show_logo / show_icon ─▶ name lookup
-                                                      ▼
-                     Tauri window renders the scene as SVG (sketch.js), animating only what changed
+```mermaid
+flowchart LR
+    A["Microphone"] --> B["Whisper<br/>on-device"]
+    B --> C["Luna agent<br/>picks tools"]
+    C --> D["Guards<br/>check the evidence"]
+    D --> E["Canvas<br/>board state"]
+    E --> F["Renderer<br/>SVG in Tauri"]
+    E --> G["Photos, logos<br/>and icons"]
+    G --> F
+    E -. "board and recent changes" .-> C
 ```
 
-1. **Hear.** A chunker runs voice-activity detection and re-transcribes the in-progress sentence on a 0.6 s tick,
-   so the model sees words while you are still saying them.
-2. **Decide.** One agent, Luna, sees the whole transcript, the board with stable ids, and what it changed
-   recently, and answers with tool calls. It changes nothing when there is nothing to do. Every turn is chained
-   over a persistent WebSocket, so only the new words are sent.
-3. **Apply.** The Rust canvas validates each op, applies it by id (so late answers still land correctly), and
-   emits a new scene. The board holds up to 4 tiles: charts, diagrams, photos, logos and one text card.
-4. **Draw.** The web view renders the scene as hand-drawn SVG. Strokes draw themselves, and only new nodes,
-   bars and points animate.
+1. **Hear.** Speech is transcribed on-device while you talk, so the agent sees words as you say them.
+2. **Decide.** One agent reads the transcript and the current board, then calls tools to draw, edit, remove or
+   rearrange. It does nothing when there is nothing to do.
+3. **Check.** Chart values must come from your speech. Removing or clearing requires your own words as proof.
+4. **Draw.** The canvas applies the change and the renderer animates only what is new.
 
-Every run writes a JSONL log with timings, model decisions, refused ops and the board after each change.
+All of this runs in parallel. Listening never pauses while the agent thinks, and photo search and image generation
+happen in the background, so the board never waits on them.
+
+More detail is in [CANVAS.md](CANVAS.md).
 
 ## Tech stack
 
-- **Rust workspace**, one crate per stage: `hear`, `agent`, `canvas`, `search`, `gen`, `pipeline`, `contracts`
-- **Tauri 2** desktop app (stage window plus a debug window with live transcript and decisions)
+- **Rust** workspace, one crate per stage (`hear`, `agent`, `canvas`, `search`, `gen`, `pipeline`)
+- **Tauri 2** desktop app, with a debug window showing the live transcript and decisions
 - **Whisper** (`whisper-rs`, Metal) and **Silero VAD** for on-device speech recognition
-- **Luna** (OpenAI `gpt-5.6-luna`, or via OpenRouter) for all on-screen decisions, with tool calling
-- **CLIP ViT-B/32** through **Candle** for photo search (MobileCLIP-S2 for small local libraries)
-- **SDXL-Lightning** on **Baseten** as the drawn-image fallback
-- **Vanilla JS + SVG** for the sketch renderer, with in-house text fitting and layered diagram layout
-- **Iconify** sets for logos, icons and flags. Open Images and COCO for photos
-- **Python** for the asset pipeline (`assets-pipeline/`) and preview and test scripts
+- **GPT-5.6 Luna** through OpenAI or OpenRouter, using tool calling
+- **CLIP ViT-B/32** on **Candle** for photo search
+- **SDXL-Lightning** on **Baseten** for generated images
+- **Vanilla JS and SVG** for the renderer, with custom text fitting and diagram layout
+- **Iconify** sets for logos, icons and flags. **Open Images** and **COCO** for photos
+- **Python** for the asset pipeline and test scripts
 
 ## Run it
 
-Requires a Mac (Apple Silicon) with Rust and a microphone.
+Requires an Apple Silicon Mac, Rust and a microphone.
 
 ```bash
-cp .env.example .env            # set OPENAI_API_KEY (or OPENROUTER_API_KEY); BASETEN_API_KEY is optional
+cp .env.example .env                       # add OPENAI_API_KEY (or OPENROUTER_API_KEY); BASETEN_API_KEY is optional
 CARGO_BUILD_JOBS=2 cargo build --release
-./scripts/make_app.sh           # builds build/Live Slides.app
+./scripts/make_app.sh                      # builds build/AdLib.app
 ```
 
-You also need the Whisper model (`ggml-base.en.bin`), the Silero VAD model and a photo library in `models/`.
-Point `LS_ASSETS` at the asset library, or build a small local library with `./scripts/make_dev_library.sh`
-and index it with `ls-index`.
+You also need the Whisper and Silero models and a photo library under `models/`. Point `LS_ASSETS` at the asset
+library, or build a small local one with `./scripts/make_dev_library.sh`.
 
 ```bash
-./demo.sh airpods                                           # live from a mic (or: builtin)
-LS_SOURCE=wav:fixtures/audio/luna-edit-talk.wav ./target/release/live-slides   # replay a recording
-./target/release/ls-replay fixtures/audio/luna-edit-talk.wav                    # headless replay + summary
-cargo run -p ls-agent --bin ls-agent-probe -- --runs 3      # 42 speech → board test cases against the model
+./demo.sh airpods                                                           # live from a mic (or: builtin)
+LS_SOURCE=wav:fixtures/audio/luna-edit-talk.wav ./target/release/adlib      # replay a recording
+cargo run -p ls-agent --bin ls-agent-probe -- --runs 3                      # speech-to-board test cases
 ```
 
-Stage keys: `f` full screen · `b` blank · `g` grid of everything shown so far.
-Useful settings: `LS_SOURCE`, `LS_THEME` (`sketch` or `slate`), `LS_FULLSCREEN`, `LS_DISPLAY`, `CANVAS_MODEL`,
-`AGENT_RPM`. Names Whisper mangles ("Baseten", "Kafka") go in `talk-terms.txt`.
+Stage keys: `f` full screen, `b` blank, `g` grid of everything shown. Useful settings: `LS_SOURCE`, `LS_THEME`
+(`sketch` or `slate`), `LS_FULLSCREEN`, `LS_DISPLAY`, `CANVAS_MODEL`. Names Whisper mishears (for example
+"Baseten") go in `talk-terms.txt`.
 
 ## More
 
-- [TRIGGERS.md](TRIGGERS.md): what to say and how each decision is made
-- [CANVAS.md](CANVAS.md): board model, ops and renderer design
-- [app/DEMO_SCRIPT.md](app/DEMO_SCRIPT.md): a 3½-minute talk that exercises everything
-- [probes/luna/README.md](probes/luna/README.md): the speech → board test suite
+- [CANVAS.md](CANVAS.md): design and reference
+- [probes/luna/README.md](probes/luna/README.md): the speech-to-board test suite

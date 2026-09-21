@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Live Slides",
+  "productName": "AdLib",
   "version": "0.1.0",
-  "identifier": "dev.liveslides.poc",
+  "identifier": "dev.adlib.app",
   "build": {
     "frontendDist": "../dist"
   },
@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Live Slides",
+        "title": "AdLib",
         "url": "index.html",
         "width": 1280,
         "height": 720,
@@ -22,7 +22,7 @@
       },
       {
         "label": "debug",
-        "title": "Live Slides Control",
+        "title": "AdLib Control",
         "url": "debug.html",
         "width": 760,
         "height": 780,

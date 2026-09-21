@@ -9,6 +9,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "adlib"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "ls-canvas",
+ "ls-contracts",
+ "ls-hear",
+ "ls-pipeline",
+ "ls-search",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2491,23 +2508,6 @@ name = "litemap"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
-
-[[package]]
-name = "live-slides"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "libc",
- "ls-canvas",
- "ls-contracts",
- "ls-hear",
- "ls-pipeline",
- "ls-search",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
-]
 
 [[package]]
 name = "lock_api"

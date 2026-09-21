@@ -6,7 +6,7 @@
 #  - writes <dest>/captions.tsv (id<TAB>caption) with a caption guessed from the file name — EDIT IT:
 #    short concrete descriptions ("red sports car on a mountain road") measurably improve matching.
 #  - existing captions.tsv lines are kept (re-runs don't clobber your edits)
-# Then: ls-index models/mobileclip-s2 <dest> <dest>/index.json ; ls-calibrate ... <labels.tsv>
+# Then: ls-index models/mobileclip-s2 <dest> <dest>/index.json
 set -euo pipefail
 SRC="$1"; DEST="$2"
 mkdir -p "$DEST"
