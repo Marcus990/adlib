@@ -1,5 +1,7 @@
 # Adlib
 
+**Won $10k cash and Semi-finalist at **Hack the North 2026**. Won the **Rox Best AI Agent** prize track.**
+
 **The best way to present new ideas on the spot. No more slides you follow. Adlib follows you.**
 
 Adlib is always listening to your voice. As you speak, it creates flow charts, diagrams, graphics and graphs live
@@ -7,9 +9,6 @@ on screen: charts from the numbers you say, flow diagrams from the steps you des
 the things you mention, and structured text for your key points. Change your mind mid-sentence ("sorry, it was
 forty-eight percent, not forty-six") and the graphic edits itself in place. No slides, no clicking, no prompting.
 You just talk.
-
-Built by Marcus Ng and James Cai at **Hack the North**, where it won $10k in cash,
-reached the semi-finals, and took the **Rox Best AI Agent** prize track.
 
 ## What it does
 
