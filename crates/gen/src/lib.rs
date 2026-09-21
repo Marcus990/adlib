@@ -1,4 +1,4 @@
-//! Image generation fallback (ASSETS_HANDOFF §6, AS11/AS12): when the presenter names something the photo
+//! Image generation fallback: when the presenter names something the photo
 //! library cannot show, draw it instead. SDXL-Lightning (4 steps) on Baseten, deployed by Marcus.
 //!
 //! Measured 2026-09-19 from this Mac: **1.1–1.3 s at 512 px, ~2.0 s at 768 px warm; 146 s on a cold start**
