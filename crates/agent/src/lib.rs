@@ -663,7 +663,7 @@ impl CanvasAgent {
         let mut socket = self.connect_responses().await?;
         let request = json!({
             "type": "response.create",
-            "stream_id": "live-slides",
+            "stream_id": "adlib",
             "model": self.wire_model(),
             "store": false,
             "generate": false,
@@ -676,7 +676,7 @@ impl CanvasAgent {
             "max_output_tokens": 700
         });
         socket.send(Message::Text(request.to_string().into())).await?;
-        let reply = wait_for_response(&mut socket, "live-slides").await?;
+        let reply = wait_for_response(&mut socket, "adlib").await?;
         let id = reply.response["id"].as_str().ok_or_else(|| anyhow::anyhow!("warmup response had no id: {}", reply.response))?;
         state.socket = Some(socket);
         state.previous_response_id = Some(id.to_string());
@@ -702,7 +702,7 @@ impl CanvasAgent {
         items.push(json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": message}]}));
         let request = json!({
             "type": "response.create",
-            "stream_id": "live-slides",
+            "stream_id": "adlib",
             "model": self.wire_model(),
             "store": false,
             "previous_response_id": previous,
@@ -718,7 +718,7 @@ impl CanvasAgent {
         });
         let socket = state.socket.as_mut().ok_or_else(|| anyhow::anyhow!("WebSocket disconnected before send"))?;
         socket.send(Message::Text(request.to_string().into())).await?;
-        let reply = wait_for_response(socket, "live-slides").await?;
+        let reply = wait_for_response(socket, "adlib").await?;
         let id = reply.response["id"].as_str().ok_or_else(|| anyhow::anyhow!("completed response had no id: {}", reply.response))?;
         state.previous_response_id = Some(id.to_string());
         state.pending_call_ids = response_call_ids(&reply.response);

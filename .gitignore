@@ -9,3 +9,5 @@ dev-library/
 build/
 __pycache__/
 generated/
+
+app/src-tauri/gen/

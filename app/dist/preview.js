@@ -28,7 +28,7 @@
     line: { id: 'c-line', kind: 'chart', chart: { kind: 'line', title: 'Revenue', unit: '$', points: [{ label: '2021', value: 1.2e6 }, { label: '2022', value: 2.1e6 }, { label: '2023', value: 3.8e6 }, { label: '2024', value: 5.2e6 }] } },
     flow: { id: 'd-flow', kind: 'diagram', diagram: Object.assign({ layout: 'flow', title: 'How it works', auto_edges: true }, chain(['You speak', 'Speech to text', 'Model decides', 'Picture appears'], ['🎤', '📝', '🧠', '🖼️'])) },
     cycle: { id: 'd-cycle', kind: 'diagram', diagram: Object.assign({ layout: 'cycle', title: 'The loop', auto_edges: true }, (() => { const c = chain(['Listen', 'Decide', 'Show', 'Learn']); c.edges.push({ from: 'n4', to: 'n1' }); return c; })()) },
-    hub: { id: 'd-hub', kind: 'diagram', diagram: { layout: 'hub', title: 'Our users', auto_edges: true, nodes: ['Live Slides', 'Students', 'Teachers', 'Parents', 'Speakers'].map((l, i) => ({ id: 'n' + (i + 1), label: l })), edges: [2, 3, 4, 5].map(k => ({ from: 'n1', to: 'n' + k })) } },
+    hub: { id: 'd-hub', kind: 'diagram', diagram: { layout: 'hub', title: 'Our users', auto_edges: true, nodes: ['AdLib', 'Students', 'Teachers', 'Parents', 'Speakers'].map((l, i) => ({ id: 'n' + (i + 1), label: l })), edges: [2, 3, 4, 5].map(k => ({ from: 'n1', to: 'n' + k })) } },
     timeline: { id: 'd-tl', kind: 'diagram', diagram: { layout: 'timeline', title: 'Company history', auto_edges: true, nodes: [['Founded in a dorm', '2019'], ['First customer', '2021'], ['Series A', '2023'], ['Global launch', '2025']].map(([l, y], i) => ({ id: 'n' + (i + 1), label: l, note: y })), edges: [] } },
   };
   const clone = o => JSON.parse(JSON.stringify(o));
