@@ -102,7 +102,7 @@ named X, else the one in focus; "zoom out" → auto; "circle/highlight this|the 
 ## Routing
 There is none: Luna is called on the newest words and chooses the tool. (Until 2026-09-19 Jev routed each
 sentence to `photo | photo_update | chart | diagram | board | clear | none`; it had no route for "edit what is on
-screen", so value corrections never reached the agent — 0 of 9 phrasings, see `probes/luna/BASELINE.md`.)
+screen", so value corrections never reached the agent — 0 of 9 phrasings.)
 
 
 ## Pictures and text (2026-09-20)
