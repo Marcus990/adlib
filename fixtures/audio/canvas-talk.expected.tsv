@@ -1,9 +1,0 @@
-eagle	animals-eagle
-owl	animals-owl
-sunflower	flowers-sunflower
-red rose	flowers-red-rose
-white rose	flowers-whiterose
-earth	nature-earth
-# must NOT be shown: mentioned without display intent
-parrot	!animals-parrot
-golf	!sports-golf

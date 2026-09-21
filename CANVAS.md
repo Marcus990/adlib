@@ -1,114 +1,166 @@
-# Canvas mode — design (2026-09-19)
+# How AdLib works
 
-User decisions: **library images + annotations**, **evolving board** (≈1–4 elements that build up and
-regroup), **fast gate + agent** (today's ~1 s path puts the image up; an agent refines layout 1–2 s later),
-**model bake-off** (OpenRouter tool calling, model-agnostic; pick Claude Haiku 4.5 vs Gemini Flash-Lite on
-real timings once the key exists). *The "fast gate + agent" split was replaced by one decision-maker on
-2026-09-19 (Flow, below); the model is now `openai/gpt-5.6-luna`.*
+## Flow
 
-## Flow (2026-09-19 refactor: Luna decides everything)
+```mermaid
+flowchart TD
+    T["Transcript and newest words"] --> L["Luna agent"]
+    B["Board with ids and recent changes"] --> L
+    L --> Q["Tool calls or no_action"]
+    Q --> G["Guards"]
+    G --> C["Canvas applies ops by id"]
+    C -. "new board state" .-> B
+    C --> P["Pictures<br/>photo search or generation, logo and icon lookup"]
+    P --> V["Web view renders the scene"]
+    C --> V
 ```
-speech → Whisper (partial + final phrases) → transcript
-          │ whenever Luna is idle, ≥ 3 new words, under the rate cap
-          ▼
-   Luna (OpenAI Responses WebSocket, or HTTP/OpenRouter chat) sees: transcript · board with ids · recent changes · newest words
-          → tool calls: show_photo / draw_chart / draw_text / … / remove / clear_board / no_action
-          ▼
-   Rust: guards (quote for destructive ops, spoken numbers) → Canvas ops by id → Scene v+1 → emit "scene"
-          show_photo → CLIP search of the library → (nothing?) image generation → Canvas render → "scene"
+
+The agent runs whenever it is idle and new words have arrived.
+
+- **One decision maker.** The agent (Luna) chooses what to show. There are no keyword rules or routing tables in
+  the main path, so it follows natural speech instead of fixed phrases.
+- **Rust owns the state.** The web view renders the whole scene each time and animates changes between layouts.
+- **Ops are addressed by id.** An answer still applies if the board changed while the model was thinking. If the
+  target is gone, the op is refused and logged.
+
+## What runs in parallel
+
+Nothing on the critical path waits for anything else.
+
+```mermaid
+sequenceDiagram
+    participant M as Mic and Whisper
+    participant C as Canvas loop
+    participant L as Luna agent
+    participant P as Photo search
+    participant G as Image generation
+    M->>C: words, while you keep speaking
+    C->>L: transcript, board, newest words
+    M->>C: more words (still listening)
+    L-->>C: tool calls
+    Note over C: chart and diagram edits apply now
+    C->>P: show_photo
+    C->>L: next call with the words that arrived meanwhile
+    P-->>C: best match
+    C->>G: no match, so draw one
+    G-->>C: image, applied by id
 ```
-- The web view renders the whole Scene each time; elements animate between rects (CSS transitions),
-  annotations are an SVG overlay. Rust owns all state.
-- There is no separate "fast path": a photo is a `show_photo` request that Luna makes and Rust fulfils. The old
-  Jev gate, the phrase model and the stage's hold/confirm rules were removed (see TRIGGERS.md).
-- On OpenAI (unless `CANVAS_TRANSPORT=http`), startup prepares the fixed instructions and tools using `generate: false`.
-  The first turn sends full context; later turns continue with `previous_response_id`, tool outcomes, new speech,
-  and the authoritative current board. A failed socket is discarded and that turn retries over HTTP.
-- OpenAI requests use the standard service tier on both transports because the chained Luna benchmark found it
-  faster and more consistent. `CANVAS_SERVICE_TIER=fast` opts into Fast mode; agent logs record the returned tier.
 
-## Scene
-- `Element { id, kind, image_id, caption, rect (0..1), z, focus, diagram?, chart?, text? }` — ≤ 4 tiles (oldest evicted).
-- `Annotation { id, kind: highlight|frame|arrow, targets: [element ids], label? }` — ≤ 3.
-- `layout`: auto | hero | compare | grid — the layout engine turns (elements, layout, focus) into rects.
-  auto: 1 → full; 2 → side by side; 3 → hero + 2; 4 → 2×2. hero: focus big, others stacked; compare: 2 up.
-- **Zoom** = `focus` = layout hero on the focused tile. The `focus` op does both (a bare focus flag was only visible
-  in `auto` with exactly 3 tiles), for every tile kind and any count 1–4; asking again for a photo/logo/icon that is
-  already up zooms on it when there are ≥ 2 tiles. A lone tile has no neighbours to outgrow, so the web view scales its
-  picture up instead (`.zoom` in `app/dist/index.html`). A new tile, `arrange auto`, or removing down to one tile ends it.
+- **Listening is separate.** Whisper runs on its own thread and streams words to the canvas loop, so transcription
+  continues while the agent thinks.
+- **The agent runs in the background.** Words that arrive during a call are merged into the next one instead of
+  being dropped.
+- **Pictures are fetched off to the side.** Photo search and image generation run as background tasks, several can be
+  in flight at once, and each result is applied by id when it arrives. The board never waits for them.
+- **Startup work overlaps.** The image generator is woken in the background while the models load and the agent
+  connection is prepared.
+- Ops themselves are applied one at a time by the canvas, in order, which keeps the board state deterministic.
 
-## Board operations (validated; unknown ids or labels are refused and logged)
-- Photos: `render` adds a tile and focuses it (oldest evicted past 4), `update` replaces the focused photo in place
-  (for `show_photo` mode `replace`); `clear` empties the board.
-- Agent ops address tiles by id (`e1`), diagram nodes by id or label (`n2` / "Build"), chart points by label.
-  Because they are id-addressed they apply even if the board changed while Luna was thinking; `clear_board`
-  clears only the tiles Luna saw. `Canvas::take_notes()` returns why an op was refused.
-- **Circle** = `annotate` kind `highlight` (a hand-drawn circle in the sketch theme, a gold ring in slate) around one whole tile.
-  "Circle this", "highlight this", "let's highlight the X", "look at X", "notice X" all mean it: "this" is the focused tile, a
-  name picks that tile. A tile carries one mark (asking again changes nothing; frame and highlight replace each other), an arrow
-  needs two different tiles (max 3 arrows), `clear_annotations` ("remove the circle", "stop highlighting") takes them all off.
-  Circles have no cap of their own: every tile can carry one, so all 4 can be circled at once ("circle everything", "circle them all")
-  or one at a time, and "circle the eagle and the owl" circles those two.
-- **Remove a tile:** `remove` (needs the presenter's words as `quote`, which must be in the newest words, live phrase included). "Take the eagle away",
-  "get rid of the chart", "get the owl out of there", "get the owl out", "get that out of here", "take the logo off" all mean
-  it, for any kind of tile. "That"/"it" is the focused tile; a point or step ("get March out") is `remove_point` / `remove_node`
-  instead; "get the word out" is a figure of speech. The offline rules remove a tile only when the words name it.
-Offline rules (no key): "let's compare/versus/side by side" → compare; "zoom in on X/focus on X/this one" → focus the tile
-named X, else the one in focus; "zoom out" → auto; "circle/highlight this|the X, look at X, notice, see how" → circle the named tile, else the one in focus (once). They never clear the board.
+## The board
 
-## Contracts
-`RenderEvent` stays (logs, eval, replay). New `Scene` is emitted alongside to the web view.
+- Up to 4 tiles: photo, logo or icon, chart, diagram, text. Only one text tile at a time. The oldest tile is
+  evicted when a fifth arrives.
+- Layouts: `auto` (1 full, 2 side by side, 3 hero plus 2, 4 grid), `hero`, `compare`, `grid`.
+- Zoom is `focus`: the focused tile becomes the hero. A lone tile scales up instead.
+- Annotations: one circle per tile (all four can be circled), up to 3 arrows between different tiles.
 
-## Live diagrams, charts and text (2026-09-19)
-- Tiles are `kind: image | diagram | chart | text | logo`. A `logo` tile is a company logo, an icon or a flag from the symbol
-  library (`image_id` = its id, drawn as a plain image with its name under it), or a **name card** (`image_id` empty, just
-  the name in handwriting) when the library has nothing. `Canvas::render_logo` dedupes on the asset id or the name.
-  Photos come from `show_photo`; diagrams and charts from Luna's
-  tools (full list and rules: TRIGGERS.md, "How each decision is made"). Charts are corrected with `set_point`
-  (one value), grown with `add_point`, trimmed with `remove_point`; diagrams with `add_nodes`, `update_node`,
-  `remove_node`, `add_edge`, `remove_edge`. There is no whole-data-set `update_chart` tool any more: a model that
-  sent only the changed point used to wipe the rest of the chart.
-- The board holds at most one text tile. A new `draw_text` replaces that tile in place; text never accumulates beside
-  older text. The tile holds up to eight semantic blocks: `heading`, `paragraph` and `bullet`, with stable ids (`b1`…)
-  for list extensions and corrections. Every block carries 1–2 exact `emphasis` phrases; the renderer shows the full
-  concise block and underlines those phrases. A closing such as “Thank you” is an ordinary heading block. Text tools only
-  apply after finished speech, so a partial ASR phrase cannot become visible copy.
-- A section cue such as “the scenario” becomes the heading. The next relevant claim becomes its one paragraph body;
-  later details patch that body in place while the heading stays. Explicit lists use bullet blocks instead.
-- Canvas rules: omitted edges = chain (flow/timeline), chain + closing edge (cycle), spokes (hub); a redraw
-  sharing ≥ half the nodes of a diagram on the board replaces it in place; same chart title → replace data;
-  a stat with ≥ 2 values becomes bars; ≤ 8 nodes / points; node ids are never reused after a removal.
-- Guards: chart values must be numbers actually spoken (or already on the board); destructive ops need a `quote`
-  found in the newest words.
-- Renderer: `app/dist/sketch.js` (both themes), SVG per tile, sized to the tile's final px; only new nodes / edges / bars /
-  points animate (per-tile `seen` set). Browser preview without Tauri: serve `app/dist`, call `__scene(scene)`.
-- Real-model replay (fixtures/audio/graphics-talk.wav, Haiku 4.5): users 2K → 15K → 40K as bars, pie
-  60/30/10, a 4-step flow that became a cycle on "it all runs in a loop"; graphics land 1.1–2.7 s after the
-  sentence. canvas-talk unchanged: 6/6, 0 false positives, p50 1.1 s.
+## What the agent can do
 
-## "Live sketch" theme (2026-09-19, default; `LS_THEME=slate` restores the dark cards)
-- Warm paper with fibre grain; photos are taped polaroids (tilt + tape angle seeded by element id) with a
-  handwritten caption; diagrams/charts are drawn straight onto the page.
-- `app/dist/sketch.js` (`render(svg, el, W, H, seen, full, theme)`; the old separate `graphics.js` is gone, `slate` is now a skin of this renderer): hand-drawn primitives —
-  bowed strokes that overshoot their ends, loose ellipses that overlap where they started, clipped hatching,
-  two-stroke arrowheads; colour washes deliberately offset from outlines. Seeded PRNG per element/node, so a
-  graphic never re-wobbles on re-render. Strokes draw themselves (dash offset); handwriting writes left→right.
-- Fonts are macOS built-ins (Noteworthy → Chalkboard SE → Marker Felt), no downloads.
-- Highlights are red marker circles around the tile with a handwritten label; arrows are sketched curves.
-- Preview without the app: serve the repo root, open /app/dist/index.html (loads preview.js), call
-  `demo.photos() / demo.charts() / demo.diagrams() / demo.board() / demo.full('pie')`; `?theme=slate` for the old look.
+| Tools | Purpose |
+|---|---|
+| `show_photo` | A photo of a real-world thing. Searched in the library, generated if nothing matches. |
+| `show_logo`, `show_icon` | A company or product logo, a generic icon or a country flag, found by name. No match gives a plain name card. |
+| `draw_chart`, `set_point`, `add_point`, `remove_point`, `set_chart` | Create a chart, correct one value, add or drop a point, change kind, title or unit. Points are addressed by label. |
+| `draw_diagram`, `add_nodes`, `update_node`, `remove_node`, `add_edge`, `remove_edge` | Create and edit flows, cycles, hubs, timelines and architecture diagrams. |
+| `draw_text`, `add_text_blocks`, `update_text_block`, `remove_text_block` | A card of headings, paragraphs and bullets. Each block underlines 1 or 2 key phrases. |
+| `focus`, `arrange`, `annotate`, `clear_annotations` | Zoom, layout, circles and arrows. |
+| `remove`, `clear_board` | Take a tile away, or clear the board. |
+| `no_action` | Nothing to do. The reason is logged. |
 
+## Guards
 
-## Routing
-There is none: Luna is called on the newest words and chooses the tool. (Until 2026-09-19 Jev routed each
-sentence to `photo | photo_update | chart | diagram | board | clear | none`; it had no route for "edit what is on
-screen", so value corrections never reached the agent — 0 of 9 phrasings.)
+The model judges the language. The code checks the evidence.
 
+- **Removals need a quote.** `remove`, `clear_board` and the `remove_*` tools must include the exact words the
+  presenter said, and those words must appear in the newest speech.
+- **Chart values must be spoken.** A number has to be in what the presenter said, or already on the board.
+- **Corrections must look like corrections.** `set_point` needs the presenter to correct a value or name the
+  quantity, and cannot swap units.
+- **Text waits for a finished sentence.** Partial speech can trigger other tools but never visible text.
+- **Wrong is worse than nothing.** A weak logo match becomes a name card. Icons that do not match well are left off.
 
-## Pictures and text (2026-09-20)
-- `Node.icon` and `Point.icon` hold an image url (`img://localhost/<id>.svg`) once the pipeline has resolved Luna's `logo` / `icon` hints
-  (`NodeSpec.logo`, `Point.logo` are hints only and are never sent to the web view). `MAX_NODES` is 10.
-- The web view draws them as `<image>` inside the node, above the label; in a bar/line chart under the axis, above the label; in a pie legend
-  next to the name. The app serves `.svg` with `image/svg+xml` through the shared `ImageCache::mime_of` (the app once had its own copy that
-  labelled SVGs `image/jpeg`, which showed as a broken-image icon).
-- Text fitting, the technical-diagram layout and the icon rules: see TRIGGERS.md, "Diagrams and charts".
+## Photos, logos and icons
+
+- **Photos:** the agent names a subject, which is embedded with CLIP and matched against about 39,000 photos. A
+  match must clear a score threshold. If nothing does and the subject is still current, an image is generated and
+  cached. Logos, icons, charts and vague subjects are never generated.
+- **Logos and icons:** looked up by name, alias and tags in a library of about 13,000 SVGs (Iconify sets), with no
+  embeddings. Monochrome icons are re-inked to suit the theme.
+- **When a symbol appears is the agent's call.** A technology or company the talk is about gets its logo, even if
+  the presenter does not ask. It skips names already on screen, comparisons, words used in an ordinary sense
+  ("an apple") and companies given figures (those become charts, with logos on the bars).
+- **On diagrams and charts:** nodes and chart points can carry a logo (for a named product) or one of 141 generic
+  icons, all from one icon set so the style stays consistent. Pictures appear on most nodes or on none.
+
+## Diagrams, charts and text
+
+- Diagrams hold up to 10 nodes and charts up to 8 points. Omitted edges mean a chain (flow, timeline), a chain with
+  a closing edge (cycle) or spokes (hub). Technical diagrams use explicit, labelled edges for every connection.
+- A redraw that shares at least half its nodes with a diagram on screen replaces it in place. The same chart title
+  replaces that chart's data.
+- Layout is layered, with crossing reduction, curved edges and edge labels placed in gaps that touch nothing else.
+- Text is measured in the font it is drawn in. It wraps by word, shrinks before splitting a word and only truncates
+  as a last resort. A diagram gets one text scale so nothing clips.
+
+## Rendering
+
+- `app/dist/sketch.js` draws every tile as SVG. Strokes are seeded per element, so a graphic never re-wobbles.
+  Only new nodes, bars and points animate.
+- Themes: `sketch` (paper, hand-drawn, taped polaroids, macOS handwriting fonts) and `slate` (dark, clean lines).
+- Preview without the app: serve the repo root, open `/app/dist/index.html` and call `demo.charts()`,
+  `demo.diagrams()`, `demo.board()` and so on from the console.
+- Visual check: `python3 scripts/preview_scene.py scripts/preview/text_cases.py <out-dir> --theme both` renders
+  hard cases in headless Chrome and reports clipped, overlapping or split text.
+
+## Backends and configuration
+
+Both backends get the same tools and prompt.
+
+| | OpenAI (`OPENAI_API_KEY`) | OpenRouter (`OPENROUTER_API_KEY`) |
+|---|---|---|
+| Model | `gpt-5.6-luna` | `openai/gpt-5.6-luna` |
+| Transport | Persistent Responses WebSocket, falling back to HTTP | Chat Completions |
+
+With both keys set, OpenAI is used. `CANVAS_PROVIDER=openrouter` forces OpenRouter.
+
+| Setting | Meaning |
+|---|---|
+| `CANVAS_MODEL` | Override the model |
+| `CANVAS_TRANSPORT` | `http` disables the WebSocket |
+| `AGENT_RPM` | Cap on agent calls per minute |
+| `LS_ASSETS` | Root of the photo and icon library |
+| `BASETEN_API_KEY` | Enables generated images |
+| `TAU` | Lowest photo score accepted |
+| `LS_THEME` | `sketch` or `slate` |
+| `LS_SOURCE` | `mic:<name>` or `wav:<file>` |
+| `LS_FULLSCREEN`, `LS_DISPLAY` | Full screen and which monitor |
+
+Without any key, a small offline rule set still handles layout cues ("compare", "zoom in on", "circle this") and
+photos after a cue like "here's" or "take a look at".
+
+Every run writes `logs/run-<time>.jsonl`: transcript chunks, each agent call and what was applied or refused, photo
+searches, and the board after each change.
+
+## Testing
+
+- `cargo run -p ls-agent --bin ls-agent-probe -- --runs 3` runs speech-to-board cases against the real model. See
+  [probes/luna/README.md](probes/luna/README.md).
+- `./target/release/ls-replay fixtures/audio/luna-edit-talk.wav` replays a spoken talk headlessly. Then
+  `python3 scripts/e2e_check.py logs/run-<time>.jsonl` checks nine board milestones.
+
+## Known limits
+
+- English only. Accents and noisy rooms increase transcription errors. Product names that Whisper mishears can be
+  listed in `talk-terms.txt`.
+- The transcript sent to the agent is capped, so very old speech is dropped.
+- Only things in the libraries can be shown. Anything else is generated (photos) or shown as a name card (logos).

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the Live Slides icon (1024², RGBA PNG) with no dependencies: gradient rounded square,
+"""Render the AdLib icon (1024², RGBA PNG) with no dependencies: gradient rounded square,
 white 'slide' card, three voice bars. usage: make_icon.py out.png [size]"""
 import struct, sys, zlib
 N = int(sys.argv[2]) if len(sys.argv) > 2 else 1024
